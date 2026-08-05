@@ -1,0 +1,21 @@
+{
+  "name": "muster-gate-stub",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "express": "^5.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22",
+    "typescript": "^5.9.2"
+  }
+}
