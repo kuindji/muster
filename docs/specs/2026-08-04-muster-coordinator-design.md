@@ -1,6 +1,6 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 11)
+**Date:** 2026-08-04 (revision 12)
 
 **Status:** Design, converged for `oneshot` scope. Authorizes an implementation
 plan for a one-shot v1; not code. The platform gate (section 9) blocks anything
@@ -17,11 +17,10 @@ owner.
 `2026-08-04-muster-staged-and-effecting-design.md` (deferred, not authorized);
 `../research/2026-08-04-ai-horde-reference.md`.
 
-**Amendments in waiting:** `2026-08-05-spec-interpretation-decisions.md` records
-six places where this revision declares a structure it never defines, names a
-value it never gives, or says two things that cannot both be true. Each has an
-operator-signed reading that the M0+M1 plan freezes. Revision 12 should absorb
-them; until then that file is the authority wherever this one is open.
+**Revision history:** `2026-08-05-spec-interpretation-decisions.md` records the
+six operator-signed readings that bridged revision 11 to the contract-freeze
+plan. Revision 12 absorbs them. The footnote is now historical evidence rather
+than a second source of normative contract text.
 
 **Revision note.** Five gpt-5.5 review rounds have been applied. Rounds 3 and 4
 both concluded that staged and effecting work were not ready to plan against,
@@ -107,6 +106,20 @@ reject-and-requeue loop cannot burn the split-and-adjudication reserve forever.
 It also renames the stale `onSplitVerdict` event
 to `onSplit`, aligns enrollment's calibration wording with the probation gate,
 and states what happens to a job after a rejected result dispute.
+
+Revision 12 closes four contract-freeze findings. The input hash now binds the
+exact canonical sanitized payload and both frozen schemas, so every permitted
+`Payload` shape has one normative projection and a schema change cannot hide
+behind a reused version label. Result-level requeues create a new numbered
+collection cycle while preserving old receipts, so terminal state and accepted
+replicas from a rejected cycle cannot contaminate its retry. Raw OAuth subjects
+stop at `muster-mcp`; core, evidence, hashes, and events use an opaque
+pseudonymous `WorkerId`. Finally, the authorization call and every exact retry
+return one discriminated `AuthorizationInitialReceipt`; its authorized arm
+contains the immutable `ActionAuthorization` rather than changing response
+shape between the first call and replay. Revision 12 also absorbs revision
+11's signed `payloadSchema`, `job_class_id`, `policy_version`, `JsonPath`,
+`AbsenceDomain`, and `PrivacyClass` interpretations into the normative text.
 
 ## 1. What Muster is
 
@@ -215,8 +228,10 @@ the ledger with fair-outcome classification; reputation, suspicion, escalation
 budgets, and adjudication accounting; capacity, backpressure, and class health;
 contract lifecycle and canonical hashing; the event schema.
 
-**Not in core:** authentication, which lives in `muster-mcp` (core consumes an
-authenticated `WorkerSubject`).
+**Not in core:** authentication and the severable identity mapping, which live
+in `muster-mcp`. MCP validates an `AuthenticatedWorkerSubject` and resolves it
+to an opaque pseudonymous `WorkerId`; core never receives the OAuth issuer or
+stable `sub` claim.
 
 **The consumer's:** fetching and sanitizing source material; membership and
 eligibility policy; publication and editorial surfaces; notifications; staffing
@@ -232,6 +247,20 @@ API-key worker class; no worker-driven loops; no worker that acts on the world.
 A worker is an OAuth subject reached over MCP, executing inside a provider's
 cloud, invoked by a schedule the operator does not control, spending allowance
 the operator cannot measure.
+
+```ts
+interface AuthenticatedWorkerSubject {
+  issuer: string
+  subject: string
+}
+
+type WorkerId = string // opaque coordinator-generated pseudonym
+```
+
+`muster-mcp` owns the severable mapping from `AuthenticatedWorkerSubject` to
+`WorkerId`. Enrollment, leases, evidence, hashes, core events, and adjudication
+records use only `WorkerId`. OAuth issuer and `sub` may be used transiently at
+the authentication boundary and never enter core or an append-only record.
 
 ### 3.1 States
 
@@ -287,7 +316,8 @@ interface JobClass<Payload, Result> {
   contractVersion: string                  // enters input_hash
   kind: 'oneshot'                          // reserved; see section 1.3
 
-  outputSchema: JSONSchema                 // closed: additionalProperties false
+  payloadSchema: JSONSchema                // closed sanitized-payload schema; enters input_hash
+  outputSchema: JSONSchema                 // closed; enters input_hash
   maxPayloadBytes: number
   maxResultBytes: number
   sanitize(raw: unknown): Payload
@@ -390,7 +420,10 @@ simply omit is not a control: a bounded consumer that never declares itself
 gets the weaker gate for free, which is the failure the flag existed to
 prevent.
 
-Registration rejects non-positive payload or result byte ceilings, a
+Registration freezes the canonical `payloadSchema` and `outputSchema` for the
+class version and rejects any second registration of the same `(id,
+contractVersion)` whose schema digests differ. Registration rejects
+non-positive payload or result byte ceilings, a
 non-positive replication target, a negative split-evidence limit, `target > 1`
 without `agreement`, a split-evidence allowance when `target === 1`, or a
 diversity rule that cannot cover the target in principle. The maximum in-flight
@@ -456,6 +489,7 @@ interface ActionAuthorization {
   effectIntentId: string
   effectIntentHash: string
   jobId: string
+  collectionCycle: number
   inputHash: string
   decisionResultHash: string
   evidence: SubmissionEvidence[]
@@ -478,9 +512,33 @@ interface EffectIntent {
 
 interface SubmissionEvidence {
   leaseId: string
+  collectionCycle: number
   resultHash: string
-  workerSubject: WorkerSubject
+  workerId: WorkerId
 }
+
+interface AuthorizationInitialReceiptBase {
+  authorizationRequestId: string
+  effectIntentId: string
+  effectIntentHash: string
+  jobId: string
+  collectionCycle: number
+  decisionResultHash: string
+  at: Timestamp
+}
+
+type AuthorizationInitialReceipt =
+  | (AuthorizationInitialReceiptBase & {
+      outcome: 'pending_adjudication'
+    })
+  | (AuthorizationInitialReceiptBase & {
+      outcome: 'authorized'
+      authorization: ActionAuthorization
+    })
+  | (AuthorizationInitialReceiptBase & {
+      outcome: 'denied'
+      denialReason: AuthorizationDenialReason
+    })
 ```
 
 **In a conforming consumer, every side effect maps to one *or more* actions with
@@ -507,9 +565,11 @@ atomic side-effect transaction. Core enforces a transport cap, rejects duplicate
 or unknown actions, sorts effects in stable `Action` enum order, and computes
 `effect_intent_hash = SHA-256(JCS({ id, effects }))`. There is exactly one
 authorization-request identity per globally unique `effect_intent_id`; it binds
-the `decision_result_hash` and canonical intent hash. An exact retry returns the
-byte-identical initial request receipt — pending, denied, or automatically
-authorized as applicable — and consumes no second budget. A request denied at
+the `decision_result_hash` and canonical intent hash. The first call and every
+exact retry return the same byte-identical `AuthorizationInitialReceipt` and
+consume no second budget. Its `authorized` arm contains the complete immutable
+`ActionAuthorization`; callers never receive a different shape on replay. A
+request denied at
 submission binds its typed `AuthorizationDenialReason` in that receipt; a
 request denied later, by a human rejection, keeps its `pending` initial receipt
 and surfaces `human_rejected` through the status read — either way a budget
@@ -588,6 +648,9 @@ OAuth 2.1 authorization code flow with PKCE, completed in the provider's app.
 Short-lived revocable tokens. Signature, issuer, audience, expiry, scope,
 worker state, and rate limits validated on every call, in `muster-mcp`. No
 model-provider credential is ever requested, stored, or transmitted.
+After validation, `muster-mcp` resolves the authenticated issuer and `sub`
+through its severable subject mapping and passes only the pseudonymous
+`WorkerId` into core. A missing mapping fails closed.
 
 ### 5.2 Tools
 
@@ -611,9 +674,10 @@ set_availability(state)  -> active | maintenance
 `availability` is a closed schema with exactly one field: a **coarse, monotonic
 budget bucket** for this run. It carries nothing that maps to job content.
 
-**Every `lease_id` is bound to the worker subject that holds it.** Submit,
-abandon, and extend from any other subject are rejected regardless of token
-validity.
+**Every `lease_id` is bound to the pseudonymous `WorkerId` that holds it.**
+`muster-mcp` maps the current authenticated subject before calling core;
+submit, abandon, and extend from any other worker ID are rejected regardless
+of token validity.
 
 ### 5.3 The skill as a Resource
 
@@ -638,9 +702,15 @@ never a live edit.
 
 ### 5.4 `input_hash`
 
-SHA-256 over an RFC 8785 (JCS) canonicalization of *(ordered payload items, job
-class, contract version, output schema, policy version, permit epoch)*.
-Specified in `muster-contract` with golden vectors.
+`input_hash = SHA-256(JCS({ payload, payload_schema, job_class_id,
+contract_version, output_schema, policy_version, permit_epoch }))`. `payload`
+is the exact canonical sanitized value returned by `JobClass.sanitize`, so any
+closed-schema shape is representable; order remains significant inside arrays.
+`payload_schema` and `output_schema` are the frozen closed schemas registered
+for that class version. `job_class_id` is the function-free class identity.
+`policy_version` is an operator-scoped string supplied and snapshotted at
+enqueue, copied into every lease, and never read from mutable configuration at
+submit time. Specified in `muster-contract` with golden vectors.
 
 **Its property is payload and contract binding** — nothing more. Exact retries
 are idempotent under section 6.5, but `input_hash` does not prove fresh
@@ -703,12 +773,14 @@ classes the worker's contract version supports, capability match against the
 job, priority, `not_before` — then canary injection at rate `q`, then an
 **atomic claim**, then a lease whose TTL is a quantized bucket from
 `cost.leaseTtl`, floored so it cannot expire immediately after pickup.
-`extend_lease` is bounded.
+`extend_lease` is bounded. Every lease stamps the logical job's positive-integer
+`collectionCycle`. Lease expiry or abandonment may issue a replacement lease
+inside the same cycle; it does not discard already accepted replicas.
 
 ### 6.2 Replication diversity, typed by confidence
 
 Every class declares `replication.target`. Each accepted replica must come from
-a different worker subject, and the configured diversity rule must hold across
+a different `WorkerId`, and the configured diversity rule must hold across
 the set that reaches the target. `target: 1` is explicit rather than an implicit
 default.
 
@@ -905,8 +977,9 @@ longer be spent by an attacker on the operator's behalf.
 
 ### 6.5 Verification pipeline, cheapest first
 
-1. Authenticate the subject, load the lease, and require that the lease belongs
-   to this subject. A revoked token cannot retrieve a receipt.
+1. `muster-mcp` authenticates and maps the subject, then core loads the lease
+   and requires that it belongs to that `WorkerId`. A revoked token or missing
+   identity mapping cannot retrieve a receipt.
 2. Enforce `maxResultBytes`, canonicalize the submitted JSON, and compute
    `result_hash`. The ceiling comes from the immutable lease contract snapshot,
    not the current class policy, and a transport hard cap applies before parsing.
@@ -943,7 +1016,8 @@ longer be spent by an attacker on the operator's behalf.
 11. A unanimous result, or a human-resolved result dispute, gets
     `decision_result_hash = SHA-256(JCS({ result, evidence,
     result_adjudication_verdict_hash? }))`, where `evidence` is the
-    `SubmissionEvidence` set sorted bytewise by `leaseId`. Mark it `verified`;
+    current collection cycle's `SubmissionEvidence` set sorted bytewise by
+    `leaseId`. Every evidence row must stamp that same cycle. Mark it `verified`;
     verification alone authorizes no action.
 12. A conforming consumer calls `authorizeActions(decision_result_hash,
     effect_intent)`. Core canonicalizes and hashes the intent and first applies
@@ -954,9 +1028,11 @@ longer be spent by an attacker on the operator's behalf.
     and absence requirement. If any automatic gate fails, deny the whole
     request. If any permit is `human_only`, create a bound
     `pending_adjudication` authorization request and issue no authorization.
-13. Otherwise return an `ActionAuthorization` for the exact requested set,
-    effect intent, evidence, and stamped permit epoch. A human-approved
-    authorization additionally binds `action_adjudication_verdict_hash`.
+13. Otherwise return an `AuthorizationInitialReceipt` whose `authorized` arm
+    contains the `ActionAuthorization` for the exact requested set, effect
+    intent, evidence, collection cycle, and stamped permit epoch. A
+    human-approved authorization additionally binds
+    `action_adjudication_verdict_hash`.
 
 **The submission receipt is immutable acceptance facts, nothing else.**
 
@@ -964,6 +1040,7 @@ longer be spent by an attacker on the operator's behalf.
 interface SubmissionReceipt {
   leaseId: string
   jobId: string
+  collectionCycle: number
   inputHash: string
   resultHash: string
   contractVersion: string
@@ -1068,6 +1145,7 @@ interface ResultAdjudicationRequest {
   id: string
   reason: 'split_exhausted' | 'diversity_shortfall'
   jobId: string
+  collectionCycle: number
   inputHash: string
   candidateResultHashes: string[]
   evidence: SubmissionEvidence[]
@@ -1080,6 +1158,7 @@ interface ResultAdjudicationVerdict {
   resultAdjudicationRequestId: string
   reason: 'split_exhausted' | 'diversity_shortfall'
   jobId: string
+  collectionCycle: number
   inputHash: string
   candidateResultHashes: string[]
   evidence: SubmissionEvidence[]
@@ -1099,6 +1178,7 @@ interface HumanActionReviewRequirement extends HumanReviewRequirement {
 interface ActionAdjudicationRequest {
   authorizationRequestId: string
   jobId: string
+  collectionCycle: number
   effectIntent: EffectIntent
   effectIntentHash: string
   inputHash: string
@@ -1113,6 +1193,7 @@ interface ActionAdjudicationRequest {
 interface ActionAdjudicationVerdict {
   kind: 'human'
   jobId: string
+  collectionCycle: number
   authorizationRequestId: string
   effectIntentId: string
   effectIntentHash: string
@@ -1135,6 +1216,23 @@ interface AdjudicationSource {
   ): boolean
 }
 ```
+
+Every `ResultState` belongs to `(jobId, collectionCycle)`, never to `jobId`
+alone. A logical job starts at cycle `1`. A result-level requeue that says
+"re-gate from scratch" atomically leaves the old cycle in its terminal state,
+increments the job's current cycle, and creates `collecting` state for the new
+cycle. Old leases, submissions, evidence, requests, verdicts, and receipts stay
+addressable under their old cycle for audit and exact retry but are ineligible
+for replication, agreement, adjudication, or authorization in the new cycle.
+Core recomputes the new cycle's `input_hash` from the stored sanitized payload,
+the frozen schemas, and the newly stamped permit epoch, and persists that hash
+with the cycle transition atomically. If the epoch is unchanged the digest may
+be equal; the cycle number still isolates evidence and state.
+Lease expiry or abandonment that merely replaces one worker attempt stays in
+the same cycle. `maxInFlightLifetime` is measured from the current cycle's
+`cycleStartedAt`; a result-level requeue resets that anchor, while the logical
+job's original enqueue timestamp remains available for end-to-end latency and
+the rejected-dispute cap. The store rejects mixed-cycle evidence everywhere.
 
 `verified` is final for result collection and dispute resolution, but it is not
 permanently eligible for new action requests. A higher-precedence expiry,
@@ -1172,8 +1270,8 @@ target, moves the result from
 `collecting` to `pending_result_adjudication`. Core creates a
 `ResultAdjudicationRequest`, emits `onResultAdjudicationRequested`, and creates
 neither a verified result nor an action request. An authenticated human verdict
-must bind the request ID, reason, job, `input_hash`, complete ordered candidate
-result-hash and `SubmissionEvidence` sets, contract version, permit epoch,
+must bind the request ID, reason, job, collection cycle, `input_hash`, complete
+ordered candidate result-hash and `SubmissionEvidence` sets, contract version, permit epoch,
 adjudicator, decision, and timestamp. A resolution may supply a canonical
 result or reject the set. A supplied result reruns schema, validators, and
 oracles, derives achieved strength, and must meet the class floor before core
@@ -1184,9 +1282,12 @@ a later human action gate.
 
 A rejection is terminal for those candidates and never converts into
 agreement: the request moves to `rejected` and the parent result to `rejected`
-with it. The job is then requeued under the current epoch and re-gated from
-scratch, as after a maximum in-flight expiry, so a bad candidate set costs the
-work a retry rather than the pipeline an item. Section 6.8 applies any
+with it. The job is then requeued under the current epoch in a newly incremented
+collection cycle and re-gated from scratch, as after a maximum in-flight
+expiry, so a bad candidate set costs the work a retry rather than the pipeline
+an item. The atomic transition stamps the current permit epoch and its
+recomputed `input_hash`. The old cycle remains terminal and its accepted
+replicas cannot appear in the new cycle's agreement set. Section 6.8 applies any
 adjudicated falsehood the verdict established to the contributing workers.
 
 **Rejection requeues are bounded per logical job.** Each dispute cycle spends
@@ -1211,7 +1312,8 @@ transition.
 action request is pending unless a higher-precedence condition invalidates it.
 When an `authorizeActions` request includes a `human_only` permit, that
 authorization request moves to `pending_adjudication`; core emits
-`onActionAdjudicationRequested` and returns no `ActionAuthorization`. An
+`onActionAdjudicationRequested` and returns the pending
+`AuthorizationInitialReceipt`, which contains no `ActionAuthorization`. An
 `ActionAdjudicationRequest` uses the same `authorizationRequestId` as the
 pending authorization record and retains the full canonical effect intent and
 hash, all result/evidence bindings, and the exact review requirement for each
@@ -1221,8 +1323,8 @@ review surface must present every required effect path from the stored
 descriptor. An
 authenticated `ActionAdjudicationVerdict` must bind the authorization-request
 ID, effect-intent ID and hash (whose stored canonical descriptors are shown to
-the reviewer), exact action set, job, `input_hash`, `decision_result_hash`,
-ordered `SubmissionEvidence` set, optional result-adjudication verdict hash,
+the reviewer), exact action set, job, collection cycle, `input_hash`,
+`decision_result_hash`, ordered `SubmissionEvidence` set, optional result-adjudication verdict hash,
 contract version, permit epoch, adjudicator identity, verdict, and timestamp.
 For an absence-affecting action, the request and review surface also bind the
 declared `requiredAbsenceDomain`; reviewing only the worker-returned candidates
@@ -1234,6 +1336,9 @@ different action set. The canonical verdict is hashed as
 the resulting authorization. Its exact retry returns the byte-identical receipt
 without spending capacity again; a different verdict for the request returns
 `verdict_conflict`.
+Once status is `authorized`, `getAuthorization(authorizationRequestId)` returns
+the immutable `ActionAuthorization`; the consumer still checks its live
+validity at the side-effect boundary.
 
 `resultAdjudicationVerdictHash` is conditionally optional in the wire type: it
 must be present and equal the decision result's bound verdict hash when a human
@@ -1281,10 +1386,10 @@ increases that reserve; clearing one reserve never clears another.
 
 **Permit epochs.** Permits are versioned; every result stamps the epoch it
 resolved under. Work created under epoch `E` — including bounded
-split-evidence reroutes and requeues after lease expiry — completes under `E`,
-up to a declared maximum in-flight lifetime; past that it is requeued under the
-current epoch and
-re-gated from scratch. New work always uses the current epoch. An epoch change
+split-evidence reroutes and replacement leases after lease expiry — completes
+under `E`, up to a declared maximum in-flight lifetime; past that its current
+cycle expires and a new cycle is created under the current epoch and re-gated
+from scratch. New work always uses the current epoch. An epoch change
 never retroactively re-grants or revokes what an earlier epoch stamped.
 
 Higher-precedence invalidation does not rewrite an issued authorization's audit
@@ -1314,9 +1419,9 @@ authority first:
 | 1 | Lease holder becomes `revoked`/`suspended` | Reject that holder's still-open leases and requeue their work; unrelated workers and previously accepted evidence remain valid |
 | 2 | Queue or class `emergency_halted` | Reject and atomically cancel every affected result for future intents and all pending adjudications, and invalidate issued authorizations for future use, under the recorded operator policy; nothing new completes |
 | 3 | Explicit operator cancellation | Cancel every selected result for future intents and its pending adjudications, invalidate its issued authorizations for future use, and apply the recorded requeue policy atomically |
-| 4 | Operator **emergency permit withdrawal** | Supersede pending adjudications and every verified result stamped with the withdrawn epoch for future intents, including a result that already authorized a different intent; invalidate issued authorizations from that epoch for future use; reject and requeue collecting results under the current epoch. This is the one epoch change that reaches in-flight work |
+| 4 | Operator **emergency permit withdrawal** | Supersede pending adjudications and every verified result stamped with the withdrawn epoch for future intents, including a result that already authorized a different intent; invalidate issued authorizations from that epoch for future use; reject collecting cycles and requeue them as new cycles under the current epoch. This is the one epoch change that reaches in-flight work |
 | 5 | Contract `accepted_until` passed | Expire every affected result for future intents and all pending states, and invalidate issued authorizations for future use; `contract_expired`, coordinator fault (section 6.9) |
-| 6 | Max in-flight lifetime exceeded, including either pending-adjudication phase | Expire every affected result for future intents and all pending states, invalidate issued authorizations for future use, requeue under the current epoch, and re-gate from scratch |
+| 6 | Max in-flight lifetime exceeded, including either pending-adjudication phase | Expire every affected cycle for future intents and all pending states, invalidate issued authorizations for future use, create a new collection cycle under the current epoch, and re-gate from scratch |
 | 7 | Queue or class `admission_halted` | Refuse new enqueue and lease; valid in-flight submissions and verdicts may complete |
 | 8 | `health.operating: 'adjudication_starved'` | Refuse every **new** enqueue for the class; split-evidence reroutes and expiry requeues of existing work proceed |
 | 9 | `health.reserves.splitAndAdjudication: 'saturated'` or `health.reserves.audit: 'saturated'` | Refuse every new class enqueue; existing work remains pending or completes without lowering a gate |
@@ -1330,6 +1435,14 @@ the partially verified work in the queue. Rules 9–11 must not be collapsed int
 one generic saturation state.
 
 ### 6.7 `OracleSpec`
+
+`JsonPath` has exactly three productions: `$` is the payload or result root,
+`.name` selects an object property where `name` matches `[A-Za-z0-9_-]+`, and
+`[*]` selects every element of an array. There are no filters, slices, indices,
+or quoted names. Containment is equality or segment-list prefix. Registration
+rejects a frozen payload, result, or effect schema with a property that cannot
+be represented by this grammar; a future escaped-segment syntax may widen the
+grammar without changing any existing path.
 
 ```ts
 interface OracleSpec<Payload, Result> {
@@ -1385,9 +1498,10 @@ Rules that make the distinction machine-checked at registration and runtime:
   and requirements for absent or human-only permits are registration errors.
 - A support oracle **never** satisfies a gate concerning absence.
 - **An absence domain is a canonical value with a mechanical coverage rule.**
-  Domain identity is canonical (JCS) equality over the closed structure above;
-  `id` labels the domain for humans and audit records and carries no matching
-  semantics. A completeness oracle's `absenceDomain` covers an
+  Domain identity is JCS equality over `{ payloadPaths: sortedDedupedPaths }`.
+  `id` labels the domain for humans and audit records and is excluded from
+  matching identity; path order and duplicates carry no semantics. A
+  completeness oracle's `absenceDomain` covers an
   `AbsenceRequirement.requiredDomain` iff every required payload path equals or
   is a path-extension of one of the oracle domain's paths — plain path
   containment, never semantic inference. The same canonical value is what a
@@ -1531,11 +1645,29 @@ Consumer events: `onSuspicion`, `onSplit`, `onEscalation`,
 `onAdjudicationUncovered`, `onAuditUncovered`, `onDisputeRequeueExhausted`.
 
 Worker records and human-adjudicator identities are personal data even when
-source material is public. Retention classes per data kind; pseudonymized
-worker and adjudicator identifiers with severable subject mappings; erasure
-that anonymizes a person's ledger and events while preserving aggregate counts;
-`PrivacyClass` governing submission-body and effect-descriptor retention and
-whether either appears in events. Lawful-basis decisions are the consumer's.
+source material is public. `muster-mcp` keeps authenticated subjects behind a
+severable mapping; core records, hashes, receipts, and events use only opaque
+`WorkerId` and pseudonymous adjudicator IDs. Severing those mappings anonymizes
+a person's ledger and events while preserving aggregate counts and hash
+preimages.
+
+`PrivacyClass` has these frozen rules:
+
+| Class | Bodies in consumer notifications | Descriptors in consumer notifications | Ledger bodies |
+|---|---|---|---|
+| `public` | yes | yes | full |
+| `internal` | no | no | full |
+| `sensitive` | no | no | hash-only |
+
+The append-only audit event stream carries bodies and effect descriptors only
+as hashes for every class. The table governs consumer notifications and ledger
+storage, not audit events. Operational payload, result, and descriptor bodies
+needed by an active verification or adjudication lifecycle may be retained
+until that lifecycle reaches a terminal state or its maximum in-flight lifetime;
+then the class rule and operator-configured retention duration apply. Once a
+`sensitive` body has been reduced to hash-only storage it cannot be reconstructed
+for later human re-examination. Lawful-basis and duration decisions are the
+consumer's.
 
 ## 8. Trust model as tests
 
@@ -1544,8 +1676,8 @@ whether either appears in events. Lawful-basis decisions are the consumer's.
 | Member edits the skill or calls MCP directly | Tools are the entire surface; scopes enforced independently; `availability` is a closed one-field schema; capabilities server-held |
 | Queue probing | Every row of section 5.7's table has a conformance test |
 | Post-lease withholding | Not preventable and not detectable for sparse contributors; population-level correlation only |
-| Stolen token | Short-lived tokens; revocation invalidates open leases |
-| Leaked lease identifier | Submit, abandon, extend rejected from any subject but the holder |
+| Stolen token | Short-lived tokens; revocation invalidates open leases; raw OAuth subjects stop at `muster-mcp` and never enter core audit data |
+| Leaked lease identifier | Submit, abandon, extend rejected from any mapped worker ID but the holder |
 | Fabricated results | Core derives achieved strength, requires action-specific payload and result coverage, and issues no under-strength authorization; canaries affect worker risk only |
 | Suppression by omission | Automatic `suppress` requires a completeness oracle with a declared absence domain; human-only suppression binds that domain plus complete effect-review coverage; every `drop` is human-only |
 | Consumer bypasses authorization | Explicitly outside the worker threat model; the consumer is trusted, and the conformance kit tests every declared side-effect adapter, effect-schema validation, and descriptor-hash match |
@@ -1567,14 +1699,20 @@ whether either appears in events. Lawful-basis decisions are the consumer's.
 
 ### 8.1 Store conformance
 
-Lease atomicity under concurrency, subject binding, idempotent submit, expiry
+Lease atomicity under concurrency, pseudonymous worker-ID binding, idempotent submit, expiry
 requeue, absence of double-leasing. `claimLease` must be atomic and submit
 idempotency must match `(lease_id, input_hash, result_hash)` exactly, with a
 unique accepted submission per lease. A conflicting retry returns
 `submission_conflict` without replacing the accepted row. The exact-retry path
 is exercised after submission closure, lease expiry, contract expiry, admission
-halt, emergency halt, and permit withdrawal; once the subject is authenticated,
+halt, emergency halt, and permit withdrawal; once the subject is authenticated and mapped,
 none may replace a previously issued receipt with a new result row.
+The store scopes accepted replicas and `ResultState` by `(jobId,
+collectionCycle)`. A result-level requeue atomically terminates the old cycle,
+increments the current-cycle pointer, and opens a fresh `collecting` cycle;
+lease-level retries remain inside their existing cycle. Old-cycle receipts
+remain replayable, while old-cycle evidence is rejected from every new-cycle
+agreement, adjudication, decision, and authorization operation.
 The store also enforces one authorization-request identity per
 globally unique `effect_intent_id`; exact canonical retries for the same
 decision reuse its immutable initial receipt, and a different decision or
@@ -1586,7 +1724,8 @@ creating a new request; a separate status read returns current validity.
 
 ### 8.2 Protocol conformance
 
-Golden `input_hash`, `result_hash`, `effect_intent_hash`, both
+Golden `input_hash` over the exact canonical sanitized payload and both frozen
+schemas, `result_hash`, `effect_intent_hash`, both
 adjudication-verdict hashes, and `decision_result_hash` vectors above all. Tool
 schemas, error codes, coarse `no_work` shapes, `availability` schema,
 canonical action-set, effect-intent,
@@ -1597,6 +1736,7 @@ agreement and absorbing-split cases, oracle coverage and negative fixtures,
 halt distinctions, automatic effect-derivation fixtures, human effect-path and
 absence-domain review coverage, absence-domain containment acceptance and
 refusal cases, verified-result retirement from future intents,
+collection-cycle isolation across result-level requeues,
 urgent-saturation denial of an in-flight urgent action request,
 rejected-dispute requeue under the current epoch, dispute-requeue cap
 exhaustion, typed denial reasons across replay and status reads, immutable
@@ -1652,11 +1792,13 @@ minimum:
 `ResultAdjudicationRequest`, `ResultAdjudicationVerdict`,
 `HumanActionReviewRequirement`, `ActionAdjudicationRequest`,
 `ActionAdjudicationVerdict`, `AdjudicationCapacity`, `ActionAuthorization`,
+`AuthorizationInitialReceipt`,
 `SubmissionEvidence`, `ResultState`, `ResultAdjudicationRequestState`,
 `AuthorizationRequestState`, `AuthorizationInvalidationReason`,
 `AuthorizationDenialReason`, `AuthorizationValidity`, `AuthorizationStatus`,
 `SubmissionReceipt`, `ClassHealth`,
-`WorkerSubject`, `Store`, `EventSink`, `AdmissionHook`, `AdjudicationSource`.
+`AuthenticatedWorkerSubject`, `WorkerId`, `Store`, `EventSink`, `AdmissionHook`,
+`AdjudicationSource`.
 
 **Tables and state machines.** The worker state machine (3.1); the action gate
 table (6.3); the precedence table (6.6); the fair-attempt classification table
@@ -1673,8 +1815,9 @@ modes, and effect-intent idempotency (4.3); result, action, and
 absence-requirement coverage validation at registration and runtime (6.7);
 replication target, unanimous equivalence, diversity, absorbing splits,
 split-evidence limit, and the two adjudication accounting paths (6.2–6.6);
-escalation reserve accounting and urgent fail-closed behaviour (6.4); permit
-epoch assignment across requeue, split-evidence reroute, pending human review,
+escalation reserve accounting and urgent fail-closed behaviour (6.4);
+collection-cycle assignment across result-level requeues versus lease-level
+retries; permit epoch assignment across requeue, split-evidence reroute, pending human review,
 emergency authorization invalidation, and draining (6.6); `availability`
 bucket quantization and every mitigation in the side-channel table (5.7).
 

@@ -7,7 +7,7 @@ direction, three unsolved staged-work problems, and the effecting-work
 trust/execution contract that must be frozen before either shape may be planned
 or built.
 
-**Parent:** `2026-08-04-muster-coordinator-design.md` (revision 11, `oneshot`
+**Parent:** `2026-08-04-muster-coordinator-design.md` (revision 12, `oneshot`
 scope).
 
 ## Why this is separate

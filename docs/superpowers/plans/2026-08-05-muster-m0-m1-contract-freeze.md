@@ -15,8 +15,9 @@ Copied from the spec; every task implicitly includes these.
 - Packages are `@kuindji/muster-contract`, `@kuindji/muster-core`, `@kuindji/muster-store-postgres`, `@kuindji/muster-mcp`; repo `muster`; license **Apache-2.0**; public from the first commit. (Spec header, §4.1, §10)
 - `@kuindji/muster-contract`: **zero runtime dependencies, isomorphic** (Node + Workers). (§4.1)
 - `@kuindji/muster-core`: **exactly one runtime dependency** (`@kuindji/muster-contract`), performs **no I/O**, and CI asserts it references **no network or filesystem API**. (§1.2, §8.3)
+- Raw OAuth issuer/`sub` values are private to `muster-mcp`; CI rejects `AuthenticatedWorkerSubject`, `workerSubject`, `issuer:`, or `subject:` fields anywhere in core source. Core uses only pseudonymous `WorkerId`. (revision 12 §2, §7)
 - **Muster performs no model inference.** (§1.2)
-- `input_hash` = SHA-256 over an **RFC 8785 (JCS)** canonicalization of *(ordered payload items, job class, contract version, output schema, policy version, permit epoch)*, with golden vectors, specified in `muster-contract`. (§5.4)
+- `input_hash` = SHA-256 over an **RFC 8785 (JCS)** canonicalization of `{ payload, payload_schema, job_class_id, contract_version, output_schema, policy_version, permit_epoch }`, with golden vectors, specified in `muster-contract`. `payload` is the exact canonical sanitized value, not a caller-supplied parallel projection. (§5.4)
 - `effect_intent_hash = SHA-256(JCS({ id, effects }))` with effects sorted in stable `Action` enum order. (§4.3)
 - `decision_result_hash = SHA-256(JCS({ result, evidence, result_adjudication_verdict_hash? }))`, evidence sorted bytewise by `leaseId`. (§6.5)
 - Both adjudication verdict hashes = `SHA-256(JCS(verdict))`. (§6.6)
@@ -53,7 +54,7 @@ muster/
     │   │   ├── canonical/jcs.ts          # RFC 8785
     │   │   ├── canonical/sha256.ts       # WebCrypto sha256Hex + hashCanonical
     │   │   ├── deep-freeze.ts            # runtime deep freeze for every exported table/vocabulary
-    │   │   ├── primitives.ts             # NonEmptyArray, CanonicalJsonValue, Timestamp, Seconds, WorkerSubject, SubmissionEvidence
+    │   │   ├── primitives.ts             # NonEmptyArray, CanonicalJsonValue, Timestamp, Seconds, AuthenticatedWorkerSubject, WorkerId, SubmissionEvidence
     │   │   ├── jsonpath.ts               # JsonPath grammar, parse, containment
     │   │   ├── actions.ts                # Action enum + order + consequence/surface
     │   │   ├── verification.ts           # strengths
@@ -64,7 +65,7 @@ muster/
     │   │   ├── hashes.ts                 # inputHash, resultHash, decisionResultHash envelopes
     │   │   ├── states.ts                 # SubmissionReceipt, Result/Adjudication/Authorization states, denial & invalidation reasons, AuthorizationValidity/Status, ClassHealth, AdjudicationCapacity
     │   │   ├── errors.ts                 # wire error codes
-    │   │   ├── adjudication.ts           # Result/Action adjudication requests+verdicts, verdict hashes, shape validators, ActionAuthorization
+    │   │   ├── adjudication.ts           # Result/Action adjudication requests+verdicts, verdict hashes, shape validators, ActionAuthorization + replay-stable initial receipt
     │   │   ├── tables/action-gates.ts
     │   │   ├── tables/precedence.ts
     │   │   ├── tables/worker-states.ts
@@ -223,6 +224,24 @@ function scan(dir) {
 }
 scan("packages/contract/src");
 scan("packages/core/src");
+
+// --- Revision 12 §2/§7: raw OAuth identity stops at muster-mcp ---
+const CORE_IDENTITY_FORBIDDEN = [
+  /\bAuthenticatedWorkerSubject\b/, /\bworkerSubject\b/,
+  /\bissuer\s*:/, /\bsubject\s*:/
+];
+function scanCoreIdentity(dir) {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) { scanCoreIdentity(p); continue; }
+    if (!/\.(ts|js|mjs|cjs)$/.test(entry)) continue;
+    const text = readFileSync(p, "utf8");
+    for (const re of CORE_IDENTITY_FORBIDDEN)
+      if (re.test(text)) fail(`${p} leaks raw OAuth identity into core via ${re}`);
+  }
+}
+scanCoreIdentity("packages/core/src");
 
 if (process.exitCode !== 1) console.log("invariants ok");
 ```
@@ -958,8 +977,9 @@ git commit -m "feat(contract): isomorphic sha256Hex and hashCanonical"
   - `type NonEmptyArray<T> = [T, ...T[]]`, `function isNonEmptyArray<T>(a: readonly T[]): a is NonEmptyArray<T>`
   - `type CanonicalJsonValue = null | boolean | number | string | CanonicalJsonValue[] | { [key: string]: CanonicalJsonValue }`
   - `type Timestamp = string` (ISO 8601 UTC, millisecond precision, `Z` suffix — e.g. `2026-08-05T10:00:00.000Z`), `type Seconds = number`
-  - `interface WorkerSubject { issuer: string; subject: string }` — the authenticated OAuth identity `muster-mcp` hands to core (§2); `issuer` is the OAuth issuer URL, `subject` the stable `sub` claim.
-  - `interface SubmissionEvidence { leaseId: string; resultHash: string; workerSubject: WorkerSubject }` (§4.3, verbatim field names — they enter `decision_result_hash`)
+  - `interface AuthenticatedWorkerSubject { issuer: string; subject: string }` — private to `muster-mcp`; `issuer` is the OAuth issuer URL and `subject` the stable `sub` claim. It never enters core, hashes, receipts, or append-only events.
+  - `type WorkerId = string` — an opaque coordinator-generated pseudonym. `muster-mcp` owns the severable `AuthenticatedWorkerSubject -> WorkerId` mapping and passes only `WorkerId` to core (§2, §7).
+  - `interface SubmissionEvidence { leaseId: string; collectionCycle: number; resultHash: string; workerId: WorkerId }` (§4.3, revision 12 — these fields enter `decision_result_hash`; `collectionCycle` is a positive integer and all evidence in one decision must agree)
   - `const WIRE_ID_PATTERN`, `isWireId(s: string): boolean` — the frozen **ASCII wire-identifier grammar** (printable ASCII, no spaces). Every coordinator-generated identifier and hash (lease IDs, job IDs, request IDs, epochs, hex digests) must satisfy it. This is what makes the spec's "bytewise" orderings implementable with plain JS string comparison: UTF-16 code-unit order and UTF-8 byte order agree on ASCII, and diverge outside it. Core (M2) rejects any identifier failing `isWireId` at the boundary.
   - `type JsonPath = string`, `parseJsonPath(path: string): string[]`, `isJsonPath(path: string): boolean`, `isPathExtension(child: JsonPath, parent: JsonPath): boolean`, `pathsCover(covering: readonly JsonPath[], required: readonly JsonPath[]): boolean`
 
@@ -1059,17 +1079,21 @@ export type CanonicalJsonValue =
 export type Timestamp = string;
 export type Seconds = number;
 
-/** Authenticated OAuth identity, produced by muster-mcp, consumed by core (spec 2). */
-export interface WorkerSubject {
+/** Raw OAuth identity. Private to muster-mcp; never persisted in core data. */
+export interface AuthenticatedWorkerSubject {
   issuer: string;
   subject: string;
 }
 
-/** Spec 4.3. Field names are frozen: they enter decision_result_hash. */
+/** Opaque pseudonym resolved by muster-mcp through a severable mapping. */
+export type WorkerId = string;
+
+/** Spec 4.3/rev 12. Field names are frozen: they enter decision_result_hash. */
 export interface SubmissionEvidence {
   leaseId: string;
+  collectionCycle: number;
   resultHash: string;
-  workerSubject: WorkerSubject;
+  workerId: WorkerId;
 }
 
 /** Frozen ASCII wire-identifier grammar: printable ASCII, no space. All
@@ -1155,7 +1179,7 @@ Expected: PASS.
 
 ```bash
 git add packages/contract/src packages/contract/test
-git commit -m "feat(contract): primitives, WorkerSubject, SubmissionEvidence, JsonPath grammar with containment"
+git commit -m "feat(contract): primitives, pseudonymous worker identity, evidence, JsonPath containment"
 ```
 
 ### Task 7: `Action` enum, verification strengths, and the action-gate table
@@ -1376,7 +1400,7 @@ import {
 
 const domain = (id: string, paths: [string, ...string[]]) => ({ id, payloadPaths: paths });
 
-describe("AbsenceDomain canonical identity (spec rev 11, 6.7)", () => {
+describe("AbsenceDomain canonical identity (spec revision 12, 6.7)", () => {
   it("id carries no matching semantics", () => {
     expect(absenceDomainEquals(domain("a", ["$.items"]), domain("b", ["$.items"]))).toBe(true);
   });
@@ -1458,7 +1482,7 @@ export function absenceDomainEquals(a: AbsenceDomain, b: AbsenceDomain): boolean
   return canonicalAbsenceDomainKey(a) === canonicalAbsenceDomainKey(b);
 }
 
-/** Spec 6.7/rev 11: plain path containment — every required payload path equals
+/** Spec 6.7/revision 12: plain path containment — every required payload path equals
  * or is a path-extension of one of the oracle domain's paths. Never semantic. */
 export function absenceDomainCovers(oracleDomain: AbsenceDomain, required: AbsenceDomain): boolean {
   return pathsCover(oracleDomain.payloadPaths, required.payloadPaths);
@@ -1805,12 +1829,12 @@ git commit -m "feat(contract): agreement policy types and unanimous-equivalence 
 
 **Interfaces:**
 - Consumes: everything from Tasks 6–10.
-- Produces the remaining §4.2 and worker-model types. `JobClass<Payload, Result>` must match §4.2 **field-for-field, plus one addition the spec requires but forgot to declare**: §6.7 validates oracle payload paths, absence domains, and human-review payload paths against "the frozen payload schema", and §4.2 defines only `outputSchema` — so `JobClass` gains `payloadSchema: JSONSchema` (closed, describing the *sanitized* payload, bound by `contractVersion`; it does **not** enter `input_hash`, whose §5.4 envelope is already frozen with `output_schema` only). This is a spec-interpretation decision, **signed off** — `docs/specs/2026-08-05-spec-interpretation-decisions.md` §1. The other types below that the spec names but does not define are frozen here as design decisions:
+- Produces the remaining §4.2 and worker-model types. `JobClass<Payload, Result>` matches revision 12 §4.2 field-for-field, including `payloadSchema: JSONSchema`: a closed schema describing the exact sanitized payload. Both schemas enter `input_hash`, and class registration rejects a second `(id, contractVersion)` registration whose frozen schema digests differ. The historical revision-11 interpretation is recorded in `docs/specs/2026-08-05-spec-interpretation-decisions.md`; revision 12 is normative. The other types below that the spec names but does not define are frozen here as design decisions:
   - `interface Validator<Payload, Result> { id: string; run(payload: Payload, result: Result): OracleVerdict }` (deterministic, no I/O; same verdict shape as oracles so the ledger stores one shape)
   - `interface CanaryCase<Payload, Result> { canaryId: string; sourceJobId: string; contractVersion: string; payload: Payload; expected: Result }`, `interface CanarySource<Payload, Result> { rates: { probationQ: number; productionQ: number; auditQ: number }; draw(kind: 'probation' | 'production' | 'audit', seed: string): CanaryCase<Payload, Result> | null }` (§6.11's three rates). Canaries carry identity and provenance — `canaryId` for the ledger, `sourceJobId`/`contractVersion` proving the case comes from real resolved work under a known contract (§5.7, §6.11) — and `draw` is deterministic in `(kind, seed)` so lease-time canary injection is replayable in audit; core supplies the seed, never the source.
   - `interface CapabilityRequirement { providerSurfaces?: NonEmptyArray<string>; unattendedScheduling?: boolean; languages?: NonEmptyArray<string> }` (§3.2's enrolled capabilities). **Match semantics are frozen in doc comments:** an omitted axis is no requirement; `providerSurfaces` is any-of (the worker's enrolled surface must be in the list); `languages` is all-of (the worker's verified coverage must include every listed language); `unattendedScheduling: true` requires the enrolled probe to have verified it.
   - `type DiversityAxis = 'slot' | 'provider' | 'accountCluster' | 'language' | 'modelFamily'`, `type AxisConfidence = 'attested' | 'observed' | 'self_reported' | 'unknown'`, `const AXIS_CONFIDENCE: Record<DiversityAxis, AxisConfidence>` frozen from §6.2's table (slot=attested; provider/accountCluster/language=observed; modelFamily=self_reported), `interface DiversityRule { axes: NonEmptyArray<DiversityAxis>; minDistinct: number }` — the rule holds across the accepted replica set iff **every** listed axis shows at least `minDistinct` distinct values there. Registration (M2) refuses any axis whose confidence is below `observed`, `minDistinct < 2`, and `minDistinct > replication.target` (§4.2 "a diversity rule that cannot cover the target in principle").
-  - `type PrivacyClass = 'public' | 'internal' | 'sensitive'` plus `const PRIVACY_CLASS_RULES: Record<PrivacyClass, { bodiesInEvents: boolean; descriptorsInEvents: boolean; ledgerBodies: 'full' | 'hash_only' }>` — §7's retention/visibility governance as executable data rather than prose: `public` = bodies and descriptors may appear in events, full ledger bodies; `internal` = neither in events, full ledger bodies; `sensitive` = neither in events, hash-only ledger bodies. Retention *durations* are operator deployment config in M2, keyed by this class. **These three rows are new policy, not a transcription** — §7 names the governance but not the values — and were **signed off by the operator on 2026-08-05**: `docs/specs/2026-08-05-spec-interpretation-decisions.md` §5. **Scope, and it is not optional:** `bodiesInEvents` / `descriptorsInEvents` govern **consumer notifications** only. The audit event stream carries bodies and descriptors as hashes for every class without exception (Task 16's `MusterAuditEvent` doc comment) — `public` is not licence to put raw bodies in the audit trail. The doc comment on this record must say so.
+  - `type PrivacyClass = 'public' | 'internal' | 'sensitive'` plus `const PRIVACY_CLASS_RULES: Record<PrivacyClass, { bodiesInConsumerNotifications: boolean; descriptorsInConsumerNotifications: boolean; ledgerBodies: 'full' | 'hash_only' }>` — revision 12 §7 verbatim. The notification-specific field names are deliberate; audit events are hash-only for every class. Operational bodies may live only through an active lifecycle or its maximum in-flight lifetime, after which the class rule and operator-configured duration apply.
   - `interface ReplicationPolicy`, `interface EscalationReserves`, `interface AdjudicationPolicy` — §4.2/§6.4 verbatim
   - `type WorkerState = 'enrolled' | 'active' | 'maintenance' | 'paused' | 'suspended' | 'revoked'` (§3.1)
 
@@ -1891,7 +1915,11 @@ describe("JobClass shape (spec 4.2)", () => {
 
   it("freezes privacy-class visibility rules per spec 7", () => {
     expect(PRIVACY_CLASS_RULES.public.ledgerBodies).toBe("full");
-    expect(PRIVACY_CLASS_RULES.internal).toEqual({ bodiesInEvents: false, descriptorsInEvents: false, ledgerBodies: "full" });
+    expect(PRIVACY_CLASS_RULES.internal).toEqual({
+      bodiesInConsumerNotifications: false,
+      descriptorsInConsumerNotifications: false,
+      ledgerBodies: "full"
+    });
     expect(PRIVACY_CLASS_RULES.sensitive.ledgerBodies).toBe("hash_only");
   });
 });
@@ -1917,6 +1945,7 @@ import type {
   ActionEvidenceRequirement, AbsenceRequirement
 } from "./oracle.js";
 import type { AgreementPolicy } from "./agreement.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 export type WorkerState =
   | "enrolled" | "active" | "maintenance" | "paused" | "suspended" | "revoked";
@@ -1977,19 +2006,36 @@ export interface DiversityRule {
 }
 
 /** Spec 7: governs submission-body and effect-descriptor retention and
- * whether either appears in events. */
+ * whether either appears in consumer notifications. Audit events remain
+ * hash-only for every privacy class. */
 export type PrivacyClass = "public" | "internal" | "sensitive";
 
 /** Spec 7 retention/visibility governance as executable data. Retention
  * DURATIONS are operator deployment config in M2, keyed by this class. */
 export const PRIVACY_CLASS_RULES: Record<
   PrivacyClass,
-  { bodiesInEvents: boolean; descriptorsInEvents: boolean; ledgerBodies: "full" | "hash_only" }
-> = {
-  public:    { bodiesInEvents: true,  descriptorsInEvents: true,  ledgerBodies: "full" },
-  internal:  { bodiesInEvents: false, descriptorsInEvents: false, ledgerBodies: "full" },
-  sensitive: { bodiesInEvents: false, descriptorsInEvents: false, ledgerBodies: "hash_only" }
-};
+  {
+    bodiesInConsumerNotifications: boolean;
+    descriptorsInConsumerNotifications: boolean;
+    ledgerBodies: "full" | "hash_only";
+  }
+> = deepFreeze({
+  public: {
+    bodiesInConsumerNotifications: true,
+    descriptorsInConsumerNotifications: true,
+    ledgerBodies: "full"
+  },
+  internal: {
+    bodiesInConsumerNotifications: false,
+    descriptorsInConsumerNotifications: false,
+    ledgerBodies: "full"
+  },
+  sensitive: {
+    bodiesInConsumerNotifications: false,
+    descriptorsInConsumerNotifications: false,
+    ledgerBodies: "hash_only"
+  }
+});
 
 export interface ReplicationPolicy {
   /** integer >= 1; independent accepted results needed */
@@ -2024,12 +2070,10 @@ export interface JobClass<Payload, Result> {
   /** reserved; v1 is one-shot only (spec 1.3) */
   kind: "oneshot";
 
-  /** closed: additionalProperties false */
-  outputSchema: JSONSchema;
-  /** Closed schema of the SANITIZED payload (sanitize()'s output). The frozen
-   * schema spec 6.7's path-existence and absence-domain checks run against.
-   * Bound by contractVersion; not part of the input_hash envelope (spec 5.4). */
+  /** Closed schema of the SANITIZED payload; enters input_hash. */
   payloadSchema: JSONSchema;
+  /** closed: additionalProperties false; enters input_hash */
+  outputSchema: JSONSchema;
   maxPayloadBytes: number;
   maxResultBytes: number;
   sanitize(raw: unknown): Payload;
@@ -2090,9 +2134,8 @@ git commit -m "feat(contract): JobClass and all configuration types frozen per s
 
 **Interfaces:**
 - Consumes: `hashCanonical` (Task 5), `SubmissionEvidence` (Task 6).
-- Produces the three remaining hash envelopes. **Envelope key names are the frozen wire contract** — snake_case exactly as the spec writes them in its hash formulas (§5.4, §6.5), regardless of the camelCase TS field names around them:
-  - `interface InputHashEnvelope { payload_items: CanonicalJsonValue[]; job_class_id: string; contract_version: string; output_schema: CanonicalJsonValue; policy_version: string; permit_epoch: string }` and `computeInputHash(env: InputHashEnvelope): Promise<string>` — §5.4's ordered six-tuple; `payload_items` order is significant and preserved
-  - Two spec-interpretation decisions, frozen here and **signed off** — `docs/specs/2026-08-05-spec-interpretation-decisions.md` §2: **(a)** §5.4's "job class" element is bound as `job_class_id` — the full `JobClass` contains functions and cannot be hashed; the class's semantic content is already pinned by `contract_version` + `output_schema`, which enter the hash separately, so the ID plus those two is the complete function-free projection. **(b)** `policy_version` is an **operator-scoped policy label** with no owning structure in the spec; it is frozen as a required string supplied at `enqueue`, snapshotted into the job record and `LeaseRecord` (Task 16), and never derived from mutable state at submit time. If either reading is wrong, amend the spec before Task 20 freezes the vectors.
+- Produces the three remaining hash envelopes. **Envelope key names are the frozen wire contract** — snake_case exactly as revision 12 writes them in its hash formulas (§5.4, §6.5), regardless of the camelCase TS field names around them:
+  - `interface InputHashEnvelope { payload: CanonicalJsonValue; payload_schema: CanonicalJsonValue; job_class_id: string; contract_version: string; output_schema: CanonicalJsonValue; policy_version: string; permit_epoch: string }` and `computeInputHash(env: InputHashEnvelope): Promise<string>`. `payload` is the exact canonical sanitized value stored for the job, so every closed-schema shape has one projection and order remains significant inside arrays. Both frozen schemas enter the hash. `policy_version` is supplied at enqueue and snapshotted into job and lease records, never derived from mutable state at submit time.
   - `computeResultHash(resultBody: CanonicalJsonValue): Promise<string>` — §6.5 step 2: canonicalize the submitted JSON, hash it (an uncanonicalizable body has no result hash — `canonicalize` throwing is that rule)
   - `interface DecisionResultHashEnvelope { result: CanonicalJsonValue; evidence: SubmissionEvidence[]; result_adjudication_verdict_hash?: string }` and `computeDecisionResultHash(env): Promise<string>` — §6.5 step 11; the function **sorts evidence bytewise by `leaseId`** itself and **omits** `result_adjudication_verdict_hash` from the canonical envelope when absent (JCS has no undefined; conditional presence per §6.6)
 
@@ -2106,7 +2149,8 @@ import { computeInputHash, computeResultHash, computeDecisionResultHash } from "
 import { hashCanonical } from "../src/canonical/sha256.js";
 
 const envelope = {
-  payload_items: [{ id: "a", text: "first" }, { id: "b", text: "second" }],
+  payload: { items: [{ id: "a", text: "first" }, { id: "b", text: "second" }] },
+  payload_schema: { type: "object", additionalProperties: false, properties: { items: { type: "array" } } },
   job_class_id: "extract-claims",
   contract_version: "1.0.0",
   output_schema: { type: "object", additionalProperties: false },
@@ -2114,13 +2158,17 @@ const envelope = {
   permit_epoch: "epoch-1"
 };
 
-describe("input_hash (spec 5.4)", () => {
-  it("is hashCanonical of the frozen six-key envelope", async () => {
+describe("input_hash (spec revision 12, 5.4)", () => {
+  it("is hashCanonical of the frozen seven-key envelope", async () => {
     expect(await computeInputHash(envelope)).toBe(await hashCanonical(envelope));
   });
-  it("payload item ORDER is significant", async () => {
-    const swapped = { ...envelope, payload_items: [envelope.payload_items[1]!, envelope.payload_items[0]!] };
+  it("array order inside the canonical payload is significant", async () => {
+    const swapped = { ...envelope, payload: { items: [envelope.payload.items[1]!, envelope.payload.items[0]!] } };
     expect(await computeInputHash(swapped)).not.toBe(await computeInputHash(envelope));
+  });
+  it("payload schema enters the hash", async () => {
+    const changed = { ...envelope, payload_schema: { ...envelope.payload_schema, title: "changed" } };
+    expect(await computeInputHash(changed)).not.toBe(await computeInputHash(envelope));
   });
   it("permit epoch enters the hash", async () => {
     expect(await computeInputHash({ ...envelope, permit_epoch: "epoch-2" }))
@@ -2135,10 +2183,10 @@ describe("result_hash (spec 6.5 step 2)", () => {
 });
 
 describe("decision_result_hash (spec 6.5 step 11)", () => {
-  const w = (s: string) => ({ issuer: "https://issuer.example", subject: s });
+  const w = (s: string) => `worker-${s}`;
   const evidence = [
-    { leaseId: "lease-b", resultHash: "hash-1", workerSubject: w("w1") },
-    { leaseId: "lease-a", resultHash: "hash-1", workerSubject: w("w2") }
+    { leaseId: "lease-b", collectionCycle: 1, resultHash: "hash-1", workerId: w("w1") },
+    { leaseId: "lease-a", collectionCycle: 1, resultHash: "hash-1", workerId: w("w2") }
   ];
   it("sorts evidence bytewise by leaseId", async () => {
     const sorted = [evidence[1]!, evidence[0]!];
@@ -2148,6 +2196,11 @@ describe("decision_result_hash (spec 6.5 step 11)", () => {
   it("evidence input order does not matter", async () => {
     expect(await computeDecisionResultHash({ result: { x: 1 }, evidence }))
       .toBe(await computeDecisionResultHash({ result: { x: 1 }, evidence: [evidence[1]!, evidence[0]!] }));
+  });
+  it("rejects mixed collection cycles", async () => {
+    const mixed = [evidence[0]!, { ...evidence[1]!, collectionCycle: 2 }];
+    await expect(computeDecisionResultHash({ result: { x: 1 }, evidence: mixed }))
+      .rejects.toThrow("mixed collection cycles");
   });
   it("verdict hash present vs absent changes the digest; absent key is omitted", async () => {
     const withVerdict = await computeDecisionResultHash({
@@ -2176,9 +2229,10 @@ import type { CanonicalJsonValue } from "./primitives.js";
 import type { SubmissionEvidence } from "./primitives.js";
 import { hashCanonical } from "./canonical/sha256.js";
 
-/** Spec 5.4. Snake_case keys are the FROZEN wire envelope. payload_items order is significant. */
+/** Spec revision 12 §5.4. Snake_case keys are the FROZEN wire envelope. */
 export interface InputHashEnvelope {
-  payload_items: CanonicalJsonValue[];
+  payload: CanonicalJsonValue;
+  payload_schema: CanonicalJsonValue;
   job_class_id: string;
   contract_version: string;
   output_schema: CanonicalJsonValue;
@@ -2188,7 +2242,8 @@ export interface InputHashEnvelope {
 
 export async function computeInputHash(env: InputHashEnvelope): Promise<string> {
   return hashCanonical({
-    payload_items: env.payload_items,
+    payload: env.payload,
+    payload_schema: env.payload_schema,
     job_class_id: env.job_class_id,
     contract_version: env.contract_version,
     output_schema: env.output_schema,
@@ -2218,8 +2273,12 @@ export interface DecisionResultHashEnvelope {
 
 /** Spec 6.5 step 11. Sorts evidence itself; omits the verdict-hash key when absent. */
 export async function computeDecisionResultHash(env: DecisionResultHashEnvelope): Promise<string> {
+  const cycle = env.evidence[0]?.collectionCycle;
+  if (cycle === undefined || !Number.isInteger(cycle) || cycle < 1 ||
+      env.evidence.some((e) => e.collectionCycle !== cycle))
+    throw new Error("mixed collection cycles");
   const evidence = [...env.evidence].sort(byLeaseIdBytes)
-    .map((e) => ({ leaseId: e.leaseId, resultHash: e.resultHash, workerSubject: { issuer: e.workerSubject.issuer, subject: e.workerSubject.subject } }));
+    .map((e) => ({ leaseId: e.leaseId, collectionCycle: e.collectionCycle, resultHash: e.resultHash, workerId: e.workerId }));
   const body: Record<string, unknown> = { result: env.result, evidence };
   if (env.result_adjudication_verdict_hash !== undefined)
     body.result_adjudication_verdict_hash = env.result_adjudication_verdict_hash;
@@ -2249,9 +2308,8 @@ git commit -m "feat(contract): frozen input_hash, result_hash, decision_result_h
 
 **Interfaces:**
 - Consumes: `Timestamp`, `Seconds` (Task 6).
-- Produces, **verbatim from §6.5/§6.6**: `interface SubmissionReceipt` (immutable acceptance facts only — the eight fields of §6.5, nothing else; adding a field here is the rev-11 bug the spec closed), `type ResultState`, `type ResultAdjudicationRequestState`, `type AuthorizationRequestState`, `type AuthorizationInvalidationReason`, `type AuthorizationDenialReason`, `type AuthorizationValidity`, `type AuthorizationStatus`, `interface ClassHealth`, `interface AdjudicationCapacity`. Plus:
-  - `type AuthorizationInitialReceipt` — §4.3's **immutable initial request receipt** as a discriminated union over `outcome: 'pending_adjudication' | 'authorized' | 'denied'` (shared fields `authorizationRequestId`, `effectIntentId`, `effectIntentHash`, `decisionResultHash`, `at`; the denied variant alone carries a required `denialReason: AuthorizationDenialReason`) — the presence rule is structural, not documentation. The Store (Task 16) persists and replays exactly this type — never an untyped blob.
-  - The frozen typed-error vocabulary, **split by boundary** — mixing them would let a consumer-API code leak onto the worker wire: `const WORKER_WIRE_ERROR_CODES = ['lease_not_held', 'result_too_large', 'invalid_result', 'submission_conflict', 'input_hash_mismatch', 'contract_mismatch', 'contract_expired']` — the complete coarse failure vocabulary of §6.5's pipeline toward workers (`lease_not_held` deliberately collapses unknown/wrong-subject/closed, `invalid_result` collapses structural/validator/oracle rejection: finer grain would leak state, §5.7; `no_work` is an *outcome*, not an error — it lives in `NO_WORK_SHAPE`, Task 17); `const CONSUMER_API_ERROR_CODES = ['authorization_conflict', 'verdict_conflict', 'effect_descriptor_mismatch', 'intent_invalid']` — §4.3's identity-less typed errors, never sent to workers. `escalation_budget_exhausted` appears in **neither** list: for a well-formed intent §6.4 makes it an `AuthorizationDenialReason` bound into a terminal denial receipt, not an API error. Types `WorkerWireErrorCode`, `ConsumerApiErrorCode`, `WireErrorCode` (the union)
+- Produces, **verbatim from revision 12 §6.5/§6.6**: `interface SubmissionReceipt` (immutable acceptance facts only — its nine fields include `collectionCycle` and nothing post-acceptance), `type ResultState`, `type ResultAdjudicationRequestState`, `type AuthorizationRequestState`, `type AuthorizationInvalidationReason`, `type AuthorizationDenialReason`, `type AuthorizationValidity`, `type AuthorizationStatus`, `interface ClassHealth`, `interface AdjudicationCapacity`. `AuthorizationInitialReceipt` moves to Task 14 beside `ActionAuthorization`, because its authorized arm structurally contains that type.
+  - The frozen typed-error vocabulary, **split by boundary** — mixing them would let a consumer-API code leak onto the worker wire: `const WORKER_WIRE_ERROR_CODES = ['lease_not_held', 'result_too_large', 'invalid_result', 'submission_conflict', 'input_hash_mismatch', 'contract_mismatch', 'contract_expired']` — the complete coarse failure vocabulary of §6.5's pipeline toward workers (`lease_not_held` deliberately collapses unknown/wrong-worker/closed after authentication is mapped to `WorkerId`, `invalid_result` collapses structural/validator/oracle rejection: finer grain would leak state, §5.7; `no_work` is an *outcome*, not an error — it lives in `NO_WORK_SHAPE`, Task 17); `const CONSUMER_API_ERROR_CODES = ['authorization_conflict', 'verdict_conflict', 'effect_descriptor_mismatch', 'intent_invalid']` — §4.3's identity-less typed errors, never sent to workers. `escalation_budget_exhausted` appears in **neither** list: for a well-formed intent §6.4 makes it an `AuthorizationDenialReason` bound into a terminal denial receipt, not an API error. Types `WorkerWireErrorCode`, `ConsumerApiErrorCode`, `WireErrorCode` (the union)
   - `const RESULT_INVALIDATION_TERMINALS`, `const TERMINAL_AUTHORIZATION_STATES`, and `const INVALIDATION_RESULT_TARGET: Record<AuthorizationInvalidationReason, ResultState>` — the frozen cause→retirement-state mapping of §6.6 rows 2–6, so a store command derives the target from the cause and a caller can never pair a cause with the wrong state ("a request can reach only one terminal state", §6.6; `verified` is deliberately not an invalidation terminal — it is final for collection but retirable for future intents)
 
 - [ ] **Step 1: Write the failing test**
@@ -2269,14 +2327,15 @@ import type {
 import { WORKER_WIRE_ERROR_CODES, CONSUMER_API_ERROR_CODES } from "../src/errors.js";
 
 describe("SubmissionReceipt is immutable acceptance facts only (spec 6.5)", () => {
-  it("carries exactly the eight frozen fields", () => {
+  it("carries exactly the nine frozen fields", () => {
     const receipt: SubmissionReceipt = {
       leaseId: "l1", jobId: "j1", inputHash: "ih", resultHash: "rh",
+      collectionCycle: 1,
       contractVersion: "1.0.0", permitEpoch: "e1",
       outcome: "accepted", acceptedAt: "2026-08-05T10:00:00.000Z"
     };
     expect(Object.keys(receipt).sort()).toEqual([
-      "acceptedAt", "contractVersion", "inputHash", "jobId",
+      "acceptedAt", "collectionCycle", "contractVersion", "inputHash", "jobId",
       "leaseId", "outcome", "permitEpoch", "resultHash"
     ]);
     // The type must not admit canary status, verification strength,
@@ -2356,6 +2415,7 @@ import type { Timestamp } from "./primitives.js";
 export interface SubmissionReceipt {
   leaseId: string;
   jobId: string;
+  collectionCycle: number;
   inputHash: string;
   resultHash: string;
   contractVersion: string;
@@ -2426,24 +2486,6 @@ export interface AdjudicationCapacity {
   availableReviewsPerWeek: number;
   observedAt: Timestamp;
 }
-
-/** Spec 4.3: the immutable initial receipt an exact authorization-request
- * retry replays byte-identically. A discriminated union so the invariant is
- * structural: denialReason exists ONLY on the denied variant. A later human
- * rejection does NOT rewrite this — the request keeps its 'pending' receipt
- * and surfaces human_rejected through the status read. */
-interface AuthorizationInitialReceiptBase {
-  authorizationRequestId: string;
-  effectIntentId: string;
-  effectIntentHash: string;
-  decisionResultHash: string;
-  at: Timestamp;
-}
-
-export type AuthorizationInitialReceipt =
-  | (AuthorizationInitialReceiptBase & { outcome: "pending_adjudication" })
-  | (AuthorizationInitialReceiptBase & { outcome: "authorized" })
-  | (AuthorizationInitialReceiptBase & { outcome: "denied"; denialReason: AuthorizationDenialReason });
 
 /** States a result is retired INTO by invalidation or rejection. 'verified'
  * is deliberately not here: it is final for collection and dispute resolution
@@ -2528,11 +2570,12 @@ git commit -m "feat(contract): receipts, lifecycle state vocabularies, class hea
 
 **Interfaces:**
 - Consumes: `hashCanonical` (Task 5), `SubmissionEvidence`, `Timestamp`, `NonEmptyArray`, `CanonicalJsonValue` (Task 6), `Action` (Task 7), `HumanReviewRequirement`, `EffectIntent` (Task 9).
-- Produces (§4.3/§6.6 verbatim): `interface ResultAdjudicationRequest`, `interface ResultAdjudicationVerdict`, `interface HumanActionReviewRequirement`, `interface ActionAdjudicationRequest`, `interface ActionAdjudicationVerdict`, `interface ActionAuthorization`. Plus:
+- Produces (revision 12 §4.3/§6.6 verbatim): `interface ResultAdjudicationRequest`, `interface ResultAdjudicationVerdict`, `interface HumanActionReviewRequirement`, `interface ActionAdjudicationRequest`, `interface ActionAdjudicationVerdict`, `interface ActionAuthorization`, and `AuthorizationInitialReceipt`. Every job-bound request and authorization stamps `collectionCycle`.
+  - `AuthorizationInitialReceipt` is a discriminated union whose `authorized` arm contains the complete immutable `ActionAuthorization`; the pending arm contains no authorization and the denied arm alone contains `denialReason`. The first call and exact retries replay this same complete value.
   - `computeVerdictHash(verdict: ResultAdjudicationVerdict | ActionAdjudicationVerdict): Promise<string>` — `SHA-256(JCS(canonicalVerdict(verdict)))`, the one function behind both `result_adjudication_verdict_hash` and `action_adjudication_verdict_hash`. **The canonical verdict form is frozen here:** evidence bytewise-sorted by `leaseId` (same rule as `decision_result_hash`), and an action verdict's `actions` must be a canonical action set. Hashing caller-supplied order would make two honest retries of the same verdict hash differently — the §6.6 retry/conflict discrimination only works over the canonical form.
   - `validateActionSet(actions: Action[])` — §8.2's "canonical action-set" rule as one function: non-empty, no unknowns, no duplicates, sorted in stable `Action` enum order. Core (M2) applies it to `ActionAdjudicationVerdict.actions` and `ActionAuthorization.actions`.
   - `validateResultDisputeProvenance(x: { resultAdjudicationVerdictHash?: string }, opts: { humanResolvedDispute: boolean; boundVerdictHash?: string }): { ok: true } | { ok: false; error: string }` — §6.6's conditional-presence rule ("must be present and equal the decision result's bound verdict hash when a human resolved the result dispute, and must be absent otherwise"), one pure function core applies to `ActionAdjudicationRequest`, `ActionAdjudicationVerdict`, and `ActionAuthorization`
-  - `validateCandidateHashes(candidateResultHashes: string[], evidence: SubmissionEvidence[]): { ok: true } | { ok: false; error: string }` — §6.6: unique, sorted canonically (bytewise), and equal to the result-hash projection of the evidence set
+  - `validateCandidateHashes(candidateResultHashes: string[], evidence: SubmissionEvidence[], collectionCycle: number): { ok: true } | { ok: false; error: string }` — §6.6/revision 12: unique, sorted canonically (bytewise), equal to the result-hash projection, and entirely scoped to the request's collection cycle
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2543,13 +2586,13 @@ import { describe, it, expect } from "vitest";
 import {
   computeVerdictHash, validateResultDisputeProvenance, validateCandidateHashes, validateActionSet
 } from "../src/adjudication.js";
-import type { ResultAdjudicationVerdict } from "../src/adjudication.js";
+import type { ResultAdjudicationVerdict, AuthorizationInitialReceipt, ActionAuthorization } from "../src/adjudication.js";
 import { hashCanonical } from "../src/canonical/sha256.js";
 
-const w = (s: string) => ({ issuer: "https://issuer.example", subject: s });
+const w = (s: string) => `worker-${s}`;
 const evidence = [
-  { leaseId: "l1", resultHash: "aa11", workerSubject: w("w1") },
-  { leaseId: "l2", resultHash: "bb22", workerSubject: w("w2") }
+  { leaseId: "l1", collectionCycle: 1, resultHash: "aa11", workerId: w("w1") },
+  { leaseId: "l2", collectionCycle: 1, resultHash: "bb22", workerId: w("w2") }
 ];
 
 const verdict: ResultAdjudicationVerdict = {
@@ -2557,6 +2600,7 @@ const verdict: ResultAdjudicationVerdict = {
   resultAdjudicationRequestId: "rar-1",
   reason: "split_exhausted",
   jobId: "j1",
+  collectionCycle: 1,
   inputHash: "ih",
   candidateResultHashes: ["aa11", "bb22"],
   evidence,
@@ -2611,21 +2655,41 @@ describe("result-dispute provenance rule (spec 6.6)", () => {
 
 describe("candidate hash set rule (spec 6.6)", () => {
   it("accepts unique, bytewise-sorted, evidence-matching hashes", () => {
-    expect(validateCandidateHashes(["aa11", "bb22"], evidence)).toEqual({ ok: true });
+    expect(validateCandidateHashes(["aa11", "bb22"], evidence, 1)).toEqual({ ok: true });
   });
   it("rejects unsorted", () => {
-    expect(validateCandidateHashes(["bb22", "aa11"], evidence).ok).toBe(false);
+    expect(validateCandidateHashes(["bb22", "aa11"], evidence, 1).ok).toBe(false);
   });
   it("rejects duplicates", () => {
-    expect(validateCandidateHashes(["aa11", "aa11", "bb22"], evidence).ok).toBe(false);
+    expect(validateCandidateHashes(["aa11", "aa11", "bb22"], evidence, 1).ok).toBe(false);
   });
   it("rejects a set not equal to the evidence projection", () => {
-    expect(validateCandidateHashes(["aa11"], evidence).ok).toBe(false);
-    expect(validateCandidateHashes(["aa11", "cc33"], evidence).ok).toBe(false);
+    expect(validateCandidateHashes(["aa11"], evidence, 1).ok).toBe(false);
+    expect(validateCandidateHashes(["aa11", "cc33"], evidence, 1).ok).toBe(false);
   });
   it("deduplicates the evidence projection (two replicas may share a result hash)", () => {
-    const dupEvidence = [...evidence, { leaseId: "l3", resultHash: "aa11", workerSubject: w("w3") }];
-    expect(validateCandidateHashes(["aa11", "bb22"], dupEvidence)).toEqual({ ok: true });
+    const dupEvidence = [...evidence, { leaseId: "l3", collectionCycle: 1, resultHash: "aa11", workerId: w("w3") }];
+    expect(validateCandidateHashes(["aa11", "bb22"], dupEvidence, 1)).toEqual({ ok: true });
+  });
+  it("rejects evidence from another collection cycle", () => {
+    expect(validateCandidateHashes(["aa11", "bb22"], evidence, 2).ok).toBe(false);
+  });
+});
+
+describe("authorization initial receipt (spec revision 12, 4.3)", () => {
+  it("authorized arm contains the complete immutable authorization", () => {
+    const authorization = { authorizationRequestId: "ar1" } as ActionAuthorization;
+    const receipt: AuthorizationInitialReceipt = {
+      authorizationRequestId: "ar1", effectIntentId: "ei1", effectIntentHash: "eh",
+      jobId: "j1", collectionCycle: 1, decisionResultHash: "dh", at: "2026-08-05T10:00:00.000Z",
+      outcome: "authorized", authorization
+    };
+    expect(receipt.authorization).toBe(authorization);
+  });
+  it("pending and denied arms cannot invent an authorization", () => {
+    // @ts-expect-error pending receipts never carry an authorization
+    const bad: AuthorizationInitialReceipt = { authorizationRequestId: "ar1", effectIntentId: "ei1", effectIntentHash: "eh", jobId: "j1", collectionCycle: 1, decisionResultHash: "dh", at: "t", outcome: "pending_adjudication", authorization: {} };
+    void bad;
   });
 });
 ```
@@ -2645,6 +2709,7 @@ import type { SubmissionEvidence } from "./primitives.js";
 import type { Action } from "./actions.js";
 import { ACTION_ORDER, compareActions } from "./actions.js";
 import type { EffectIntent, HumanReviewRequirement } from "./effect.js";
+import type { AuthorizationDenialReason } from "./states.js";
 import { hashCanonical } from "./canonical/sha256.js";
 
 export type ResultAdjudicationReason = "split_exhausted" | "diversity_shortfall";
@@ -2653,6 +2718,7 @@ export interface ResultAdjudicationRequest {
   id: string;
   reason: ResultAdjudicationReason;
   jobId: string;
+  collectionCycle: number;
   inputHash: string;
   candidateResultHashes: string[];
   evidence: SubmissionEvidence[];
@@ -2665,6 +2731,7 @@ export interface ResultAdjudicationVerdict {
   resultAdjudicationRequestId: string;
   reason: ResultAdjudicationReason;
   jobId: string;
+  collectionCycle: number;
   inputHash: string;
   candidateResultHashes: string[];
   evidence: SubmissionEvidence[];
@@ -2682,6 +2749,7 @@ export interface HumanActionReviewRequirement extends HumanReviewRequirement {
 export interface ActionAdjudicationRequest {
   authorizationRequestId: string;
   jobId: string;
+  collectionCycle: number;
   effectIntent: EffectIntent;
   effectIntentHash: string;
   inputHash: string;
@@ -2696,6 +2764,7 @@ export interface ActionAdjudicationRequest {
 export interface ActionAdjudicationVerdict {
   kind: "human";
   jobId: string;
+  collectionCycle: number;
   authorizationRequestId: string;
   effectIntentId: string;
   effectIntentHash: string;
@@ -2716,6 +2785,7 @@ export interface ActionAuthorization {
   effectIntentId: string;
   effectIntentHash: string;
   jobId: string;
+  collectionCycle: number;
   inputHash: string;
   decisionResultHash: string;
   evidence: SubmissionEvidence[];
@@ -2725,6 +2795,28 @@ export interface ActionAuthorization {
   permitEpoch: string;
   actions: Action[];
 }
+
+interface AuthorizationInitialReceiptBase {
+  authorizationRequestId: string;
+  effectIntentId: string;
+  effectIntentHash: string;
+  jobId: string;
+  collectionCycle: number;
+  decisionResultHash: string;
+  at: Timestamp;
+}
+
+/** Revision 12 §4.3: first call and exact retries return this same value. */
+export type AuthorizationInitialReceipt =
+  | (AuthorizationInitialReceiptBase & { outcome: "pending_adjudication" })
+  | (AuthorizationInitialReceiptBase & {
+      outcome: "authorized";
+      authorization: ActionAuthorization;
+    })
+  | (AuthorizationInitialReceiptBase & {
+      outcome: "denied";
+      denialReason: AuthorizationDenialReason;
+    });
 
 export class VerdictShapeError extends Error {
   override name = "VerdictShapeError";
@@ -2753,7 +2845,8 @@ function sortEvidenceByLeaseId(evidence: SubmissionEvidence[]): SubmissionEviden
     .map((e) => ({
       leaseId: e.leaseId,
       resultHash: e.resultHash,
-      workerSubject: { issuer: e.workerSubject.issuer, subject: e.workerSubject.subject }
+      collectionCycle: e.collectionCycle,
+      workerId: e.workerId
     }));
 }
 
@@ -2766,6 +2859,9 @@ export function canonicalVerdict<V extends ResultAdjudicationVerdict | ActionAdj
     const check = validateActionSet(verdict.actions);
     if (!check.ok) throw new VerdictShapeError(check.error);
   }
+  if (!Number.isInteger(verdict.collectionCycle) || verdict.collectionCycle < 1 ||
+      verdict.evidence.some((e) => e.collectionCycle !== verdict.collectionCycle))
+    throw new VerdictShapeError("mixed collection cycles");
   return { ...verdict, evidence: sortEvidenceByLeaseId(verdict.evidence) };
 }
 
@@ -2798,8 +2894,12 @@ export function validateResultDisputeProvenance(
  * deduplicated result-hash projection of the evidence set. */
 export function validateCandidateHashes(
   candidateResultHashes: string[],
-  evidence: SubmissionEvidence[]
+  evidence: SubmissionEvidence[],
+  collectionCycle: number
 ): { ok: true } | { ok: false; error: string } {
+  if (!Number.isInteger(collectionCycle) || collectionCycle < 1 ||
+      evidence.some((e) => e.collectionCycle !== collectionCycle))
+    return { ok: false, error: "mixed collection cycles" };
   for (let i = 1; i < candidateResultHashes.length; i++) {
     const prev = candidateResultHashes[i - 1]!;
     const cur = candidateResultHashes[i]!;
@@ -2825,7 +2925,7 @@ Expected: PASS.
 
 ```bash
 git add packages/contract/src packages/contract/test
-git commit -m "feat(contract): adjudication requests, verdicts, verdict hashing, ActionAuthorization"
+git commit -m "feat(contract): adjudication, authorization, and replay-stable receipts"
 ```
 
 ### Task 15: State machines and policy tables as executable data
@@ -3247,10 +3347,10 @@ git commit -m "feat(contract): frozen state machines and policy tables as execut
 **Interfaces:**
 - Consumes: the whole contract surface (Tasks 4–15).
 - Produces the frozen core boundary — **types only, zero logic** (§9 gate discipline; behavior is Milestone 2):
-  - **Two event unions**, because §7 specifies two different things: `type MusterNotification` — one member per §7 *consumer event* (`suspicion`, `split`, `escalation`, `low_cost_uncovered`, `urgent_uncovered`, `backpressure`, `pool_offline`, `contract_mismatch`, `class_health_changed`, `diversity_shortfall`, `result_adjudication_requested`, `action_adjudication_requested`, `adjudication_uncovered`, `audit_uncovered`, `dispute_requeue_exhausted`; the spec's `onX` callback names map 1:1 to these `type` values, and `onSplit` is the rev-11 name — there is no `onSplitVerdict`); and `type MusterAuditEvent` — §7's *append-only event schema*, one member per category: `enrollment`, `lease`, `lease_extend`, `submit`, `verdict`, `gate_decision`, `escalation_charge`, `adjudication`, `state_change`, `permit_epoch_change`, `contract_transition`. `type MusterEvent = MusterNotification | MusterAuditEvent`. Scoping is per-member, not blanket: class-scoped members carry `classId`, job-scoped add `jobId`, worker-scoped add `workerSubject` — queue-scoped members (`pool_offline`, `backpressure`) and worker-only members (`enrollment`) carry **no** `classId`. Every member carries `at: Timestamp`.
+  - **Two event unions**, because §7 specifies two different things: `type MusterNotification` — one member per §7 *consumer event* (`suspicion`, `split`, `escalation`, `low_cost_uncovered`, `urgent_uncovered`, `backpressure`, `pool_offline`, `contract_mismatch`, `class_health_changed`, `diversity_shortfall`, `result_adjudication_requested`, `action_adjudication_requested`, `adjudication_uncovered`, `audit_uncovered`, `dispute_requeue_exhausted`; the spec's `onX` callback names map 1:1 to these `type` values, and `onSplit` is the revision-12 name); and `type MusterAuditEvent` — §7's append-only categories. Job-cycle-scoped members carry both `jobId` and `collectionCycle`; worker-scoped members carry only pseudonymous `workerId`, never raw OAuth identity.
   - `interface Clock { now(): Timestamp }`
   - `interface EventSink { emit(event: MusterEvent): void }`
-  - `interface AdmissionHook { admit(candidate: { subject: WorkerSubject; declaredCapPerWeek: number }): Promise<{ admit: boolean; reason?: string }> }`
+  - `interface AdmissionHook { admit(candidate: { workerId: WorkerId; declaredCapPerWeek: number }): Promise<{ admit: boolean; reason?: string }> }`
   - `interface AdjudicationSource` — §6.6 verbatim: `capacity(classId: string): AdjudicationCapacity; authenticate(verdict: ResultAdjudicationVerdict | ActionAdjudicationVerdict): boolean`
   - `interface Store` — the persistence port, frozen as **atomic domain commands**, not row-level CRUD. Every multi-record transition the spec declares atomic (§6.5 step 3's accept-or-replay, §6.6's "the transition and any requeue are atomic" and "all pending action requests transition atomically", §6.4's charge-exactly-once) is **one method**, so no correct implementation needs cross-call transactions and no incorrect implementation can pass the §8.1 conformance suite by accident. Retry-sensitive commands take explicit idempotency keys and replay **typed** receipts (`SubmissionReceipt`, `AuthorizationInitialReceipt`), never blobs. This is the hardest freeze in the plan; M2's in-memory store, M3's postgres adapter, and the store conformance suite all implement/test exactly this interface.
 
@@ -3265,7 +3365,7 @@ import type { MusterEvent } from "../src/events.js";
 import type { Store, Clock, EventSink, AdmissionHook, AdjudicationSource, VerdictReceipt } from "../src/ports.js";
 
 describe("event schema (spec 7)", () => {
-  it("has one notification member per consumer event, rev-11 names", () => {
+  it("has one notification member per consumer event, revision-12 names", () => {
     expect(NOTIFICATION_TYPES).toEqual([
       "suspicion", "split", "escalation", "low_cost_uncovered", "urgent_uncovered",
       "backpressure", "pool_offline", "contract_mismatch", "class_health_changed",
@@ -3286,13 +3386,15 @@ describe("event schema (spec 7)", () => {
       at: "2026-08-05T10:00:00.000Z",
       classId: "extract-claims",
       jobId: "j1",
+      collectionCycle: 1,
       equivalenceKeyCount: 2
     };
     const offline: MusterEvent = { type: "pool_offline", at: "2026-08-05T10:00:00.000Z" };
     const enrolled: MusterEvent = {
       type: "enrollment",
       at: "2026-08-05T10:00:00.000Z",
-      workerSubject: { issuer: "https://issuer.example", subject: "w1" },
+      workerId: "worker-1",
+      providerSurface: "provider.example",
       outcome: "enrolled",
       contractVersion: "1.0.0"
     };
@@ -3304,15 +3406,16 @@ describe("event schema (spec 7)", () => {
   it("refusals can name an unknown lease without fabricating identifiers", () => {
     const unknownLease: MusterEvent = {
       type: "submit", at: "2026-08-05T10:00:00.000Z", leaseId: "unknown",
-      workerSubject: { issuer: "https://issuer.example", subject: "w1" },
+      workerId: "worker-1",
       outcome: "rejected", errorCode: "lease_not_held", lease: { resolved: false }
     };
     expect(unknownLease.type).toBe("submit");
     // @ts-expect-error an accepted submission always resolved its lease
     const bad: MusterEvent = {
       type: "submit", at: "t", leaseId: "l1",
-      workerSubject: { issuer: "https://issuer.example", subject: "w1" },
-      outcome: "accepted", resultHash: "h"
+      workerId: "worker-1",
+      outcome: "accepted", resultHash: "h", classId: "c", jobId: "j",
+      collectionCycle: 1, contractVersion: "v", lease: { resolved: false }
     };
     void bad;
   });
@@ -3363,10 +3466,11 @@ Expected: FAIL — package/modules do not exist.
 
 ```ts
 import type {
-  Timestamp, WorkerSubject, ClassHealth, WorkerState, ResultState,
+  Timestamp, WorkerId, ClassHealth, WorkerState, ResultState,
   AuthorizationRequestState, ResultAdjudicationRequestState,
   AuthorizationDenialReason, WorkerWireErrorCode, CanonicalJsonValue
 } from "@kuindji/muster-contract";
+import { deepFreeze } from "@kuindji/muster-contract";
 
 export const NOTIFICATION_TYPES = deepFreeze([
   "suspicion", "split", "escalation", "low_cost_uncovered", "urgent_uncovered",
@@ -3392,66 +3496,70 @@ interface Base<T extends string> {
 interface ClassScoped<T extends string> extends Base<T> {
   classId: string;
 }
+interface JobCycleScoped<T extends string> extends ClassScoped<T> {
+  jobId: string;
+  collectionCycle: number;
+}
 
-/** Spec 7 consumer events (the onX callbacks), rev-11 names. */
+/** Spec revision 12 §7 consumer events (the onX callbacks). */
 export type MusterNotification =
-  | (ClassScoped<"suspicion"> & { workerSubject: WorkerSubject; signal: string })
-  | (ClassScoped<"split"> & { jobId: string; equivalenceKeyCount: number })
-  | (ClassScoped<"escalation"> & { jobId: string; lane: "lowCost" | "urgent" | "splitAndAdjudication" })
-  | (ClassScoped<"low_cost_uncovered"> & { jobId: string })
-  | (ClassScoped<"urgent_uncovered"> & { jobId?: string })
+  | (ClassScoped<"suspicion"> & { workerId: WorkerId; signal: string })
+  | (JobCycleScoped<"split"> & { equivalenceKeyCount: number })
+  | (JobCycleScoped<"escalation"> & { lane: "lowCost" | "urgent" | "splitAndAdjudication" })
+  | JobCycleScoped<"low_cost_uncovered">
+  | (ClassScoped<"urgent_uncovered"> & { jobId?: string; collectionCycle?: number })
   | Base<"backpressure">                       // queue-scoped
   | Base<"pool_offline">                       // queue-scoped
-  | (ClassScoped<"contract_mismatch"> & { jobId: string; workerSubject: WorkerSubject })
+  | (JobCycleScoped<"contract_mismatch"> & { workerId: WorkerId })
   | (ClassScoped<"class_health_changed"> & { health: ClassHealth })
-  | (ClassScoped<"diversity_shortfall"> & { jobId: string; axis: string })
-  | (ClassScoped<"result_adjudication_requested"> & { jobId: string; resultAdjudicationRequestId: string })
-  | (ClassScoped<"action_adjudication_requested"> & { jobId: string; authorizationRequestId: string })
+  | (JobCycleScoped<"diversity_shortfall"> & { axis: string })
+  | (JobCycleScoped<"result_adjudication_requested"> & { resultAdjudicationRequestId: string })
+  | (JobCycleScoped<"action_adjudication_requested"> & { authorizationRequestId: string })
   | ClassScoped<"adjudication_uncovered">
   | ClassScoped<"audit_uncovered">
-  | (ClassScoped<"dispute_requeue_exhausted"> & { jobId: string });
+  | JobCycleScoped<"dispute_requeue_exhausted">;
 
 /** Spec 7 append-only audit event schema: enrollment, lease, extend, submit,
  * verdict, gate decision, escalation, adjudication, state change, permit epoch
  * change, contract transition. Every member carries the dimensions spec 7's
  * metrics need (worker, class, contract version where applicable) so events
  * remain a self-sufficient audit trail after mutable records change or a
- * worker's ledger is anonymized. Provider is derived from
- * workerSubject.issuer. Bodies and descriptors appear only as hashes here;
+ * worker's identity mapping is severed. Provider surface is copied as
+ * operational metadata; raw OAuth issuer/sub are never present. Bodies and descriptors appear only as hashes here;
  * PRIVACY_CLASS_RULES governs anything richer. */
 /** What a lease identifier resolved to when a worker-wire call was refused.
  * `resolved: false` is the honest record for an unknown lease ID. */
 export type AuditLeaseIdentity =
-  | { resolved: true; classId: string; jobId: string; contractVersion: string }
+  | { resolved: true; classId: string; jobId: string; collectionCycle: number; contractVersion: string }
   | { resolved: false };
 
 export type MusterAuditEvent =
-  | (Base<"enrollment"> & { workerSubject: WorkerSubject; outcome: "enrolled" | "refused"; contractVersion: string })
-  | (ClassScoped<"lease"> & { jobId: string; leaseId: string; workerSubject: WorkerSubject; contractVersion: string; permitEpoch: string; canary: boolean })
+  | (Base<"enrollment"> & { workerId: WorkerId; providerSurface: string; outcome: "enrolled" | "refused"; contractVersion: string })
+  | (JobCycleScoped<"lease"> & { leaseId: string; workerId: WorkerId; providerSurface: string; contractVersion: string; permitEpoch: string; canary: boolean })
   // A refusal may be for a lease that does not exist: `lease_not_held`
-  // deliberately collapses unknown / wrong-subject / closed (Task 13), and an
+  // deliberately collapses unknown / wrong-worker / closed (Task 13), and an
   // unknown lease ID resolves to no class, job, or contract version. Refusal
   // arms therefore carry a RESOLVED/UNRESOLVED union instead of required
   // identifiers the coordinator would have to fabricate.
-  | (Base<"lease_extend"> & { leaseId: string; workerSubject: WorkerSubject } & (
-      | { outcome: "extended"; classId: string; jobId: string }
+  | (Base<"lease_extend"> & { leaseId: string; workerId: WorkerId } & (
+      | { outcome: "extended"; classId: string; jobId: string; collectionCycle: number }
       | { outcome: "refused"; lease: AuditLeaseIdentity }
     ))
-  | (Base<"submit"> & { leaseId: string; workerSubject: WorkerSubject } & (
-      | { outcome: "accepted" | "replayed"; resultHash: string; classId: string; jobId: string; contractVersion: string }
+  | (Base<"submit"> & { leaseId: string; workerId: WorkerId } & (
+      | { outcome: "accepted" | "replayed"; resultHash: string; classId: string; jobId: string; collectionCycle: number; contractVersion: string }
       | { outcome: "rejected"; errorCode: WorkerWireErrorCode; lease: AuditLeaseIdentity }
     ))
-  | (ClassScoped<"verdict"> & { requestId: string; jobId: string; verdictHash: string; adjudicatorId: string; contractVersion: string; kind: "result" | "action"; outcome: "applied" | "replayed" | "conflict" | "terminal" })
-  | (ClassScoped<"gate_decision"> & { jobId: string; authorizationRequestId: string; contractVersion: string; permitEpoch: string } & (
+  | (JobCycleScoped<"verdict"> & { requestId: string; verdictHash: string; adjudicatorId: string; contractVersion: string; kind: "result" | "action"; outcome: "applied" | "replayed" | "conflict" | "terminal" })
+  | (JobCycleScoped<"gate_decision"> & { authorizationRequestId: string; contractVersion: string; permitEpoch: string } & (
       | { outcome: "authorized" | "pending_adjudication" }
       | { outcome: "denied"; denialReason: AuthorizationDenialReason }
     ))
-  | (ClassScoped<"escalation_charge"> & { lane: "lowCost" | "urgent" | "splitAndAdjudication" | "audit"; chargeKey: string; workerSubjects: WorkerSubject[]; outcome: "charged" | "denied" })
-  | (ClassScoped<"adjudication"> & { requestId: string; jobId: string; contractVersion: string; kind: "result" | "action"; transition: ResultAdjudicationRequestState | AuthorizationRequestState })
+  | (ClassScoped<"escalation_charge"> & { lane: "lowCost" | "urgent" | "splitAndAdjudication" | "audit"; chargeKey: string; workerIds: WorkerId[]; outcome: "charged" | "denied" })
+  | (JobCycleScoped<"adjudication"> & { requestId: string; contractVersion: string; kind: "result" | "action"; transition: ResultAdjudicationRequestState | AuthorizationRequestState })
   // state_change is scoped per subject kind, with CORRELATED from/to unions:
-  | (Base<"state_change"> & { subjectKind: "worker"; workerSubject: WorkerSubject; from: WorkerState; to: WorkerState })
-  | (ClassScoped<"state_change"> & { subjectKind: "result"; jobId: string; contractVersion: string; from: ResultState; to: ResultState })
-  | (ClassScoped<"state_change"> & { subjectKind: "authorization_request"; authorizationRequestId: string; jobId: string; from: AuthorizationRequestState; to: AuthorizationRequestState })
+  | (Base<"state_change"> & { subjectKind: "worker"; workerId: WorkerId; from: WorkerState; to: WorkerState })
+  | (JobCycleScoped<"state_change"> & { subjectKind: "result"; contractVersion: string; from: ResultState; to: ResultState })
+  | (JobCycleScoped<"state_change"> & { subjectKind: "authorization_request"; authorizationRequestId: string; from: AuthorizationRequestState; to: AuthorizationRequestState })
   | (ClassScoped<"permit_epoch_change"> & { fromEpoch: string; toEpoch: string; emergency: boolean })
   | (ClassScoped<"contract_transition"> & { contractVersion: string; from: string; to: string; detail?: CanonicalJsonValue });
 
@@ -3462,7 +3570,7 @@ export type MusterEvent = MusterNotification | MusterAuditEvent;
 
 ```ts
 import type {
-  Timestamp, WorkerSubject, SubmissionEvidence, SubmissionReceipt,
+  Timestamp, WorkerId, SubmissionEvidence, SubmissionReceipt,
   AuthorizationInitialReceipt, AuthorizationDenialReason,
   ResultState, AuthorizationStatus, AuthorizationInvalidationReason,
   AdjudicationCapacity, ResultAdjudicationRequest, ResultAdjudicationVerdict,
@@ -3482,7 +3590,7 @@ export interface EventSink {
 
 /** Spec 3.3: consumers supply membership/eligibility policy. */
 export interface AdmissionHook {
-  admit(candidate: { subject: WorkerSubject; declaredCapPerWeek: number }): Promise<{ admit: boolean; reason?: string }>;
+  admit(candidate: { workerId: WorkerId; declaredCapPerWeek: number }): Promise<{ admit: boolean; reason?: string }>;
 }
 
 /** Spec 6.6 verbatim. */
@@ -3492,7 +3600,7 @@ export interface AdjudicationSource {
 }
 
 export interface WorkerRecord {
-  subject: WorkerSubject;
+  workerId: WorkerId;
   state: WorkerState;
   enrolledAt: Timestamp;
   declaredCapPerWeek: number;
@@ -3511,9 +3619,14 @@ export interface JobRecord {
   /** Spec 5.4: enters input_hash; supplied at enqueue, never derived later. */
   policyVersion: string;
   permitEpoch: string;
+  /** Positive integer; result-level requeues atomically increment it. */
+  collectionCycle: number;
   notBefore?: Timestamp;
-  /** Anchor for cost.maxInFlightLifetime (spec 6.6 rule 6): survives requeue. */
+  /** Logical-job origin for end-to-end latency; survives every requeue. */
   firstEnqueuedAt: Timestamp;
+  /** Anchor for cost.maxInFlightLifetime. Lease-level retries preserve it;
+   * result-level requeues reset it when they increment collectionCycle. */
+  cycleStartedAt: Timestamp;
   /** Spec 6.6: bounded by adjudication.maxRejectedDisputeRequeues. */
   rejectedDisputeRequeues: number;
 }
@@ -3522,6 +3635,7 @@ export interface JobRecord {
 export interface DecisionResultRecord {
   decisionResultHash: string;
   jobId: string;
+  collectionCycle: number;
   inputHash: string;
   result: CanonicalJsonValue;
   evidence: SubmissionEvidence[];
@@ -3538,14 +3652,15 @@ export interface ReserveCharge {
   lane: "lowCost" | "urgent" | "splitAndAdjudication" | "audit";
   week: string;
   chargeKey: string;
-  workerSubjects: WorkerSubject[];
+  workerIds: WorkerId[];
 }
 
 export interface LeaseRecord {
   leaseId: string;
   jobId: string;
+  collectionCycle: number;
   classId: string;
-  holder: WorkerSubject;
+  holder: WorkerId;
   inputHash: string;
   contractVersion: string;
   policyVersion: string;
@@ -3606,38 +3721,40 @@ export type TransitionOutcome = { ok: true } | { ok: false; actual: ResultState 
  * interface, including its concurrency guarantees. */
 export interface Store {
   // Workers and enrollment
-  getWorker(subject: WorkerSubject): Promise<WorkerRecord | null>;
+  getWorker(workerId: WorkerId): Promise<WorkerRecord | null>;
   putWorker(record: WorkerRecord): Promise<void>;
 
   // Queue, jobs, payloads, leases
-  enqueueJob(job: JobRecord): Promise<void>;
+  /** Core computes inputHash from this exact sanitized payload and both frozen
+   * schemas, then the store persists job + payload atomically. */
+  enqueueJob(input: { job: JobRecord; payload: CanonicalJsonValue }): Promise<void>;
   getJob(jobId: string): Promise<JobRecord | null>;
-  putPayload(payloadRef: string, payload: CanonicalJsonValue): Promise<void>;
   getPayload(payloadRef: string): Promise<CanonicalJsonValue | null>;
   /** ATOMIC claim: no double-leasing under concurrency (spec 8.1). Returns the
    * lease AND its job so leasing needs no second read. Null when nothing is
    * claimable. */
-  claimLease(input: { subject: WorkerSubject; classIds: string[]; now: Timestamp }):
+  claimLease(input: { workerId: WorkerId; classIds: string[]; now: Timestamp }):
     Promise<{ lease: LeaseRecord; job: JobRecord } | null>;
   getLease(leaseId: string): Promise<LeaseRecord | null>;
-  /** Subject-bound (spec 5.2: submit, abandon, extend are all rejected from
-   * any subject but the holder), checked in-transaction. */
-  extendLease(input: { subject: WorkerSubject; leaseId: string; newExpiry: Timestamp }):
+  /** Worker-ID-bound after muster-mcp resolves the authenticated subject. */
+  extendLease(input: { workerId: WorkerId; leaseId: string; newExpiry: Timestamp }):
     Promise<{ kind: "extended"; newExpiry: Timestamp } | { kind: "refused" }>;
   /** Subject-bound abandon: closes the lease, requeues the job, and appends
    * the fair-attempt ledger entry (spec 6.9) in ONE transaction. The
    * worker-reported reason is a hint; classification is core's decision. */
   abandonLease(input: {
-    subject: WorkerSubject; leaseId: string;
+    workerId: WorkerId; leaseId: string;
     classification: "abandoned_before_payload" | "abandoned_after_payload" | "provider_or_platform_failure";
-    requeue: { permitEpoch: string }; at: Timestamp;
+    requeue: { sameCyclePermitEpoch: string }; at: Timestamp;
   }): Promise<{ kind: "recorded" } | { kind: "refused" }>;
   /** Expire the lease and requeue the job in ONE transaction (spec 6.6
-   * "the transition and any requeue are atomic"). */
-  expireAndRequeue(leaseId: string, under: { permitEpoch: string }): Promise<void>;
+   * "the transition and any requeue are atomic"). This is attempt replacement,
+   * so the store verifies the existing cycle's epoch and does not start a new
+   * cycle or adopt the operator's current epoch. */
+  expireAndRequeue(leaseId: string, under: { sameCyclePermitEpoch: string }): Promise<void>;
 
   // Submissions. ONE atomic command implements spec 6.5 steps 1-3 IN SPEC
-  // ORDER: holder binding first — the lease must belong to `subject`, or the
+  // ORDER: holder binding first — the lease must belong to `workerId`, or the
   // outcome is `refused` and NOTHING is disclosed, not even a replay ("a
   // revoked token cannot retrieve a receipt", and no other subject can
   // either). Only for the verified holder does the (lease_id, input_hash,
@@ -3645,14 +3762,14 @@ export interface Store {
   // check (open, expiry, contract, health, permit). A different hash pair for
   // a lease with an accepted row is a conflict and changes nothing.
   acceptOrReplaySubmission(input: {
-    subject: WorkerSubject;
+    workerId: WorkerId;
     leaseId: string; inputHash: string; resultHash: string;
     body: CanonicalJsonValue; receipt: SubmissionReceipt;
   }): Promise<SubmitOutcome>;
   getAcceptedSubmission(leaseId: string): Promise<{ receipt: SubmissionReceipt; body: CanonicalJsonValue } | null>;
-  /** Every accepted replica for a job's current collection cycle — what
-   * replication target, diversity, and unanimity checks read (spec 6.2). */
-  listAcceptedReplicas(jobId: string): Promise<Array<{
+  /** Accepted replicas are cycle-scoped. Old-cycle submissions remain
+   * replayable by lease ID but can never appear in this query. */
+  listAcceptedReplicas(jobId: string, collectionCycle: number): Promise<Array<{
     evidence: SubmissionEvidence; body: CanonicalJsonValue; acceptedAt: Timestamp;
   }>>;
 
@@ -3660,10 +3777,13 @@ export interface Store {
   // state) instead of overwriting, so "a request can reach only one terminal
   // state" (spec 6.6) is store-enforced. An optional requeue rides in the same
   // transaction.
-  getResultState(jobId: string): Promise<ResultState | null>;
+  getResultState(jobId: string, collectionCycle: number): Promise<ResultState | null>;
   transitionResult(input: {
-    jobId: string; from: ResultState; to: ResultState; at: Timestamp;
-    requeue?: { permitEpoch: string };
+    jobId: string; collectionCycle: number; from: ResultState; to: ResultState; at: Timestamp;
+    /** Result-level requeue only: leave this cycle terminal, atomically
+     * increment JobRecord.collectionCycle, reset cycleStartedAt, and create
+     * new collecting state. */
+    startNewCycle?: { permitEpoch: string; inputHash: string; cycleStartedAt: Timestamp };
   }): Promise<TransitionOutcome>;
   /** Persist the verified decision record (spec 6.5 step 11) atomically with
    * the collecting->verified transition. */
@@ -3708,11 +3828,11 @@ export interface Store {
   // historical state and gain the separate validity transition; affected
   // results are retired from future intents; requeues ride the transaction.
   invalidateResultScope(input: {
-    scope: { jobIds: string[] } | { decisionResultHashes: string[] } | { permitEpoch: string } | { contractVersion: string };
+    scope: { jobCycles: Array<{ jobId: string; collectionCycle: number }> } | { decisionResultHashes: string[] } | { permitEpoch: string } | { contractVersion: string };
     reason: AuthorizationInvalidationReason;
     // no target parameter: the store retires results to
     // INVALIDATION_RESULT_TARGET[reason], so cause and state cannot disagree
-    requeue?: { permitEpoch: string };
+    startNewCycle?: { permitEpoch: string; inputHash: string; cycleStartedAt: Timestamp };
     at: Timestamp;
   }): Promise<void>;
 
@@ -3731,7 +3851,7 @@ export interface Store {
   // verdict.decision.
   openResultAdjudication(input: {
     request: ResultAdjudicationRequest;
-    resultTransition: { jobId: string; from: ResultState; at: Timestamp };
+    resultTransition: { jobId: string; collectionCycle: number; from: ResultState; at: Timestamp };
     charge: ReserveCharge;
   }): Promise<OpenAdjudicationOutcome>;
   getResultAdjudicationRequest(id: string): Promise<ResultAdjudicationRequest | null>;
@@ -3740,7 +3860,7 @@ export interface Store {
     verdict: ResultAdjudicationVerdict; verdictHash: string; at: Timestamp;
   } & (
     | { decision: "resolve"; resolved: DecisionResultRecord }
-    | { decision: "reject"; onReject: { cap: number; requeueEpoch: string } }
+    | { decision: "reject"; onReject: { cap: number; newCycleEpoch: string; newCycleInputHash: string; cycleStartedAt: Timestamp } }
   )): Promise<VerdictOutcome>;
   getActionAdjudicationRequest(authorizationRequestId: string): Promise<ActionAdjudicationRequest | null>;
   listPendingActionAdjudications(classId: string): Promise<ActionAdjudicationRequest[]>;
@@ -3771,7 +3891,7 @@ export interface Store {
 Run: `pnpm -F @kuindji/muster-core test && pnpm -F @kuindji/muster-core typecheck && pnpm check:invariants && pnpm build`
 
 The `typecheck` is not redundant with `test`: vitest transpiles without type-checking, so the `@ts-expect-error` assertions in `events.test.ts` — the only thing proving the correlated unions actually reject bad shapes — can only fail here. Without it they would first fail at Task 20's all-up gate, four tasks after the commit that broke them.
-Expected: PASS; invariants confirm exactly one runtime dep and no IO/network references in either package.
+Expected: PASS; invariants confirm exactly one runtime dep, no IO/network references, and no raw OAuth subject fields in core.
 
 - [ ] **Step 5: Commit**
 
@@ -3928,9 +4048,10 @@ export const TOOL_SCHEMAS = deepFreeze({
       oneOf: [
         {
           type: "object", additionalProperties: false,
-          required: ["lease_id", "job_id", "input_hash", "result_hash", "contract_version", "permit_epoch", "outcome", "accepted_at"],
+          required: ["lease_id", "job_id", "collection_cycle", "input_hash", "result_hash", "contract_version", "permit_epoch", "outcome", "accepted_at"],
           properties: {
             lease_id: { type: "string" }, job_id: { type: "string" },
+            collection_cycle: { type: "integer", minimum: 1 },
             input_hash: { type: "string" }, result_hash: { type: "string" },
             contract_version: { type: "string" }, permit_epoch: { type: "string" },
             outcome: { const: "accepted" }, accepted_at: { type: "string", format: "date-time" }
@@ -4324,10 +4445,11 @@ export function bucketFor(value: number, buckets: readonly number[]): number | n
 
 ```ts
 import type { CanonicalJsonValue } from "./primitives.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 export const LIFECYCLE_FIXTURE_AREAS = deepFreeze([
-  "submission_retry", "authorization_retry", "verdict_retry", "invalidation",
-  "retirement", "requeue_cap", "epoch_assignment", "urgent_saturation"
+  "payload_binding", "submission_retry", "authorization_retry", "verdict_retry", "invalidation",
+  "retirement", "requeue_cap", "collection_cycle", "epoch_assignment", "urgent_saturation"
 ] as const);
 
 export type LifecycleFixtureArea = (typeof LIFECYCLE_FIXTURE_AREAS)[number];
@@ -4390,8 +4512,10 @@ export interface LifecycleFixture {
  * test in M2's store conformance kit against any Store implementation. */
 export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "concurrent-claim-single-winner", "no-double-lease-per-job",
-  "subject-binding-rejects-other-holder", "submit-idempotency-exact-triple",
+  "worker-id-binding-rejects-other-holder", "submit-idempotency-exact-triple",
   "conflicting-retry-preserves-accepted-row", "expiry-requeue-atomic",
+  "result-requeue-cycle-increment-atomic", "new-cycle-hash-and-epoch-atomic",
+  "old-cycle-replicas-excluded",
   "authorization-identity-per-intent-id", "verdict-single-accepted-per-request",
   "charge-key-idempotent-under-race", "reserve-last-unit-race-fails-closed"
 ]);
@@ -4405,14 +4529,17 @@ export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
 /** The 11.1 required-case matrix. Every ID must exist in the committed pack;
  * the test enforces it. FROZEN — extend in M2+, never shrink. */
 export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
+  // enqueue/input-hash binding
+  "enqueue-hashes-exact-sanitized-payload", "input-hash-binds-both-schemas",
   // submission exact-retry after every terminal condition + conflict + binding
   "sub-retry-after-submission-closed", "sub-retry-after-lease-expiry",
   "sub-retry-after-contract-expiry", "sub-retry-after-admission-halt",
   "sub-retry-after-emergency-halt", "sub-retry-after-permit-withdrawal",
-  "sub-conflict-different-result", "sub-exact-retry-wrong-subject-refused",
-  "extend-wrong-subject-refused", "abandon-wrong-subject-refused",
+  "sub-conflict-different-result", "sub-exact-retry-wrong-worker-refused",
+  "extend-wrong-worker-refused", "abandon-wrong-worker-refused",
   // authorization identity
   "auth-exact-retry-replays-initial-receipt",
+  "auth-authorized-retry-includes-same-authorization",
   "auth-conflict-different-decision-hash", "auth-conflict-different-intent-hash",
   // both verdict paths
   "result-verdict-exact-retry", "result-verdict-conflict", "result-verdict-after-terminal",
@@ -4424,6 +4551,10 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "retire-verified-before-second-intent", "withdrawal-supersedes-partially-authorized-result",
   // dispute requeues
   "requeue-after-rejected-dispute", "requeue-cap-exhausted",
+  // collection-cycle separation
+  "rejected-dispute-starts-new-cycle", "old-cycle-receipt-replays",
+  "old-cycle-replicas-excluded-from-new-cycle", "lease-expiry-stays-in-cycle",
+  "mixed-cycle-evidence-refused", "new-cycle-recomputes-input-hash",
   // permit epochs
   "epoch-sticky-through-requeue", "epoch-current-after-max-in-flight",
   "epoch-split-evidence-reroute-stays",
@@ -4501,15 +4632,15 @@ export function isLifecycleFixture(f: unknown): f is LifecycleFixture {
     "area": "submission_retry",
     "description": "Exact submission retry after lease expiry replays the byte-identical receipt (spec 6.5 step 3, 8.1)",
     "setup": {
-      "lease:lease-1": { "leaseId": "lease-1", "jobId": "j1", "holder": { "issuer": "https://issuer.example", "subject": "w1" }, "inputHash": "ih-1", "open": false },
-      "submission:lease-1": { "inputHash": "ih-1", "resultHash": "rh-1", "outcome": "accepted" }
+      "lease:lease-1": { "leaseId": "lease-1", "jobId": "j1", "collectionCycle": 1, "holder": "worker-1", "inputHash": "ih-1", "open": false },
+      "submission:lease-1": { "collectionCycle": 1, "inputHash": "ih-1", "resultHash": "rh-1", "outcome": "accepted" }
     },
     "conditions": [],
     "steps": [
       { "command": "expireLease", "args": { "leaseId": "lease-1" }, "expect": {} },
       {
         "command": "submit",
-        "args": { "subject": "w1", "leaseId": "lease-1", "inputHash": "ih-1", "resultHash": "rh-1" },
+        "args": { "workerId": "worker-1", "leaseId": "lease-1", "inputHash": "ih-1", "resultHash": "rh-1" },
         "expect": { "kind": "replayed" }
       }
     ],
@@ -4525,7 +4656,7 @@ export function isLifecycleFixture(f: unknown): f is LifecycleFixture {
     "area": "urgent_saturation",
     "description": "Urgent reserve saturated: in-flight intent including routeToHumanUrgent is denied atomically with a terminal typed receipt and no review work (spec 6.4, 6.6 row 10)",
     "setup": {
-      "decision:drh-1": { "decisionResultHash": "drh-1", "jobId": "j7", "state": "verified" }
+      "decision:drh-1": { "decisionResultHash": "drh-1", "jobId": "j7", "collectionCycle": 1, "state": "verified" }
     },
     "conditions": ["urgent_saturated"],
     "steps": [
@@ -4605,21 +4736,22 @@ async function crossChecked(name, envelope, computed) {
   return computed;
 }
 
-const w = (s) => ({ issuer: "https://issuer.example", subject: s });
+const w = (s) => `worker-${s}`;
 // Deliberately UNSORTED input: the implementation must sort; the reference
 // envelopes below are constructed sorted by hand, so agreement between the two
 // proves the sorting rule, not just the digest.
 const evidence = [
-  { leaseId: "lease-b", resultHash: "bb22", workerSubject: w("w1") },
-  { leaseId: "lease-a", resultHash: "aa11", workerSubject: w("w2") }
+  { leaseId: "lease-b", collectionCycle: 1, resultHash: "bb22", workerId: w("w1") },
+  { leaseId: "lease-a", collectionCycle: 1, resultHash: "aa11", workerId: w("w2") }
 ];
 const sortedEvidence = [
-  { leaseId: "lease-a", resultHash: "aa11", workerSubject: w("w2") },
-  { leaseId: "lease-b", resultHash: "bb22", workerSubject: w("w1") }
+  { leaseId: "lease-a", collectionCycle: 1, resultHash: "aa11", workerId: w("w2") },
+  { leaseId: "lease-b", collectionCycle: 1, resultHash: "bb22", workerId: w("w1") }
 ];
 
 const inputEnvelope = {
-  payload_items: [{ id: "a", text: "first" }, { id: "b", text: "second" }],
+  payload: { items: [{ id: "a", text: "first" }, { id: "b", text: "second" }] },
+  payload_schema: { type: "object", additionalProperties: false, properties: { items: { type: "array" } } },
   job_class_id: "extract-claims",
   contract_version: "1.0.0",
   output_schema: { type: "object", additionalProperties: false },
@@ -4646,13 +4778,13 @@ const sortedIntentEnvelope = {
 
 const resultVerdict = {
   kind: "human", resultAdjudicationRequestId: "rar-1", reason: "split_exhausted",
-  jobId: "j1", inputHash: "ih", candidateResultHashes: ["aa11", "bb22"], evidence,
+  jobId: "j1", collectionCycle: 1, inputHash: "ih", candidateResultHashes: ["aa11", "bb22"], evidence,
   contractVersion: "1.0.0", permitEpoch: "epoch-1", adjudicatorId: "adj-1",
   decision: { kind: "reject" }, decidedAt: "2026-08-05T10:00:00.000Z"
 };
 
 const actionVerdict = {
-  kind: "human", jobId: "j1", authorizationRequestId: "ar-1",
+  kind: "human", jobId: "j1", collectionCycle: 1, authorizationRequestId: "ar-1",
   effectIntentId: "intent-1", effectIntentHash: "eih", actions: ["suppress"],
   inputHash: "ih", decisionResultHash: "drh", evidence,
   contractVersion: "1.0.0", permitEpoch: "epoch-1", adjudicatorId: "adj-1",
@@ -4803,12 +4935,15 @@ Expected: all green across contract, core, and gate packages — including the t
 
 ## contract-freeze-1 — 2026-08-05
 
-Milestone 1 of docs/specs/2026-08-04-muster-coordinator-design.md (§11.1).
+Milestone 1 of docs/specs/2026-08-04-muster-coordinator-design.md revision 12 (§11.1).
 Freezes: all public types (§11.1 list) in @kuindji/muster-contract and the
 @kuindji/muster-core port/event skeleton (atomic-domain-command Store, audit +
 notification event schemas); the action-gate, precedence, fair-attempt,
-audit-source, queue-mode, quantization, and privacy-class tables; the worker
-and contract lifecycle state machines; input_hash / result_hash /
+audit-source, queue-mode, quantization, and privacy-class tables; pseudonymous
+core worker identity and severable MCP mapping boundary; collection-cycle-
+scoped result lifecycle and requeue isolation; the worker and contract
+lifecycle state machines; input_hash over the exact sanitized payload and both
+schemas / result_hash /
 decision_result_hash / effect_intent_hash / verdict-hash envelopes with
 cross-checked golden vectors; the declarative lifecycle/retry/invalidation
 fixture pack, store-concurrency case list, and prompt-injection corpus; MCP
@@ -4834,14 +4969,14 @@ git tag contract-freeze-1
 
 Not tasks — a map of what the frozen contract feeds, so no §11.1 item silently falls off:
 
-1. **`muster-core` mechanics plan:** class registration validation (§4.2's full rejection list, including permit/evidence/absence coverage via `pathsCover`/`absenceDomainCovers`, agreement fixture execution, effect fixtures, reserve floors, adjudication-policy conditions); lease state machine (§6.1); verification pipeline steps 1–13 (§6.5) over the `Store` port; agreement + absorbing splits (§6.2); `authorizeActions` with exact-retry/conflict, atomic gate evaluation, `deriveEffect` byte-identity, reserve charging, denial reasons (§4.3, §6.3, §6.4); both adjudication lifecycles + invalidation transitions + precedence enforcement (§6.6); reputation/suspicion/fair-attempt ledger (§6.8–6.10); capacity projection + degraded modes (§6.12); in-memory `Store`; the store + protocol conformance kits (§8.1, §8.2) exported as reusable suites that **execute Task 19's frozen scenario fixtures and concurrency case list unchanged** and assert the generated skill treats Task 19's injection corpus as data (§8).
+1. **`muster-core` mechanics plan:** class registration validation (§4.2's full rejection list, including immutable schema digests, permit/evidence/absence coverage via `pathsCover`/`absenceDomainCovers`, agreement fixture execution, effect fixtures, reserve floors, adjudication-policy conditions); enqueue hashing over the exact sanitized payload and both schemas; lease state machine (§6.1); cycle-scoped verification pipeline steps 1–13 (§6.5) over the `Store` port; agreement + absorbing splits (§6.2); result-level requeue cycle increments with old-cycle evidence isolation; `authorizeActions` with exact-retry/conflict, replay-stable complete receipts, atomic gate evaluation, `deriveEffect` byte-identity, reserve charging, denial reasons (§4.3, §6.3, §6.4); both adjudication lifecycles + invalidation transitions + precedence enforcement (§6.6); reputation/suspicion/fair-attempt ledger (§6.8–6.10); capacity projection + degraded modes (§6.12); in-memory `Store`; the store + protocol conformance kits (§8.1, §8.2) exported as reusable suites that **execute Task 19's frozen scenario fixtures and concurrency case list unchanged** and assert the generated skill treats Task 19's injection corpus as data (§8).
 2. **`muster-store-postgres` plan:** adapter + migrations passing the store conformance suite, including the concurrency/atomicity cases.
-3. **`muster-mcp` plan:** OAuth 2.1 + PKCE, scopes, rate limits, tool handlers serving `TOOL_SCHEMAS` verbatim, side-channel mitigations table tests (§5.7), skill Resource behind the experimental SEP-2640 adapter (§5.3).
+3. **`muster-mcp` plan:** OAuth 2.1 + PKCE, severable `AuthenticatedWorkerSubject -> WorkerId` mapping with fail-closed resolution, scopes, rate limits, tool handlers serving `TOOL_SCHEMAS` verbatim, side-channel mitigations table tests (§5.7), skill Resource behind the experimental SEP-2640 adapter (§5.3).
 4. **Second-surface gate runs** feed enrollment capability data (§9).
 
 ## Self-review notes (§11.1 coverage map)
 
-- **Types:** every name in §11.1's list maps to a task — Actions/strengths (T7), permits/effects/intents (T9), oracle/evidence/absence/Fixture (T8), agreement (T10), JobClass + Replication/Escalation/Adjudication/Capability/Diversity/AxisConfidence/Privacy/Canary/Validator/NonEmptyArray/CanonicalJsonValue (T6, T11), hashes (T5, T12), states/receipt/initial-receipt/health/denial/invalidation/validity/status/capacity (T13), adjudication requests/verdicts/HumanActionReviewRequirement/ActionAuthorization/SubmissionEvidence (T14), WorkerSubject/wire-id grammar (T6), Store/EventSink/AdmissionHook/AdjudicationSource + audit and notification event schemas (T16).
+- **Types:** every name in §11.1's list maps to a task — Actions/strengths (T7), permits/effects/intents (T9), oracle/evidence/absence/Fixture (T8), agreement (T10), JobClass + Replication/Escalation/Adjudication/Capability/Diversity/AxisConfidence/Privacy/Canary/Validator/NonEmptyArray/CanonicalJsonValue (T6, T11), hashes (T5, T12), states/submission-receipt/health/denial/invalidation/validity/status/capacity (T13), adjudication requests/verdicts/HumanActionReviewRequirement/ActionAuthorization/AuthorizationInitialReceipt/SubmissionEvidence (T14), AuthenticatedWorkerSubject/WorkerId/wire-id grammar (T6), Store/EventSink/AdmissionHook/AdjudicationSource + audit and notification event schemas (T16).
 - **Tables/state machines:** 3.1, 5.6, 6.3, 6.6 precedence (with per-row in-flight effects), 6.9, 6.11, 6.12 → T7 + T15; §5.7 quantization tables → T19. Exact-retry/conflict **rules** are frozen three ways: as types + envelope hashing (T9, T12, T13, T14), as atomic `Store` command outcomes (T16), and as declarative scenarios (T19); only their runtime enforcement is M2.
-- **Fixtures:** cross-checked golden hashes (T20), absence containment acceptance/refusal (T8), agreement equivalence/split shape (T10), MCP schemas (T17), receipts (T13), lifecycle/retry/invalidation/retirement/requeue-cap/urgent-saturation scenarios + store-concurrency case list + prompt-injection corpus (T19). Nothing in §11.1's fixture list is deferred; what M2 adds is *execution* of the frozen scenarios, not new fixture content.
+- **Fixtures:** cross-checked golden hashes (T20), absence containment acceptance/refusal (T8), agreement equivalence/split shape (T10), MCP schemas (T17), receipts (T13–T14), lifecycle/retry/invalidation/retirement/requeue-cap/collection-cycle/urgent-saturation scenarios + store-concurrency case list + prompt-injection corpus (T19). Nothing in §11.1's fixture list is deferred; what M2 adds is *execution* of the frozen scenarios, not new fixture content.
 - **Known non-goals of this plan:** no registration validation logic, no pipeline, no reserves accounting, no MCP server — M2+. The §9 gate blocks all of Milestone 1 until the device test passes.
