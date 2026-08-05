@@ -17,6 +17,12 @@ owner.
 `2026-08-04-muster-staged-and-effecting-design.md` (deferred, not authorized);
 `../research/2026-08-04-ai-horde-reference.md`.
 
+**Amendments in waiting:** `2026-08-05-spec-interpretation-decisions.md` records
+six places where this revision declares a structure it never defines, names a
+value it never gives, or says two things that cannot both be true. Each has an
+operator-signed reading that the M0+M1 plan freezes. Revision 12 should absorb
+them; until then that file is the authority wherever this one is open.
+
 **Revision note.** Five gpt-5.5 review rounds have been applied. Rounds 3 and 4
 both concluded that staged and effecting work were not ready to plan against,
 the second time after a revision devoted to fixing them, so **revision 5

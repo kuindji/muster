@@ -52,6 +52,7 @@ muster/
     │   │   ├── index.ts          # public surface, re-exports only
     │   │   ├── canonical/jcs.ts          # RFC 8785
     │   │   ├── canonical/sha256.ts       # WebCrypto sha256Hex + hashCanonical
+    │   │   ├── deep-freeze.ts            # runtime deep freeze for every exported table/vocabulary
     │   │   ├── primitives.ts             # NonEmptyArray, CanonicalJsonValue, Timestamp, Seconds, WorkerSubject, SubmissionEvidence
     │   │   ├── jsonpath.ts               # JsonPath grammar, parse, containment
     │   │   ├── actions.ts                # Action enum + order + consequence/surface
@@ -600,12 +601,47 @@ Manual. The operator deploys, schedules on a real device, and appends a row to t
 ### Task 4: `@kuindji/muster-contract` package + RFC 8785 (JCS) canonicalization
 
 **Files:**
-- Create: `packages/contract/package.json`, `packages/contract/tsconfig.json`, `packages/contract/tsup.config.ts`, `packages/contract/vitest.config.ts`, `packages/contract/src/index.ts`, `packages/contract/src/canonical/jcs.ts`, `packages/contract/test/jcs.test.ts`, `packages/contract/fixtures/jcs-rfc8785.json`
+- Create: `packages/contract/package.json`, `packages/contract/tsconfig.json`, `packages/contract/tsup.config.ts`, `packages/contract/vitest.config.ts`, `packages/contract/src/index.ts`, `packages/contract/src/canonical/jcs.ts`, `packages/contract/src/deep-freeze.ts`, `packages/contract/test/jcs.test.ts`, `packages/contract/test/deep-freeze.test.ts`, `packages/contract/fixtures/jcs-rfc8785.json`
 - Modify: `.github/workflows/ci.yml` (remove the `if:` guard on `check:invariants`)
 
 **Interfaces:**
 - Consumes: workspace scaffold (Task 1).
 - Produces: `canonicalize(value: unknown): string` (throws `CanonicalizationError` on undefined/function/symbol/BigInt/non-finite numbers) and `class CanonicalizationError extends Error`. Every later hash builds on `canonicalize`. Package `@kuindji/muster-contract` builds ESM+CJS+d.ts with **zero runtime dependencies** (devDependency `canonicalize` allowed for cross-checking in tests only).
+- Also produces `deepFreeze` (`src/deep-freeze.ts`). It lives here, not in Task 15, because Tasks 7, 11, and 13 export frozen tables *before* Task 15 runs and must be able to import it:
+
+  ```ts
+  /** Recursively Object.freeze a value in place and return it. Recursion must
+   * NOT stop at an already-frozen node: `deepFreeze(Object.freeze(x))` still
+   * has to freeze x's rows, and call sites written before this helper existed
+   * do exactly that. `seen` makes it cycle-safe. */
+  export function deepFreeze<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
+    if (typeof value !== "object" || value === null) return value;
+    const obj = value as unknown as object;
+    if (seen.has(obj)) return value;
+    seen.add(obj);
+    Object.freeze(obj);
+    for (const key of Object.getOwnPropertyNames(obj)) {
+      deepFreeze((obj as Record<string, unknown>)[key], seen);
+    }
+    return value;
+  }
+  ```
+
+  `packages/contract/test/deep-freeze.test.ts` proves the two properties that matter:
+
+  ```ts
+  it("freezes nested rows through an already-frozen root", () => {
+    const t = deepFreeze(Object.freeze({ active: { leasing: "enabled" } }));
+    expect(Object.isFrozen(t)).toBe(true);
+    expect(Object.isFrozen(t.active)).toBe(true);          // the regression this guards
+    expect(() => { (t.active as { leasing: string }).leasing = "disabled"; }).toThrow();
+  });
+  it("terminates on a cyclic structure", () => {
+    const a: Record<string, unknown> = {};
+    a.self = a;
+    expect(Object.isFrozen(deepFreeze(a))).toBe(true);
+  });
+  ```
 
 - [ ] **Step 1: Package manifests**
 
@@ -690,6 +726,9 @@ describe("RFC 8785 canonicalization", () => {
     expect(() => canonicalize({ a: undefined })).toThrow(CanonicalizationError);
     expect(() => canonicalize([NaN])).toThrow(CanonicalizationError);
     expect(() => canonicalize({ [Symbol("s")]: 1 } as never)).toThrow(CanonicalizationError);
+    const arrayWithSymbol: unknown[] = [1, 2];
+    (arrayWithSymbol as Record<symbol, unknown>)[Symbol("s")] = 1;
+    expect(() => canonicalize(arrayWithSymbol)).toThrow(CanonicalizationError); // arrays too, not just objects
   });
 
   it("rejects lone UTF-16 surrogates (RFC 8785 requires I-JSON input)", () => {
@@ -777,6 +816,10 @@ function serialize(value: unknown, seen: Set<object>): string {
   if (seen.has(obj)) throw new CanonicalizationError("cyclic structure");
   seen.add(obj);
   try {
+    // Before the array/object split: symbol-keyed data is invisible to both
+    // branches, so an array carrying one would canonicalize as if it were absent.
+    if (Object.getOwnPropertySymbols(obj).length > 0)
+      throw new CanonicalizationError("symbol-keyed properties");
     if (Array.isArray(obj)) {
       const parts: string[] = [];
       for (let i = 0; i < obj.length; i++) {
@@ -788,8 +831,6 @@ function serialize(value: unknown, seen: Set<object>): string {
     const proto = Object.getPrototypeOf(obj);
     if (proto !== Object.prototype && proto !== null)
       throw new CanonicalizationError("only plain objects are canonicalizable");
-    if (Object.getOwnPropertySymbols(obj).length > 0)
-      throw new CanonicalizationError("symbol-keyed properties");
     const entries = Object.entries(obj as Record<string, unknown>);
     for (const [k, v] of entries) {
       assertWellFormed(k);
@@ -929,7 +970,7 @@ jsonpath  = "$" *( "." name / "[*]" )
 name      = 1*( ALPHA / DIGIT / "_" / "-" )
 ```
 
-`$` is the payload or result root; `.name` selects an object property; `[*]` selects every element of an array. There is no filter, slice, index, or quoted-name syntax — anything richer would make §6.7's "plain path containment, never semantic inference" ambiguous. **This narrows what schemas may look like, and the narrowing is itself frozen:** closed schemas do not force identifier-like property names, so registration (M2) rejects any class whose frozen payload/result schema declares a property that cannot be written in this grammar (spaces, dots, brackets, non-ASCII). Schema authoring must use `name`-safe properties; that trade — constrain names, keep containment trivially mechanical — is deliberate, and loosening it later (e.g. an escaped-segment syntax) would be a compatible grammar extension, not an amendment. `isPathExtension(child, parent)` is true iff `parent`'s segment list is a proper prefix of `child`'s; a path equals-or-extends a covering path iff segments are equal or an extension. `pathsCover(covering, required)` is true iff every required path equals or extends at least one covering path — this single function implements §6.7's `AbsenceDomain` containment rule and the §4.2 rule that action-evidence paths must be supersets of effect-input paths.
+`$` is the payload or result root; `.name` selects an object property; `[*]` selects every element of an array. There is no filter, slice, index, or quoted-name syntax — anything richer would make §6.7's "plain path containment, never semantic inference" ambiguous. **This narrows what schemas may look like, and the narrowing is itself frozen:** closed schemas do not force identifier-like property names, so registration (M2) rejects any class whose frozen payload/result schema declares a property that cannot be written in this grammar (spaces, dots, brackets, non-ASCII). Schema authoring must use `name`-safe properties; that trade — constrain names, keep containment trivially mechanical — is deliberate, and loosening it later (e.g. an escaped-segment syntax) would be a compatible grammar extension, not an amendment. The spec declares `JsonPath` but never defines it, so this grammar is an interpretation decision, **signed off** — `docs/specs/2026-08-05-spec-interpretation-decisions.md` §3. `isPathExtension(child, parent)` is true iff `parent`'s segment list is a proper prefix of `child`'s; a path equals-or-extends a covering path iff segments are equal or an extension. `pathsCover(covering, required)` is true iff every required path equals or extends at least one covering path — this single function implements §6.7's `AbsenceDomain` containment rule and the §4.2 rule that action-evidence paths must be supersets of effect-input paths.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1217,9 +1258,12 @@ export type Action =
   | "drop"
   | "publish";
 
-/** Spec 4.3 listing order. FROZEN — at runtime too (Object.freeze): this order
- * enters effect_intent_hash, so mutation would silently change future hashes. */
-export const ACTION_ORDER: readonly Action[] = Object.freeze([
+// deepFreeze comes from Task 4's `src/deep-freeze.ts`; every frozen export in
+// this and later tasks imports it (`import { deepFreeze } from "../deep-freeze.js"`).
+/** Spec 4.3 listing order. FROZEN — at runtime too, all the way down: this
+ * order enters effect_intent_hash, so mutation would silently change future
+ * hashes, and a shallow freeze would leave nested rows writable. */
+export const ACTION_ORDER: readonly Action[] = deepFreeze([
   "routeToHumanLowCost", "routeToHumanUrgent", "annotateDecisionRecord",
   "deprioritize", "routeToUrgent", "updateRetrievalIndex", "selectCandidateSet",
   "mutateCanonicalState", "enqueueDerivedWork", "suppress", "drop", "publish"
@@ -1274,7 +1318,7 @@ export interface ActionGateRow {
 }
 
 /** Spec 6.3 gate table, one row per action. FROZEN. */
-export const ACTION_GATE_TABLE: Record<Action, ActionGateRow> = {
+export const ACTION_GATE_TABLE: Record<Action, ActionGateRow> = deepFreeze({
   annotateDecisionRecord: { automaticGate: "structural_only",     requiresCompletenessOracle: false, humanOnlyAtOrAbove: null,  budgetLane: null,      maxAutomaticConsequence: null },
   routeToHumanLowCost:    { automaticGate: "structural_only",     requiresCompletenessOracle: false, humanOnlyAtOrAbove: null,  budgetLane: "lowCost", maxAutomaticConsequence: null },
   routeToHumanUrgent:     { automaticGate: "deterministic_oracle", requiresCompletenessOracle: false, humanOnlyAtOrAbove: null,  budgetLane: "urgent",  maxAutomaticConsequence: null },
@@ -1287,7 +1331,7 @@ export const ACTION_GATE_TABLE: Record<Action, ActionGateRow> = {
   suppress:               { automaticGate: "deterministic_oracle", requiresCompletenessOracle: true,  humanOnlyAtOrAbove: "high", budgetLane: null,     maxAutomaticConsequence: null },
   drop:                   { automaticGate: "unavailable",          requiresCompletenessOracle: false, humanOnlyAtOrAbove: "low",  budgetLane: null,     maxAutomaticConsequence: null },
   publish:                { automaticGate: "deterministic_oracle", requiresCompletenessOracle: false, humanOnlyAtOrAbove: "high", budgetLane: null,     maxAutomaticConsequence: "material" }
-};
+});
 ```
 
 Re-export from `src/index.ts`.
@@ -1316,7 +1360,7 @@ git commit -m "feat(contract): Action enum, verification strengths, frozen actio
   - `type OracleVerdict = { kind: 'pass' } | { kind: 'fail'; code: string; detail?: string }` (design decision: `code` is a stable machine string for the ledger, `detail` free text that never reaches workers — §5.7 uniform error shapes)
   - `interface Fixture { name: string; payload: CanonicalJsonValue; result: CanonicalJsonValue }`
   - `interface OracleSpec<Payload, Result>`, `interface AbsenceDomain`, `interface EvidenceRequirement`, `interface ActionEvidenceRequirement`, `interface AbsenceRequirement` — exactly as §6.7
-  - `canonicalAbsenceDomainKey(d: AbsenceDomain): string` — JCS of `{ payloadPaths: sorted-deduped }`; **`id` is excluded** because §6.7 says it "carries no matching semantics". The spec also says "JCS equality over the closed structure above", which read literally includes `id` — the two sentences conflict, and this plan resolves it in favor of the no-matching-semantics one. Record the chosen projection (id excluded, paths sorted and deduped) in the same spec-revision footnote as Task 12's.
+  - `canonicalAbsenceDomainKey(d: AbsenceDomain): string` — JCS of `{ payloadPaths: sorted-deduped }`; **`id` is excluded** because §6.7 says it "carries no matching semantics". The spec also says "JCS equality over the closed structure above", which read literally includes `id` — the two sentences conflict, and this plan resolves it in favor of the no-matching-semantics one. **Signed off** — `docs/specs/2026-08-05-spec-interpretation-decisions.md` §4.
   - `absenceDomainEquals(a, b): boolean` — key equality
   - `absenceDomainCovers(oracleDomain: AbsenceDomain, required: AbsenceDomain): boolean` — §6.7/§11 containment: every required payload path equals or is a path-extension of one of the oracle domain's paths
 
@@ -1761,12 +1805,12 @@ git commit -m "feat(contract): agreement policy types and unanimous-equivalence 
 
 **Interfaces:**
 - Consumes: everything from Tasks 6–10.
-- Produces the remaining §4.2 and worker-model types. `JobClass<Payload, Result>` must match §4.2 **field-for-field, plus one addition the spec requires but forgot to declare**: §6.7 validates oracle payload paths, absence domains, and human-review payload paths against "the frozen payload schema", and §4.2 defines only `outputSchema` — so `JobClass` gains `payloadSchema: JSONSchema` (closed, describing the *sanitized* payload, bound by `contractVersion`; it does **not** enter `input_hash`, whose §5.4 envelope is already frozen with `output_schema` only). This is a spec-interpretation decision — record it in the same spec-revision footnote as Task 12's. The other types below that the spec names but does not define are frozen here as design decisions:
+- Produces the remaining §4.2 and worker-model types. `JobClass<Payload, Result>` must match §4.2 **field-for-field, plus one addition the spec requires but forgot to declare**: §6.7 validates oracle payload paths, absence domains, and human-review payload paths against "the frozen payload schema", and §4.2 defines only `outputSchema` — so `JobClass` gains `payloadSchema: JSONSchema` (closed, describing the *sanitized* payload, bound by `contractVersion`; it does **not** enter `input_hash`, whose §5.4 envelope is already frozen with `output_schema` only). This is a spec-interpretation decision, **signed off** — `docs/specs/2026-08-05-spec-interpretation-decisions.md` §1. The other types below that the spec names but does not define are frozen here as design decisions:
   - `interface Validator<Payload, Result> { id: string; run(payload: Payload, result: Result): OracleVerdict }` (deterministic, no I/O; same verdict shape as oracles so the ledger stores one shape)
   - `interface CanaryCase<Payload, Result> { canaryId: string; sourceJobId: string; contractVersion: string; payload: Payload; expected: Result }`, `interface CanarySource<Payload, Result> { rates: { probationQ: number; productionQ: number; auditQ: number }; draw(kind: 'probation' | 'production' | 'audit', seed: string): CanaryCase<Payload, Result> | null }` (§6.11's three rates). Canaries carry identity and provenance — `canaryId` for the ledger, `sourceJobId`/`contractVersion` proving the case comes from real resolved work under a known contract (§5.7, §6.11) — and `draw` is deterministic in `(kind, seed)` so lease-time canary injection is replayable in audit; core supplies the seed, never the source.
   - `interface CapabilityRequirement { providerSurfaces?: NonEmptyArray<string>; unattendedScheduling?: boolean; languages?: NonEmptyArray<string> }` (§3.2's enrolled capabilities). **Match semantics are frozen in doc comments:** an omitted axis is no requirement; `providerSurfaces` is any-of (the worker's enrolled surface must be in the list); `languages` is all-of (the worker's verified coverage must include every listed language); `unattendedScheduling: true` requires the enrolled probe to have verified it.
   - `type DiversityAxis = 'slot' | 'provider' | 'accountCluster' | 'language' | 'modelFamily'`, `type AxisConfidence = 'attested' | 'observed' | 'self_reported' | 'unknown'`, `const AXIS_CONFIDENCE: Record<DiversityAxis, AxisConfidence>` frozen from §6.2's table (slot=attested; provider/accountCluster/language=observed; modelFamily=self_reported), `interface DiversityRule { axes: NonEmptyArray<DiversityAxis>; minDistinct: number }` — the rule holds across the accepted replica set iff **every** listed axis shows at least `minDistinct` distinct values there. Registration (M2) refuses any axis whose confidence is below `observed`, `minDistinct < 2`, and `minDistinct > replication.target` (§4.2 "a diversity rule that cannot cover the target in principle").
-  - `type PrivacyClass = 'public' | 'internal' | 'sensitive'` plus `const PRIVACY_CLASS_RULES: Record<PrivacyClass, { bodiesInEvents: boolean; descriptorsInEvents: boolean; ledgerBodies: 'full' | 'hash_only' }>` — §7's retention/visibility governance as executable data rather than prose: `public` = bodies and descriptors may appear in events, full ledger bodies; `internal` = neither in events, full ledger bodies; `sensitive` = neither in events, hash-only ledger bodies. Retention *durations* are operator deployment config in M2, keyed by this class. **These three rows are new policy, not a transcription** — §7 names the governance but not the values — so they go in the spec-revision footnote for explicit operator sign-off before the freeze tag.
+  - `type PrivacyClass = 'public' | 'internal' | 'sensitive'` plus `const PRIVACY_CLASS_RULES: Record<PrivacyClass, { bodiesInEvents: boolean; descriptorsInEvents: boolean; ledgerBodies: 'full' | 'hash_only' }>` — §7's retention/visibility governance as executable data rather than prose: `public` = bodies and descriptors may appear in events, full ledger bodies; `internal` = neither in events, full ledger bodies; `sensitive` = neither in events, hash-only ledger bodies. Retention *durations* are operator deployment config in M2, keyed by this class. **These three rows are new policy, not a transcription** — §7 names the governance but not the values — and were **signed off by the operator on 2026-08-05**: `docs/specs/2026-08-05-spec-interpretation-decisions.md` §5. **Scope, and it is not optional:** `bodiesInEvents` / `descriptorsInEvents` govern **consumer notifications** only. The audit event stream carries bodies and descriptors as hashes for every class without exception (Task 16's `MusterAuditEvent` doc comment) — `public` is not licence to put raw bodies in the audit trail. The doc comment on this record must say so.
   - `interface ReplicationPolicy`, `interface EscalationReserves`, `interface AdjudicationPolicy` — §4.2/§6.4 verbatim
   - `type WorkerState = 'enrolled' | 'active' | 'maintenance' | 'paused' | 'suspended' | 'revoked'` (§3.1)
 
@@ -1916,13 +1960,13 @@ export type DiversityAxis = "slot" | "provider" | "accountCluster" | "language" 
 export type AxisConfidence = "attested" | "observed" | "self_reported" | "unknown";
 
 /** Spec 6.2 confidence table. Registration refuses axes below 'observed'. */
-export const AXIS_CONFIDENCE: Record<DiversityAxis, AxisConfidence> = {
+export const AXIS_CONFIDENCE: Record<DiversityAxis, AxisConfidence> = deepFreeze({
   slot: "attested",
   provider: "observed",
   accountCluster: "observed",
   language: "observed",
   modelFamily: "self_reported"
-};
+});
 
 /** Holds across the accepted replica set iff EVERY listed axis shows at least
  * minDistinct distinct attested/observed values. Registration refuses
@@ -2048,7 +2092,7 @@ git commit -m "feat(contract): JobClass and all configuration types frozen per s
 - Consumes: `hashCanonical` (Task 5), `SubmissionEvidence` (Task 6).
 - Produces the three remaining hash envelopes. **Envelope key names are the frozen wire contract** — snake_case exactly as the spec writes them in its hash formulas (§5.4, §6.5), regardless of the camelCase TS field names around them:
   - `interface InputHashEnvelope { payload_items: CanonicalJsonValue[]; job_class_id: string; contract_version: string; output_schema: CanonicalJsonValue; policy_version: string; permit_epoch: string }` and `computeInputHash(env: InputHashEnvelope): Promise<string>` — §5.4's ordered six-tuple; `payload_items` order is significant and preserved
-  - Two spec-interpretation decisions, frozen here and flagged for a spec-revision footnote: **(a)** §5.4's "job class" element is bound as `job_class_id` — the full `JobClass` contains functions and cannot be hashed; the class's semantic content is already pinned by `contract_version` + `output_schema`, which enter the hash separately, so the ID plus those two is the complete function-free projection. **(b)** `policy_version` is an **operator-scoped policy label** with no owning structure in the spec; it is frozen as a required string supplied at `enqueue`, snapshotted into the job record and `LeaseRecord` (Task 16), and never derived from mutable state at submit time. If either reading is wrong, amend the spec before Task 20 freezes the vectors.
+  - Two spec-interpretation decisions, frozen here and **signed off** — `docs/specs/2026-08-05-spec-interpretation-decisions.md` §2: **(a)** §5.4's "job class" element is bound as `job_class_id` — the full `JobClass` contains functions and cannot be hashed; the class's semantic content is already pinned by `contract_version` + `output_schema`, which enter the hash separately, so the ID plus those two is the complete function-free projection. **(b)** `policy_version` is an **operator-scoped policy label** with no owning structure in the spec; it is frozen as a required string supplied at `enqueue`, snapshotted into the job record and `LeaseRecord` (Task 16), and never derived from mutable state at submit time. If either reading is wrong, amend the spec before Task 20 freezes the vectors.
   - `computeResultHash(resultBody: CanonicalJsonValue): Promise<string>` — §6.5 step 2: canonicalize the submitted JSON, hash it (an uncanonicalizable body has no result hash — `canonicalize` throwing is that rule)
   - `interface DecisionResultHashEnvelope { result: CanonicalJsonValue; evidence: SubmissionEvidence[]; result_adjudication_verdict_hash?: string }` and `computeDecisionResultHash(env): Promise<string>` — §6.5 step 11; the function **sorts evidence bytewise by `leaseId`** itself and **omits** `result_adjudication_verdict_hash` from the canonical envelope when absent (JCS has no undefined; conditional presence per §6.6)
 
@@ -2413,13 +2457,13 @@ export const TERMINAL_AUTHORIZATION_STATES: readonly AuthorizationRequestState[]
 /** Spec 6.6 precedence rows 2-6: which retirement state each invalidation
  * cause produces. FROZEN — the store derives the target from the cause, so a
  * caller can never pair e.g. contract_expired with 'cancelled'. */
-export const INVALIDATION_RESULT_TARGET: Record<AuthorizationInvalidationReason, ResultState> = {
+export const INVALIDATION_RESULT_TARGET: Record<AuthorizationInvalidationReason, ResultState> = deepFreeze({
   emergency_halted: "cancelled",
   operator_cancelled: "cancelled",
   emergency_permit_withdrawal: "superseded",
   contract_expired: "expired",
   max_in_flight_exceeded: "expired"
-};
+});
 ```
 
 `packages/contract/src/errors.ts`:
@@ -2436,7 +2480,7 @@ export const INVALIDATION_RESULT_TARGET: Record<AuthorizationInvalidationReason,
  * invalid_result  — uncanonicalizable body, schema/enum failure, or
  *                   validator/oracle rejection (detail in ledger only)
  */
-export const WORKER_WIRE_ERROR_CODES = [
+export const WORKER_WIRE_ERROR_CODES = deepFreeze([
   "lease_not_held",
   "result_too_large",
   "invalid_result",
@@ -2444,18 +2488,18 @@ export const WORKER_WIRE_ERROR_CODES = [
   "input_hash_mismatch",
   "contract_mismatch",
   "contract_expired"
-] as const;
+] as const);
 
 /** Consumer-boundary API errors: typed failures that create NO identity
  * (spec 4.3). Never sent to workers. escalation_budget_exhausted is NOT here —
  * for a well-formed intent it is an AuthorizationDenialReason bound into a
  * terminal denial receipt (spec 6.4), not an identity-less API error. */
-export const CONSUMER_API_ERROR_CODES = [
+export const CONSUMER_API_ERROR_CODES = deepFreeze([
   "authorization_conflict",
   "verdict_conflict",
   "effect_descriptor_mismatch",
   "intent_invalid"
-] as const;
+] as const);
 
 export type WorkerWireErrorCode = (typeof WORKER_WIRE_ERROR_CODES)[number];
 export type ConsumerApiErrorCode = (typeof CONSUMER_API_ERROR_CODES)[number];
@@ -2792,36 +2836,41 @@ git commit -m "feat(contract): adjudication requests, verdicts, verdict hashing,
 
 **Interfaces:**
 - Consumes: `WorkerState` (Task 11).
-- Produces frozen data + pure transition predicates. M2's engines consume these tables instead of re-encoding the spec. **Runtime-freeze rule for the whole package:** `readonly` is compile-time-only and several of these values enter hashes, so this task also creates `packages/contract/src/deep-freeze.ts`:
+- Produces frozen data + pure transition predicates. M2's engines consume these tables instead of re-encoding the spec. **Runtime-freeze rule for the whole package:** `readonly` is compile-time-only and several of these values enter hashes, so **every exported table, order, vocabulary, bucket list, rules record, and schema constant in Tasks 7, 11, 13, 15, 17, and 19 is wrapped: `export const X = deepFreeze({...})`** — including nested rows. `deepFreeze` comes from `src/deep-freeze.ts`, created in Task 4 (it has to exist before Task 7's first frozen export).
+
+  The rule is enforced by **one exhaustive test, not per-export spot checks** — a hand-maintained list is exactly what drifts. `packages/contract/test/tables.test.ts` walks the package's entire public surface:
 
   ```ts
-  /** Recursively Object.freeze a value in place and return it. */
-  export function deepFreeze<T>(value: T): T {
-    if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
-      Object.freeze(value);
-      for (const key of Object.getOwnPropertyNames(value)) {
-        deepFreeze((value as Record<string, unknown>)[key]);
-      }
+  import * as contract from "../src/index.js";
+
+  /** Every object reachable from an export must be frozen; returns the paths that aren't. */
+  function mutablePaths(value: unknown, path: string, seen = new WeakSet<object>()): string[] {
+    if (typeof value !== "object" || value === null) return [];
+    const obj = value as object;
+    if (seen.has(obj)) return [];
+    seen.add(obj);
+    const bad = Object.isFrozen(obj) ? [] : [path];
+    for (const key of Object.getOwnPropertyNames(obj)) {
+      bad.push(...mutablePaths((obj as Record<string, unknown>)[key], `${path}.${key}`, seen));
     }
-    return value;
+    return bad;
   }
+
+  it("every exported value is deep-frozen, all the way down", () => {
+    const mutable = Object.entries(contract).flatMap(([name, v]) => mutablePaths(v, name));
+    expect(mutable).toEqual([]);   // failure message names the exact export.path
+  });
   ```
 
-  **Every exported table, order, vocabulary, bucket list, rules record, and schema constant in Tasks 7, 11, 13, 15, 17, and 19 is wrapped: `export const X = deepFreeze({...})`** — including nested rows. The tables test adds, for each such export: `expect(Object.isFrozen(X)).toBe(true)` and one nested-row spot check, e.g.:
+  Because it reads `index.ts` rather than a list, exports added in Tasks 17 and 19 are covered the moment they are re-exported. Keep one behavioural assertion alongside it:
 
   ```ts
-  it("tables are deep-frozen at runtime", () => {
-    for (const table of [ACTION_GATE_TABLE, FAIR_ATTEMPT_TABLE, AUDIT_SOURCE_TABLE, QUEUE_MODE_TABLE]) {
-      expect(Object.isFrozen(table)).toBe(true);
-    }
-    expect(Object.isFrozen(PRECEDENCE_TABLE)).toBe(true);
-    expect(Object.isFrozen(PRECEDENCE_TABLE[0])).toBe(true);       // nested row
-    expect(Object.isFrozen(ACTION_GATE_TABLE.publish)).toBe(true); // nested row
+  it("frozen arrays reject mutation at runtime", () => {
     expect(() => { (ACTION_ORDER as string[]).push("detonate"); }).toThrow();
   });
   ```
 
-  The exports below and in the other listed tasks are written with plain literals for readability; the implementer applies `deepFreeze(...)` to each at creation:
+  The exports below and in the other listed tasks **must be written as `deepFreeze(...)` at creation** — a bare `Object.freeze` is shallow and leaves rows writable:
   - `const WORKER_TRANSITIONS: ReadonlyArray<{ from: WorkerState; to: WorkerState; cause: string }>`, `canTransitionWorker(from, to): boolean`
   - `type ContractLifecycleState = 'draft' | 'active' | 'draining' | 'retired'`, `const CONTRACT_LIFECYCLE_TRANSITIONS`, `canTransitionContract(from, to): boolean`
   - `type PrecedenceConditionId` — one identifier per distinct condition. Spec row 9 names two reserves whose in-flight effects differ (split/adjudication saturation keeps affected results pending; audit saturation touches no in-flight work), so it becomes **two condition IDs sharing rank 9**: `split_adjudication_saturated` and `audit_saturated` — 13 rows, 12 ranks. `type InFlightEffect` — a per-row enum of what the condition does to work already in flight (a boolean is lossy: row 10 denies in-flight urgent-lane authorization requests, row 11 denies overflow escalations from existing results). `interface PrecedenceRule { rank: number; id: PrecedenceConditionId; refusesNewEnqueue: boolean; refusesLease: boolean; invalidatesIssuedAuthorizations: boolean; inFlight: InFlightEffect; summary: string }`; `const PRECEDENCE_TABLE: readonly PrecedenceRule[]` (rank 1 highest); `atHighestRank(active: PrecedenceConditionId[]): PrecedenceRule[]` — all active rules at the winning (lowest) rank, since same-rank conditions can be active together and each contributes its own effect
@@ -2841,6 +2890,8 @@ import { PRECEDENCE_TABLE, atHighestRank } from "../src/tables/precedence.js";
 import { FAIR_ATTEMPT_TABLE } from "../src/tables/fair-attempt.js";
 import { AUDIT_SOURCE_TABLE } from "../src/tables/audit-sources.js";
 import { QUEUE_MODE_TABLE } from "../src/tables/queue-modes.js";
+import { ACTION_ORDER } from "../src/actions.js";
+import * as contract from "../src/index.js";   // the deep-freeze sweep reads the whole public surface
 
 describe("worker state machine (spec 3.1)", () => {
   it("allows exactly the drawn transitions", () => {
@@ -2987,7 +3038,7 @@ import type { WorkerState } from "../job-class.js";
 export interface WorkerTransition { from: WorkerState; to: WorkerState; cause: string }
 
 /** Spec 3.1, every drawn edge plus operator suspension from non-terminal states. FROZEN. */
-export const WORKER_TRANSITIONS: readonly WorkerTransition[] = [
+export const WORKER_TRANSITIONS: readonly WorkerTransition[] = deepFreeze([
   { from: "enrolled",    to: "active",      cause: "N checked successes over >= T days at probation canary rate" },
   { from: "enrolled",    to: "paused",      cause: "suspicion during probation" },
   { from: "active",      to: "maintenance", cause: "worker-declared, costs no standing" },
@@ -3000,7 +3051,7 @@ export const WORKER_TRANSITIONS: readonly WorkerTransition[] = [
   { from: "maintenance", to: "suspended",   cause: "operator action" },
   { from: "paused",      to: "suspended",   cause: "operator action" },
   { from: "suspended",   to: "revoked",     cause: "operator action" }
-];
+]);
 
 export function canTransitionWorker(from: WorkerState, to: WorkerState): boolean {
   return WORKER_TRANSITIONS.some((t) => t.from === from && t.to === to);
@@ -3013,7 +3064,7 @@ export function canTransitionWorker(from: WorkerState, to: WorkerState): boolean
 export type ContractLifecycleState = "draft" | "active" | "draining" | "retired";
 
 /** Spec 5.6: forward-only. */
-export const CONTRACT_LIFECYCLE_TRANSITIONS: readonly { from: ContractLifecycleState; to: ContractLifecycleState }[] = Object.freeze([
+export const CONTRACT_LIFECYCLE_TRANSITIONS: readonly { from: ContractLifecycleState; to: ContractLifecycleState }[] = deepFreeze([
   { from: "draft", to: "active" },
   { from: "active", to: "draining" },
   { from: "draining", to: "retired" }
@@ -3032,7 +3083,7 @@ export const CONTRACT_LIFECYCLE_RULES: Record<ContractLifecycleState, {
   validatorsLoaded: boolean;              // draining keeps them loaded: dual-read
   queuedJobs: "normal" | "reemit_or_migrate" | "none";
   lateResultClassification: "not_applicable" | "contract_expired_coordinator_fault";
-}> = Object.freeze({
+}> = deepFreeze({
   draft:    { leasing: "disabled", acceptsResults: "no",                  validatorsLoaded: false, queuedJobs: "none",              lateResultClassification: "not_applicable" },
   active:   { leasing: "enabled",  acceptsResults: "yes",                 validatorsLoaded: true,  queuedJobs: "normal",            lateResultClassification: "not_applicable" },
   draining: { leasing: "disabled", acceptsResults: "until_accepted_until", validatorsLoaded: true, queuedJobs: "reemit_or_migrate", lateResultClassification: "contract_expired_coordinator_fault" },
@@ -3083,7 +3134,7 @@ export interface PrecedenceRule {
 }
 
 /** Spec 6.6 precedence table. FROZEN. Outcome must not depend on evaluation order. */
-export const PRECEDENCE_TABLE: readonly PrecedenceRule[] = [
+export const PRECEDENCE_TABLE: readonly PrecedenceRule[] = deepFreeze([
   { rank: 1,  id: "lease_holder_revoked",        refusesNewEnqueue: false, refusesLease: true,  invalidatesIssuedAuthorizations: false, inFlight: "requeue_holder_work",              summary: "Reject that holder's open leases, requeue their work; other workers' accepted evidence remains valid" },
   { rank: 2,  id: "emergency_halted",            refusesNewEnqueue: true,  refusesLease: true,  invalidatesIssuedAuthorizations: true,  inFlight: "cancel_and_invalidate",            summary: "Cancel affected results for future intents and pending adjudications under the recorded operator policy" },
   { rank: 3,  id: "operator_cancellation",       refusesNewEnqueue: false, refusesLease: false, invalidatesIssuedAuthorizations: true,  inFlight: "cancel_and_invalidate",            summary: "Cancel selected results and their pending adjudications; apply the recorded requeue policy atomically" },
@@ -3097,7 +3148,7 @@ export const PRECEDENCE_TABLE: readonly PrecedenceRule[] = [
   { rank: 10, id: "urgent_saturated",            refusesNewEnqueue: true,  refusesLease: false, invalidatesIssuedAuthorizations: false, inFlight: "deny_urgent_lane_authorizations",  summary: "Refuse new enqueues; an in-flight authorization request including an urgent-lane action is denied escalation_budget_exhausted" },
   { rank: 11, id: "low_cost_saturated",          refusesNewEnqueue: false, refusesLease: false, invalidatesIssuedAuthorizations: false, inFlight: "deny_overflow_escalations",        summary: "Intake continues; deny overflow routine escalation from existing results, fire onLowCostUncovered" },
   { rank: 12, id: "permit_epoch",                refusesNewEnqueue: false, refusesLease: false, invalidatesIssuedAuthorizations: false, inFlight: "gate_under_stamped_epoch",         summary: "Gate under the stamped epoch" }
-];
+]);
 
 /** All active rules at the winning (lowest) rank. Same-rank conditions can be
  * active together (both rank-9 reserves) and each contributes its own effect. */
@@ -3118,7 +3169,7 @@ export type AttemptOutcome =
   | "lease_expired_no_fault";
 
 /** Spec 6.9. FROZEN. coordinator_fault includes outages and contract_expired. */
-export const FAIR_ATTEMPT_TABLE: Record<AttemptOutcome, { countsForContribution: boolean; raisesSuspicion: boolean }> = {
+export const FAIR_ATTEMPT_TABLE: Record<AttemptOutcome, { countsForContribution: boolean; raisesSuspicion: boolean }> = deepFreeze({
   no_work:                      { countsForContribution: true,  raisesSuspicion: false },
   success:                      { countsForContribution: true,  raisesSuspicion: false },
   coordinator_fault:            { countsForContribution: true,  raisesSuspicion: false },
@@ -3127,7 +3178,7 @@ export const FAIR_ATTEMPT_TABLE: Record<AttemptOutcome, { countsForContribution:
   abandoned_before_payload:     { countsForContribution: false, raisesSuspicion: false },
   abandoned_after_payload:      { countsForContribution: false, raisesSuspicion: true },
   lease_expired_no_fault:       { countsForContribution: false, raisesSuspicion: true }
-};
+});
 ```
 
 `packages/contract/src/tables/audit-sources.ts`:
@@ -3140,12 +3191,12 @@ export type AuditSource =
   | "independent_worker_audit";
 
 /** Spec 6.11. Worker audits escalate only and require diversity. FROZEN. */
-export const AUDIT_SOURCE_TABLE: Record<AuditSource, { mayMoveReputationDirectly: boolean }> = {
+export const AUDIT_SOURCE_TABLE: Record<AuditSource, { mayMoveReputationDirectly: boolean }> = deepFreeze({
   held_out_canary:                      { mayMoveReputationDirectly: true },
   deterministic_or_completeness_oracle: { mayMoveReputationDirectly: true },
   human_audit:                          { mayMoveReputationDirectly: true },
   independent_worker_audit:             { mayMoveReputationDirectly: false }
-};
+});
 ```
 
 `packages/contract/src/tables/queue-modes.ts`:
@@ -3166,7 +3217,7 @@ export interface QueueModeRow {
 
 /** Spec 6.12. FROZEN. Per-class health (6.6) is orthogonal. pool_offline fires
  * for admission_halted only when the halt cause is pool-offline detection. */
-export const QUEUE_MODE_TABLE: Record<QueueMode, QueueModeRow> = Object.freeze({
+export const QUEUE_MODE_TABLE: Record<QueueMode, QueueModeRow> = deepFreeze({
   normal:           { intake: "full",      inFlight: "completes",       lowPriority: "normal",       urgent: "normal",      entryEvent: null },
   degraded:         { intake: "throttled", inFlight: "completes",       lowPriority: "expire_early", urgent: "prioritized", entryEvent: "backpressure" },
   admission_halted: { intake: "refused",   inFlight: "completes",       lowPriority: "normal",       urgent: "normal",      entryEvent: "pool_offline" },
@@ -3211,7 +3262,7 @@ git commit -m "feat(contract): frozen state machines and policy tables as execut
 import { describe, it, expect } from "vitest";
 import { NOTIFICATION_TYPES, AUDIT_EVENT_TYPES } from "../src/events.js";
 import type { MusterEvent } from "../src/events.js";
-import type { Store, Clock, EventSink, AdmissionHook, AdjudicationSource } from "../src/ports.js";
+import type { Store, Clock, EventSink, AdmissionHook, AdjudicationSource, VerdictReceipt } from "../src/ports.js";
 
 describe("event schema (spec 7)", () => {
   it("has one notification member per consumer event, rev-11 names", () => {
@@ -3249,6 +3300,28 @@ describe("event schema (spec 7)", () => {
     // @ts-expect-error pool_offline is queue-scoped and must not carry classId
     const bad: MusterEvent = { type: "pool_offline", at: "t", classId: "c" };
     void bad;
+  });
+  it("refusals can name an unknown lease without fabricating identifiers", () => {
+    const unknownLease: MusterEvent = {
+      type: "submit", at: "2026-08-05T10:00:00.000Z", leaseId: "unknown",
+      workerSubject: { issuer: "https://issuer.example", subject: "w1" },
+      outcome: "rejected", errorCode: "lease_not_held", lease: { resolved: false }
+    };
+    expect(unknownLease.type).toBe("submit");
+    // @ts-expect-error an accepted submission always resolved its lease
+    const bad: MusterEvent = {
+      type: "submit", at: "t", leaseId: "l1",
+      workerSubject: { issuer: "https://issuer.example", subject: "w1" },
+      outcome: "accepted", resultHash: "h"
+    };
+    void bad;
+  });
+  it("a verdict receipt cannot lose or invent its reject outcome", () => {
+    // @ts-expect-error rejected requires rejectOutcome
+    const missing: VerdictReceipt = { requestId: "r", verdictHash: "h", outcome: "rejected", decidedAt: "t" };
+    // @ts-expect-error only rejections carry one
+    const extra: VerdictReceipt = { requestId: "r", verdictHash: "h", outcome: "approved", rejectOutcome: "requeued", decidedAt: "t" };
+    void missing; void extra;
   });
   it("ports are pure interfaces (compile-only)", () => {
     const use = (_s: Store, _c: Clock, _e: EventSink, _a: AdmissionHook, _j: AdjudicationSource) => true;
@@ -3295,18 +3368,18 @@ import type {
   AuthorizationDenialReason, WorkerWireErrorCode, CanonicalJsonValue
 } from "@kuindji/muster-contract";
 
-export const NOTIFICATION_TYPES = [
+export const NOTIFICATION_TYPES = deepFreeze([
   "suspicion", "split", "escalation", "low_cost_uncovered", "urgent_uncovered",
   "backpressure", "pool_offline", "contract_mismatch", "class_health_changed",
   "diversity_shortfall", "result_adjudication_requested", "action_adjudication_requested",
   "adjudication_uncovered", "audit_uncovered", "dispute_requeue_exhausted"
-] as const;
+] as const);
 
-export const AUDIT_EVENT_TYPES = [
+export const AUDIT_EVENT_TYPES = deepFreeze([
   "enrollment", "lease", "lease_extend", "submit", "verdict", "gate_decision",
   "escalation_charge", "adjudication", "state_change", "permit_epoch_change",
   "contract_transition"
-] as const;
+] as const);
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
@@ -3346,13 +3419,27 @@ export type MusterNotification =
  * worker's ledger is anonymized. Provider is derived from
  * workerSubject.issuer. Bodies and descriptors appear only as hashes here;
  * PRIVACY_CLASS_RULES governs anything richer. */
+/** What a lease identifier resolved to when a worker-wire call was refused.
+ * `resolved: false` is the honest record for an unknown lease ID. */
+export type AuditLeaseIdentity =
+  | { resolved: true; classId: string; jobId: string; contractVersion: string }
+  | { resolved: false };
+
 export type MusterAuditEvent =
   | (Base<"enrollment"> & { workerSubject: WorkerSubject; outcome: "enrolled" | "refused"; contractVersion: string })
   | (ClassScoped<"lease"> & { jobId: string; leaseId: string; workerSubject: WorkerSubject; contractVersion: string; permitEpoch: string; canary: boolean })
-  | (ClassScoped<"lease_extend"> & { leaseId: string; jobId: string; workerSubject: WorkerSubject; outcome: "extended" | "refused" })
-  | (ClassScoped<"submit"> & { leaseId: string; jobId: string; workerSubject: WorkerSubject; contractVersion: string } & (
-      | { outcome: "accepted" | "replayed"; resultHash: string }
-      | { outcome: "rejected"; errorCode: WorkerWireErrorCode }
+  // A refusal may be for a lease that does not exist: `lease_not_held`
+  // deliberately collapses unknown / wrong-subject / closed (Task 13), and an
+  // unknown lease ID resolves to no class, job, or contract version. Refusal
+  // arms therefore carry a RESOLVED/UNRESOLVED union instead of required
+  // identifiers the coordinator would have to fabricate.
+  | (Base<"lease_extend"> & { leaseId: string; workerSubject: WorkerSubject } & (
+      | { outcome: "extended"; classId: string; jobId: string }
+      | { outcome: "refused"; lease: AuditLeaseIdentity }
+    ))
+  | (Base<"submit"> & { leaseId: string; workerSubject: WorkerSubject } & (
+      | { outcome: "accepted" | "replayed"; resultHash: string; classId: string; jobId: string; contractVersion: string }
+      | { outcome: "rejected"; errorCode: WorkerWireErrorCode; lease: AuditLeaseIdentity }
     ))
   | (ClassScoped<"verdict"> & { requestId: string; jobId: string; verdictHash: string; adjudicatorId: string; contractVersion: string; kind: "result" | "action"; outcome: "applied" | "replayed" | "conflict" | "terminal" })
   | (ClassScoped<"gate_decision"> & { jobId: string; authorizationRequestId: string; contractVersion: string; permitEpoch: string } & (
@@ -3473,7 +3560,7 @@ export interface LeaseRecord {
 
 export type SubmitOutcome =
   | { kind: "accepted"; receipt: SubmissionReceipt }
-  | { kind: "replayed"; receipt: SubmissionReceipt }              // exact retry, byte-identical; precedes ALL other checks
+  | { kind: "replayed"; receipt: SubmissionReceipt }              // exact retry, byte-identical; reached ONLY after holder binding succeeds, and then precedes every terminal-state check
   | { kind: "conflict" }                                           // submission_conflict; accepted row untouched
   | { kind: "refused"; error: "lease_not_held" };                  // wrong holder / unknown / no longer open, checked in-transaction
 
@@ -3484,14 +3571,17 @@ export type AuthorizeIntentOutcome =
 
 /** The persisted verdict receipt. Returned IDENTICALLY by first application
  * and every replay (spec 6.6 byte-identical retry) — including the reject
- * outcome, which would otherwise be lost on replay. */
-export interface VerdictReceipt {
+ * outcome, which would otherwise be lost on replay. CORRELATED: `rejectOutcome`
+ * is required on the rejected arm and absent everywhere else, so an optional
+ * field can neither go missing on a rejection nor ride along on an approval. */
+interface VerdictReceiptBase {
   requestId: string;
   verdictHash: string;
-  outcome: "resolved" | "rejected" | "approved" | "denied";
-  rejectOutcome?: "requeued" | "cap_exhausted"; // result-dispute rejections only
   decidedAt: Timestamp;
 }
+export type VerdictReceipt =
+  | (VerdictReceiptBase & { outcome: "rejected"; rejectOutcome: "requeued" | "cap_exhausted" })
+  | (VerdictReceiptBase & { outcome: "resolved" | "approved" | "denied" });
 
 export type VerdictOutcome =
   | { kind: "applied"; receipt: VerdictReceipt }
@@ -3678,7 +3768,9 @@ export interface Store {
 
 - [ ] **Step 4: Run tests + invariants, verify pass**
 
-Run: `pnpm -F @kuindji/muster-core test && pnpm check:invariants && pnpm build`
+Run: `pnpm -F @kuindji/muster-core test && pnpm -F @kuindji/muster-core typecheck && pnpm check:invariants && pnpm build`
+
+The `typecheck` is not redundant with `test`: vitest transpiles without type-checking, so the `@ts-expect-error` assertions in `events.test.ts` — the only thing proving the correlated unions actually reject bad shapes — can only fail here. Without it they would first fail at Task 20's all-up gate, four tasks after the commit that broke them.
 Expected: PASS; invariants confirm exactly one runtime dep and no IO/network references in either package.
 
 - [ ] **Step 5: Commit**
@@ -3771,36 +3863,36 @@ Expected: FAIL — module not found.
 import { WORKER_WIRE_ERROR_CODES } from "./errors.js";
 
 /** Spec 5.2/5.7. All schemas closed; buckets, not precise values, toward workers. */
-export const AVAILABILITY_SCHEMA = {
+export const AVAILABILITY_SCHEMA = deepFreeze({
   type: "object",
   additionalProperties: false,
   required: ["budget_bucket"],
   properties: { budget_bucket: { type: "integer", minimum: 0, maximum: 3 } }
-} as const;
+} as const);
 
 /** FROZEN semantics: remaining-allowance tier for this run. May only stay
  * equal or decrease across calls within one run (= one scheduled invocation
  * window, bounded by the assigned slot). Enforced per (subject, slot) in M2. */
-export const BUDGET_BUCKET_MEANINGS = {
+export const BUDGET_BUCKET_MEANINGS = deepFreeze({
   0: "exhausted",
   1: "low",
   2: "standard",
   3: "ample"
-} as const;
+} as const);
 
-export const NO_WORK_SHAPE = {
+export const NO_WORK_SHAPE = deepFreeze({
   type: "object",
   additionalProperties: false,
   required: ["outcome"],
   properties: { outcome: { const: "no_work" } }
-} as const;
+} as const);
 
-export const UNIFORM_ERROR_SHAPE = {
+export const UNIFORM_ERROR_SHAPE = deepFreeze({
   type: "object",
   additionalProperties: false,
   required: ["error"],
   properties: { error: { enum: [...WORKER_WIRE_ERROR_CODES] } }
-} as const;
+} as const);
 
 const leaseBatch = {
   type: "object",
@@ -3811,12 +3903,12 @@ const leaseBatch = {
     input_hash: { type: "string" },
     job_class_id: { type: "string" },
     contract_version: { type: "string" },
-    ttl_bucket_seconds: { type: "integer" }, // quantized bucket, floored (spec 6.1)
+    ttl_bucket_seconds: { type: "integer" }, // quantized bucket, rounded UP per bucketFor (Task 19); never a raw TTL
     payload: {} // class-specific sanitized batch; validated against the class schema server-side
   }
 } as const;
 
-export const TOOL_SCHEMAS = {
+export const TOOL_SCHEMAS = deepFreeze({
   lease_job: {
     scope: "jobs",
     inputSchema: {
@@ -3914,7 +4006,7 @@ export const TOOL_SCHEMAS = {
       required: ["outcome"], properties: { outcome: { const: "recorded" } }
     }
   }
-} as const;
+} as const);
 ```
 
 Re-export from `src/index.ts`.
@@ -4132,6 +4224,35 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
       ids.add(id);
     }
   });
+  it("rejects malformed fixtures instead of ignoring the malformation", () => {
+    const wellFormed = {
+      id: "x", version: 1, description: "d", area: "submission_retry",
+      setup: {}, conditions: [],
+      steps: [{ command: "submit", args: {} }],
+      expectFinal: { states: { job1: "completed" } }
+    };
+    expect(isLifecycleFixture(wellFormed)).toBe(true);   // the control
+
+    const malformed: Array<[string, unknown]> = [
+      ["typo'd barrier key leaves a race with no closed outcome set",
+        { ...wellFormed, steps: [{ command: "submit", args: {}, barier: "r" }, { command: "submit", args: {}, barier: "r" }] }],
+      ["typo'd step expect key silently drops the assertion",
+        { ...wellFormed, steps: [{ command: "submit", args: {}, expct: { kind: "accepted" } }] }],
+      ["unknown top-level key", { ...wellFormed, expectFnial: {} }],
+      ["unknown expectFinal key", { ...wellFormed, expectFinal: { staets: {} } }],
+      ["array where a record is required", { ...wellFormed, expectFinal: { states: ["completed"] } }],
+      ["array as step args", { ...wellFormed, steps: [{ command: "submit", args: [] }] }],
+      ["null step must fail, not throw", { ...wellFormed, steps: [null] }],
+      ["barrier without expectOneOf", { ...wellFormed, steps: [{ command: "submit", args: {}, barrier: "r" }] }],
+      ["empty expectOneOf", { ...wellFormed, expectOneOf: [] }],
+      ["unknown command", { ...wellFormed, steps: [{ command: "teleport", args: {} }] }],
+      ["non-finite charge", { ...wellFormed, expectFinal: { charges: { urgent: NaN } } }]
+    ];
+    for (const [why, f] of malformed) {
+      expect(() => isLifecycleFixture(f), `${why} — threw instead of returning false`).not.toThrow();
+      expect(isLifecycleFixture(f), why).toBe(false);
+    }
+  });
   it("every area has at least one fixture — no 11.1 area is silently empty", () => {
     for (const area of LIFECYCLE_FIXTURE_AREAS) {
       expect(
@@ -4175,9 +4296,9 @@ Expected: FAIL — modules and fixture files not found.
 ```ts
 /** Spec 5.7: TTL and batch size quantized into buckets, payload bytes padded
  * into buckets — never derived per payload. FROZEN values. */
-export const TTL_BUCKETS_SECONDS: readonly number[] = Object.freeze([300, 900, 1800, 3600, 7200]);
-export const PAYLOAD_PAD_BUCKETS_BYTES: readonly number[] = Object.freeze([4096, 16384, 65536, 262144, 1048576]);
-export const BATCH_SIZE_BUCKETS: readonly number[] = Object.freeze([1, 2, 5, 10]);
+export const TTL_BUCKETS_SECONDS: readonly number[] = deepFreeze([300, 900, 1800, 3600, 7200]);
+export const PAYLOAD_PAD_BUCKETS_BYTES: readonly number[] = deepFreeze([4096, 16384, 65536, 262144, 1048576]);
+export const BATCH_SIZE_BUCKETS: readonly number[] = deepFreeze([1, 2, 5, 10]);
 
 /** Smallest bucket >= value, or null when the value exceeds the largest
  * bucket. Rounding UP is load-bearing: a TTL rounded down could expire
@@ -4204,24 +4325,24 @@ export function bucketFor(value: number, buckets: readonly number[]): number | n
 ```ts
 import type { CanonicalJsonValue } from "./primitives.js";
 
-export const LIFECYCLE_FIXTURE_AREAS = [
+export const LIFECYCLE_FIXTURE_AREAS = deepFreeze([
   "submission_retry", "authorization_retry", "verdict_retry", "invalidation",
   "retirement", "requeue_cap", "epoch_assignment", "urgent_saturation"
-] as const;
+] as const);
 
 export type LifecycleFixtureArea = (typeof LIFECYCLE_FIXTURE_AREAS)[number];
 
 /** The frozen command vocabulary scenarios may use. M2's conformance kit maps
  * each onto the engine + Store under test; an unknown command is a malformed
  * fixture, not an extension point. */
-export const LIFECYCLE_COMMANDS = [
+export const LIFECYCLE_COMMANDS = deepFreeze([
   "enqueue", "claimLease", "extendLease", "abandonLease", "expireLease",
   "submit", "authorizeActions", "getAuthorizationStatus",
   "openResultAdjudication", "applyResultAdjudicationVerdict",
   "applyActionAdjudicationVerdict", "contractExpire", "emergencyHalt",
   "emergencyWithdrawEpoch", "operatorCancel", "advanceTime",
   "saturateReserve", "rollReserveWindow"
-] as const;
+] as const);
 
 export type LifecycleCommand = (typeof LIFECYCLE_COMMANDS)[number];
 
@@ -4229,7 +4350,7 @@ export type LifecycleCommand = (typeof LIFECYCLE_COMMANDS)[number];
  * frozen precedence table so the two can never drift. */
 import { PRECEDENCE_TABLE } from "./tables/precedence.js";
 export const LIFECYCLE_CONDITIONS: readonly string[] =
-  Object.freeze(PRECEDENCE_TABLE.map((r) => r.id));
+  deepFreeze(PRECEDENCE_TABLE.map((r) => r.id));
 
 export interface LifecycleStep {
   command: LifecycleCommand;
@@ -4267,7 +4388,7 @@ export interface LifecycleFixture {
 
 /** Frozen 8.1 concurrency-case matrix: each ID becomes a runnable property
  * test in M2's store conformance kit against any Store implementation. */
-export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = Object.freeze([
+export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "concurrent-claim-single-winner", "no-double-lease-per-job",
   "subject-binding-rejects-other-holder", "submit-idempotency-exact-triple",
   "conflicting-retry-preserves-accepted-row", "expiry-requeue-atomic",
@@ -4276,14 +4397,14 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = Object.freeze([
 ]);
 
 /** Frozen prompt-injection corpus categories (spec 8). */
-export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = Object.freeze([
+export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
   "direct_instruction", "tool_redirection", "exfiltration",
   "role_reassignment", "markdown_smuggling", "schema_escape"
 ]);
 
 /** The 11.1 required-case matrix. Every ID must exist in the committed pack;
  * the test enforces it. FROZEN — extend in M2+, never shrink. */
-export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = Object.freeze([
+export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   // submission exact-retry after every terminal condition + conflict + binding
   "sub-retry-after-submission-closed", "sub-retry-after-lease-expiry",
   "sub-retry-after-contract-expiry", "sub-retry-after-admission-halt",
@@ -4310,42 +4431,60 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = Object.freeze([
   "auth-urgent-saturated-denial", "urgent-fresh-intent-after-window"
 ]);
 
+/** CLOSED means three things, and each of them is a fixture bug we have to
+ * fail on rather than ignore: (1) an unknown key at ANY level is a typo, and a
+ * typo'd `barrier` or `expect` silently disables the very assertion the fixture
+ * exists to make; (2) a record-shaped field must be a plain object — an array
+ * passes a naive `typeof v === "object"` check and `Object.values` on it
+ * returns the elements, so `states: ["done"]` would sail through; (3) a
+ * malformed entry must return false, never throw, or one bad pack takes the
+ * whole validator down instead of failing it. */
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+const hasOnlyKeys = (x: Record<string, unknown>, allowed: readonly string[]): boolean =>
+  Object.keys(x).every((k) => allowed.includes(k));
+
+const EXPECT_FINAL_KEYS = ["states", "events", "charges", "receipts"] as const;
+const STEP_KEYS = ["command", "args", "expect", "barrier"] as const;
+const FIXTURE_KEYS = [
+  "id", "version", "description", "area", "setup", "conditions", "steps", "expectFinal", "expectOneOf"
+] as const;
+
 function isExpectFinal(e: unknown): boolean {
-  if (typeof e !== "object" || e === null) return false;
-  const x = e as Record<string, unknown>;
-  const stringMap = (v: unknown) =>
-    typeof v === "object" && v !== null && Object.values(v).every((s) => typeof s === "string");
+  if (!isRecord(e)) return false;
+  const stringMap = (v: unknown) => isRecord(v) && Object.values(v).every((s) => typeof s === "string");
   const numberMap = (v: unknown) =>
-    typeof v === "object" && v !== null && Object.values(v).every((n) => typeof n === "number");
-  if (x.states !== undefined && !stringMap(x.states)) return false;
-  if (x.events !== undefined && !(Array.isArray(x.events) && x.events.every((s) => typeof s === "string"))) return false;
-  if (x.charges !== undefined && !numberMap(x.charges)) return false;
-  if (x.receipts !== undefined && !(typeof x.receipts === "object" && x.receipts !== null &&
-    Object.values(x.receipts).every((r) => r === "byte_identical" || r === "terminal_immutable"))) return false;
-  return Object.keys(x).every((k) => ["states", "events", "charges", "receipts"].includes(k));
+    isRecord(v) && Object.values(v).every((n) => typeof n === "number" && Number.isFinite(n));
+  if (e.states !== undefined && !stringMap(e.states)) return false;
+  if (e.events !== undefined && !(Array.isArray(e.events) && e.events.every((s) => typeof s === "string"))) return false;
+  if (e.charges !== undefined && !numberMap(e.charges)) return false;
+  if (e.receipts !== undefined && !(isRecord(e.receipts) &&
+    Object.values(e.receipts).every((r) => r === "byte_identical" || r === "terminal_immutable"))) return false;
+  return hasOnlyKeys(e, EXPECT_FINAL_KEYS);
 }
 
 export function isLifecycleFixture(f: unknown): f is LifecycleFixture {
-  if (typeof f !== "object" || f === null) return false;
-  const x = f as Record<string, unknown>;
-  if (typeof x.id !== "string" || x.version !== 1 || typeof x.description !== "string") return false;
-  if (!(LIFECYCLE_FIXTURE_AREAS as readonly string[]).includes(x.area as string)) return false;
-  if (typeof x.setup !== "object" || x.setup === null) return false;
-  if (!Array.isArray(x.conditions) ||
-      !x.conditions.every((c) => (LIFECYCLE_CONDITIONS as readonly string[]).includes(c as string))) return false;
-  if (!Array.isArray(x.steps) || x.steps.length === 0) return false;
+  if (!isRecord(f) || !hasOnlyKeys(f, FIXTURE_KEYS)) return false;
+  if (typeof f.id !== "string" || f.version !== 1 || typeof f.description !== "string") return false;
+  if (!(LIFECYCLE_FIXTURE_AREAS as readonly string[]).includes(f.area as string)) return false;
+  if (!isRecord(f.setup)) return false;
+  if (!Array.isArray(f.conditions) ||
+      !f.conditions.every((c) => (LIFECYCLE_CONDITIONS as readonly string[]).includes(c as string))) return false;
+  if (!Array.isArray(f.steps) || f.steps.length === 0) return false;
   let hasBarrier = false;
-  for (const s of x.steps as Array<Record<string, unknown>>) {
+  for (const s of f.steps) {
+    if (!isRecord(s) || !hasOnlyKeys(s, STEP_KEYS)) return false;
     if (!(LIFECYCLE_COMMANDS as readonly string[]).includes(s.command as string)) return false;
-    if (typeof s.args !== "object" || s.args === null) return false;
-    if (s.expect !== undefined && (typeof s.expect !== "object" || s.expect === null)) return false;
+    if (!isRecord(s.args)) return false;
+    if (s.expect !== undefined && !isRecord(s.expect)) return false;
     if (s.barrier !== undefined) { if (typeof s.barrier !== "string") return false; hasBarrier = true; }
   }
-  if (!isExpectFinal(x.expectFinal)) return false;
-  if (x.expectOneOf !== undefined &&
-      !(Array.isArray(x.expectOneOf) && x.expectOneOf.length > 0 && x.expectOneOf.every(isExpectFinal))) return false;
+  if (!isExpectFinal(f.expectFinal)) return false;
+  if (f.expectOneOf !== undefined &&
+      !(Array.isArray(f.expectOneOf) && f.expectOneOf.length > 0 && f.expectOneOf.every(isExpectFinal))) return false;
   // A race without a closed outcome set is unexecutable.
-  if (hasBarrier && x.expectOneOf === undefined) return false;
+  if (hasBarrier && f.expectOneOf === undefined) return false;
   return true;
 }
 ```
@@ -4678,6 +4817,8 @@ and skill_sha256. Wire contract version: 1.0.0.
 
 Any change to these from now on is a freeze amendment: spec revision first.
 ```
+
+Before tagging, confirm `docs/specs/2026-08-05-spec-interpretation-decisions.md` still matches what the code froze — it is the operator-signed record of the six readings this tag makes binding, and a drifted footnote is worse than none.
 
 ```bash
 git add packages/contract/fixtures CHANGELOG.md README.md packages/contract/package.json packages/contract/test
