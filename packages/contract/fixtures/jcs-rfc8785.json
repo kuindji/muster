@@ -1,0 +1,144 @@
+[
+  {
+    "name": "Section 3.2.3 canonical sample",
+    "input": {
+      "numbers": [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27],
+      "string": "€$\u000f\nA'B\"\\\\\"/",
+      "literals": [null, true, false]
+    },
+    "expected": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\\\\\"/\"}"
+  },
+  {
+    "name": "Section 3.2.3 UTF-16 property sorting",
+    "input": {
+      "€": "Euro Sign",
+      "\r": "Carriage Return",
+      "דּ": "Hebrew Letter Dalet With Dagesh",
+      "1": "One",
+      "😀": "Emoji: Grinning Face",
+      "": "Control",
+      "ö": "Latin Small Letter O With Diaeresis"
+    },
+    "expected": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\":\"Control\",\"ö\":\"Latin Small Letter O With Diaeresis\",\"€\":\"Euro Sign\",\"😀\":\"Emoji: Grinning Face\",\"דּ\":\"Hebrew Letter Dalet With Dagesh\"}"
+  },
+  {
+    "name": "Appendix B zero",
+    "input": 0,
+    "expected": "0"
+  },
+  {
+    "name": "Appendix B minus zero",
+    "input": -0,
+    "expected": "0"
+  },
+  {
+    "name": "Appendix B minimum positive number",
+    "input": 5e-324,
+    "expected": "5e-324"
+  },
+  {
+    "name": "Appendix B minimum negative number",
+    "input": -5e-324,
+    "expected": "-5e-324"
+  },
+  {
+    "name": "Appendix B maximum positive number",
+    "input": 1.7976931348623157e+308,
+    "expected": "1.7976931348623157e+308"
+  },
+  {
+    "name": "Appendix B maximum negative number",
+    "input": -1.7976931348623157e+308,
+    "expected": "-1.7976931348623157e+308"
+  },
+  {
+    "name": "Appendix B maximum positive integer",
+    "input": 9007199254740992,
+    "expected": "9007199254740992"
+  },
+  {
+    "name": "Appendix B maximum negative integer",
+    "input": -9007199254740992,
+    "expected": "-9007199254740992"
+  },
+  {
+    "name": "Appendix B approximately two to the 68",
+    "input": 295147905179352830000,
+    "expected": "295147905179352830000"
+  },
+  {
+    "name": "Appendix B below one e23",
+    "input": 9.999999999999997e+22,
+    "expected": "9.999999999999997e+22"
+  },
+  {
+    "name": "Appendix B one e23",
+    "input": 1e+23,
+    "expected": "1e+23"
+  },
+  {
+    "name": "Appendix B above one e23",
+    "input": 1.0000000000000001e+23,
+    "expected": "1.0000000000000001e+23"
+  },
+  {
+    "name": "Appendix B integer serialization 44b1ae4d6e2ef4e",
+    "input": 999999999999999700000,
+    "expected": "999999999999999700000"
+  },
+  {
+    "name": "Appendix B integer serialization 44b1ae4d6e2ef4f",
+    "input": 999999999999999900000,
+    "expected": "999999999999999900000"
+  },
+  {
+    "name": "Appendix B one e21",
+    "input": 1e+21,
+    "expected": "1e+21"
+  },
+  {
+    "name": "Appendix B below one e-6",
+    "input": 9.999999999999997e-7,
+    "expected": "9.999999999999997e-7"
+  },
+  {
+    "name": "Appendix B one e-6",
+    "input": 0.000001,
+    "expected": "0.000001"
+  },
+  {
+    "name": "Appendix B repeating fraction 41b3de4355555553",
+    "input": 333333333.3333332,
+    "expected": "333333333.3333332"
+  },
+  {
+    "name": "Appendix B repeating fraction 41b3de4355555554",
+    "input": 333333333.33333325,
+    "expected": "333333333.33333325"
+  },
+  {
+    "name": "Appendix B repeating fraction 41b3de4355555555",
+    "input": 333333333.3333333,
+    "expected": "333333333.3333333"
+  },
+  {
+    "name": "Appendix B repeating fraction 41b3de4355555556",
+    "input": 333333333.3333334,
+    "expected": "333333333.3333334"
+  },
+  {
+    "name": "Appendix B repeating fraction 41b3de4355555557",
+    "input": 333333333.33333343,
+    "expected": "333333333.33333343"
+  },
+  {
+    "name": "Appendix B negative small fraction",
+    "input": -0.0000033333333333333333,
+    "expected": "-0.0000033333333333333333"
+  },
+  {
+    "name": "Appendix B round to even",
+    "input": 1424953923781206.2,
+    "expected": "1424953923781206.2"
+  }
+]

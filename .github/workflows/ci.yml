@@ -16,7 +16,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check:invariants
         continue-on-error: false
-        if: ${{ hashFiles('packages/contract/package.json') != '' }}
       - run: pnpm build
       - run: pnpm -r --if-present typecheck
       - run: pnpm test
