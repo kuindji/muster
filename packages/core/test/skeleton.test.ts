@@ -28,7 +28,7 @@ describe("event schema (spec 7)", () => {
 
   it("has one append-only audit member per spec-7 category", () => {
     expect(AUDIT_EVENT_TYPES).toEqual([
-      "enrollment", "lease", "lease_extend", "submit", "verdict", "gate_decision",
+      "enrollment", "lease", "lease_requeue", "lease_extend", "submit", "verdict", "gate_decision",
       "escalation_charge", "adjudication", "state_change", "permit_epoch_change",
       "contract_transition", "authorization_validity_change",
     ]);
@@ -85,6 +85,42 @@ describe("event schema (spec 7)", () => {
       lease: { resolved: false },
     };
     void bad;
+  });
+
+  it("records every worker-state lease requeue with its frozen identity", () => {
+    const requeued: MusterEvent = {
+      type: "lease_requeue",
+      at: "2026-08-06T17:00:00.000Z",
+      classId: "extract-claims",
+      jobId: "job-1",
+      collectionCycle: 2,
+      leaseId: "lease-1",
+      workerId: "worker-1",
+      providerSurface: "provider.example",
+      contractVersion: "1.0.0",
+      permitEpoch: "epoch-3",
+      reason: "worker_suspended",
+    };
+    expect(requeued).toMatchObject({
+      leaseId: "lease-1",
+      contractVersion: "1.0.0",
+      permitEpoch: "epoch-3",
+    });
+
+    // @ts-expect-error a requeue must retain its stamped permit epoch
+    const incomplete: MusterEvent = {
+      type: "lease_requeue",
+      at: "t",
+      classId: "c",
+      jobId: "j",
+      collectionCycle: 1,
+      leaseId: "l",
+      workerId: "w",
+      providerSurface: "p",
+      contractVersion: "v",
+      reason: "worker_revoked",
+    };
+    void incomplete;
   });
 
   it("a verdict receipt cannot lose or invent its reject outcome", () => {

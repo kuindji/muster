@@ -69,7 +69,7 @@
   },
   {
     "id": "worker-suspension-requeues-open-leases",
-    "description": "Suspension or revocation and closure/requeue of every holder lease are one atomic worker-state command."
+    "description": "Suspension or revocation and closure/requeue of every holder lease are one atomic worker-state command whose outcome retains each lease's class, job cycle, contract version, and permit epoch for audit."
   },
   {
     "id": "class-version-schema-digest-conflict",

@@ -413,6 +413,8 @@ export interface RequeuedLeaseIdentity {
   classId: string;
   jobId: string;
   collectionCycle: number;
+  contractVersion: string;
+  permitEpoch: string;
 }
 
 export type WorkerStateTransitionOutcome =

@@ -296,6 +296,8 @@ export class InMemoryStore implements Store {
             classId: lease.classId,
             jobId: lease.jobId,
             collectionCycle: lease.collectionCycle,
+            contractVersion: lease.contractVersion,
+            permitEpoch: lease.permitEpoch,
           });
         }
       }

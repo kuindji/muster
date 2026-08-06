@@ -475,6 +475,11 @@ const workerStateCase: StoreConformanceCase = {
     });
     assert(suspended.kind === "applied", "suspension must apply");
     assert(suspended.requeuedOpenLeases.length === 1, "suspension must requeue lease");
+    assert(
+      suspended.requeuedOpenLeases[0]?.contractVersion === "1.0.0" &&
+        suspended.requeuedOpenLeases[0]?.permitEpoch === "epoch-1",
+      "requeue identity must retain contract version and permit epoch for audit",
+    );
     const closed = await store.getLease("lease-1");
     assert(closed?.open === false, "suspension must close lease atomically");
     const routing = await store.getWorkerRoutingSnapshot("worker-1");

@@ -1,11 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 16)
+**Date:** 2026-08-04 (revision 17)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 5 completes
-the reviewed registration-input boundary; Milestone 2 runtime mechanics resume
-only from its reviewed local tag.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 6 is
+implemented locally and awaiting independent review; Milestone 2 Task 3 remains
+paused until the reviewed local tag exists.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -169,6 +169,16 @@ from the audit reserve that must cover it. Registration can therefore execute
 both frozen refusal rules without fabricating a payload or obtaining hidden
 deployment policy. These are contract corrections only; revision 16 implements
 no runtime engine and does not change the worker wire.
+
+Revision 17 closes the audit-output gap found by the first M2 Task-3
+implementation trace. Atomic suspension or revocation already returned the
+requeued open-lease identities, but those identities omitted the stamped
+contract version and permit epoch, and the frozen audit union had no event for
+the requeue. The Store outcome now retains those fields and the append-only
+schema adds one `lease_requeue` event per affected lease, including the opaque
+worker, provider surface, job cycle, contract version, permit epoch, and
+suspension/revocation reason. This is a contract correction only; revision 17
+implements no worker-control runtime and does not change the worker wire.
 
 ## 1. What Muster is
 
@@ -1669,8 +1679,11 @@ cannot reuse one job's `input_hash` for another.
 Worker suspension or revocation is likewise one atomic Store command: compare
 the expected worker state, perform the allowed worker-state transition, close
 and same-cycle requeue every still-open lease held by that worker, and return
-the affected lease identities. Accepted evidence is untouched. Exact receipt
-replay remains available to the authenticated mapped holder under section 6.5.
+the affected lease identities, including each stamped contract version and
+permit epoch. Core emits one worker `state_change` event and one
+`lease_requeue` event per returned identity. Accepted evidence is untouched.
+Exact receipt replay remains available to the authenticated mapped holder under
+section 6.5.
 
 Class-version registration durably stores `(classId, contractVersion)`, the
 canonical payload- and output-schema hashes, lifecycle state, and lifecycle
@@ -2034,10 +2047,10 @@ heartbeat workers pay for.
 
 ## 7. Observability, privacy, retention
 
-An append-only event schema — enrollment, lease, extend, submit, verdict, gate
-decision, escalation, adjudication, state change, authorization-validity
-change, permit epoch change, contract transition — and metrics dimensioned by
-worker, provider, job class, and
+An append-only event schema — enrollment, lease, lease requeue, extend, submit,
+verdict, gate decision, escalation, adjudication, state change,
+authorization-validity change, permit epoch change, contract transition — and
+metrics dimensioned by worker, provider, job class, and
 contract version: lease latency, expiry rate, split rate, canary failure, audit
 failure, validator failure, duplicate-lease count, agreement clustering,
 diversity shortfall, escalation budget consumption, adjudication backlog,
@@ -2288,9 +2301,10 @@ concurrency suite; the prompt-injection corpus.
 
 Milestone one completed as `contract-freeze-1` on 2026-08-06, with reviewed
 amendments tagged `contract-freeze-2`, `contract-freeze-3`,
-`contract-freeze-4`, and `contract-freeze-5`. Revisions 13-16 do not reopen
-runtime feature scope; they correct the frozen boundary before runtime mechanics
-depend on it.
+`contract-freeze-4`, and `contract-freeze-5`. Revision 17 is the local,
+unreviewed `contract-freeze-6` amendment. Revisions 13-17 do not reopen runtime
+feature scope; they correct the frozen boundary before runtime mechanics depend
+on it.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2354,7 +2368,23 @@ The amendment changes only the consumer-loaded internal contract. Wire version
 records remain unchanged. M2 Task 2 resumes only from an independently reviewed
 commit tagged `contract-freeze-5`.
 
-### 11.6 Open
+### 11.6 Contract-freeze amendment 6: worker-state lease-requeue audit output
+
+Revision 17 is complete only when `WorkerStateTransitionOutcome` retains the
+class, job cycle, contract version, and permit epoch of every open lease closed
+and requeued by suspension or revocation; `MusterAuditEvent` has a distinct
+`lease_requeue` member carrying that identity plus worker, provider surface,
+and reason; and Store conformance proves the stamped version and epoch survive
+the atomic transition. The worker `state_change` event remains one event for
+the state transition itself, while `lease_requeue` is emitted once per affected
+lease. Neither event may be substituted for the other.
+
+The amendment changes only the internal core/Store and append-only audit
+boundary. Wire version `1.1.0`, worker MCP schemas, hash envelopes, job/result
+state, and requeue behavior remain unchanged. M2 Task 3 resumes only from an
+independently reviewed commit tagged `contract-freeze-6`.
+
+### 11.7 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

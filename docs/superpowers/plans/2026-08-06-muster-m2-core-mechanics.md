@@ -1,7 +1,7 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 16 and `contract-freeze-5`, including an
+`@kuindji/muster-core` against revision 17 and `contract-freeze-6`, including an
 in-memory Store and reusable Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -21,7 +21,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-5 (satisfied)
+## Entry gate: contract-freeze-6 (awaiting independent review)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -67,11 +67,19 @@ schema-valid payload to each agreement fixture and make the weekly retrospective
 audit projection explicit. Task 2 may resume only from the independently
 reviewed `contract-freeze-5` tag.
 
+The first Task-3 implementation trace then found that the atomic worker-state
+transition returned too little identity for the plan's required per-lease audit
+events and that the frozen event union had no lease-requeue member. Revision 17
+and the separate
+`2026-08-06-muster-contract-freeze-6-worker-requeue-audit.md` amendment add the
+minimal Store outcome and audit event. Task 3 may begin only after independent
+review and the local `contract-freeze-6` tag.
+
 ## Global constraints
 
-- Revision 16 and `contract-freeze-5` are normative. The worker wire version is
-  the version recorded by that freeze. Frozen exported types, tables, state
-  machines, schemas, and fixtures are read-only in M2.
+- Revision 17 and `contract-freeze-6` are normative after the entry gate is
+  reviewed and tagged. The worker wire version is unchanged. Frozen exported
+  types, tables, state machines, schemas, and fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,
   filesystem, environment, or model-inference API.
 - Core sees only opaque `WorkerId`; raw OAuth issuer and subject fields stop at
@@ -143,8 +151,9 @@ cover each rejection family and durable replay/conflict behavior.
   recording, slot assignment, contract acceptance, probation, and the frozen
   worker state machine. Registration atomically persists the worker and its
   core-prepared zero-usage contribution window/assigned-slot occurrence.
-- Suspension/revocation must use the atomic Store transition and emit audit
-  events for the worker and every requeued open lease.
+- Suspension/revocation must use the atomic Store transition, emit one worker
+  state-change audit event, and emit one identity-bearing `lease_requeue` audit
+  event for every requeued open lease.
 
 ## Task 4: Enqueue, routing, and lease lifecycle
 

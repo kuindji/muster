@@ -21,7 +21,7 @@ export const NOTIFICATION_TYPES = deepFreeze([
 ] as const);
 
 export const AUDIT_EVENT_TYPES = deepFreeze([
-  "enrollment", "lease", "lease_extend", "submit", "verdict", "gate_decision",
+  "enrollment", "lease", "lease_requeue", "lease_extend", "submit", "verdict", "gate_decision",
   "escalation_charge", "adjudication", "state_change", "permit_epoch_change",
   "contract_transition", "authorization_validity_change",
 ] as const);
@@ -96,6 +96,14 @@ export type MusterAuditEvent =
       contractVersion: string;
       permitEpoch: string;
       canary: boolean;
+    })
+  | (JobCycleScoped<"lease_requeue"> & {
+      leaseId: string;
+      workerId: WorkerId;
+      providerSurface: string;
+      contractVersion: string;
+      permitEpoch: string;
+      reason: "worker_suspended" | "worker_revoked";
     })
   | (Base<"lease_extend"> &
       { leaseId: string; workerId: WorkerId } &
