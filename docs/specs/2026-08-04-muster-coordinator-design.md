@@ -3,9 +3,9 @@
 **Date:** 2026-08-04 (revision 18)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 7 is
-implemented locally and awaiting independent review; Milestone 2 Task 3 remains
-paused until the reviewed local tag exists.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 7 completed
+the reviewed worker-control policy boundary; Milestone 2 Task 3 may resume only
+from its reviewed local tag.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -2327,10 +2327,9 @@ concurrency suite; the prompt-injection corpus.
 
 Milestone one completed as `contract-freeze-1` on 2026-08-06, with reviewed
 amendments tagged `contract-freeze-2`, `contract-freeze-3`,
-`contract-freeze-4`, `contract-freeze-5`, and `contract-freeze-6`. Revision 18
-is the local, unreviewed `contract-freeze-7` amendment. Revisions 13-18 do not
-reopen runtime feature scope; they correct the frozen boundary before runtime
-mechanics depend on it.
+`contract-freeze-4`, `contract-freeze-5`, `contract-freeze-6`, and
+`contract-freeze-7`. Revisions 13-18 do not reopen runtime feature scope; they
+correct the frozen boundary before runtime mechanics depend on it.
 
 ### 11.2 Contract-freeze amendment 2
 

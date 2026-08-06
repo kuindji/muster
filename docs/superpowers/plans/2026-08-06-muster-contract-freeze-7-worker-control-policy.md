@@ -1,7 +1,7 @@
 # Muster contract-freeze-7 worker-control policy amendment plan
 
-**Status:** Implemented locally in coordinator revision 18; awaiting independent
-review and the `contract-freeze-7` tag. M2 Task 3 runtime work remains paused.
+**Status:** Complete in coordinator revision 18 and the local
+`contract-freeze-7` tag. No worker-control runtime mechanics were added.
 
 **Goal:** Amend revision 17 into revision 18 so worker enrollment, probation,
 and slot/contribution routing use explicit deterministic deployment policy

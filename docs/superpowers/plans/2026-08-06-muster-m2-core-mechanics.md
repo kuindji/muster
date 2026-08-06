@@ -21,7 +21,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-7 (awaiting independent review)
+## Entry gate: contract-freeze-7 (satisfied)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -84,9 +84,9 @@ independent review and the local `contract-freeze-7` tag.
 
 ## Global constraints
 
-- Revision 18 and `contract-freeze-7` are normative after the entry gate is
-  reviewed and tagged. The worker wire version is unchanged. Frozen exported
-  types, tables, state machines, schemas, and fixtures are read-only in M2.
+- Revision 18 and `contract-freeze-7` are normative. The worker wire version is
+  unchanged. Frozen exported types, tables, state machines, schemas, and
+  fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,
   filesystem, environment, or model-inference API.
 - Core sees only opaque `WorkerId`; raw OAuth issuer and subject fields stop at
