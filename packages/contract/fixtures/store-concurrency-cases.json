@@ -1,0 +1,54 @@
+[
+  {
+    "id": "concurrent-claim-single-winner",
+    "description": "Two concurrent claimLease calls for one claimable job produce exactly one lease and one no-work result."
+  },
+  {
+    "id": "no-double-lease-per-job",
+    "description": "No interleaving may leave two open leases for the same job and collection cycle."
+  },
+  {
+    "id": "worker-id-binding-rejects-other-holder",
+    "description": "Submission, extension, and abandonment by a worker other than the lease holder are refused without disclosing lease state."
+  },
+  {
+    "id": "submit-idempotency-exact-triple",
+    "description": "Concurrent submissions with the same lease, input hash, and result hash yield one acceptance and byte-identical replays."
+  },
+  {
+    "id": "conflicting-retry-preserves-accepted-row",
+    "description": "A different input or result hash for a lease with an accepted row conflicts and cannot overwrite that row."
+  },
+  {
+    "id": "expiry-requeue-atomic",
+    "description": "Lease expiry and same-cycle requeue are one transaction with no observable expired-but-not-requeued interval."
+  },
+  {
+    "id": "result-requeue-cycle-increment-atomic",
+    "description": "A result-level requeue terminalizes the old cycle and creates exactly one next cycle atomically."
+  },
+  {
+    "id": "new-cycle-hash-and-epoch-atomic",
+    "description": "The new collection cycle, current permit epoch, and recomputed input hash become visible together or not at all."
+  },
+  {
+    "id": "old-cycle-replicas-excluded",
+    "description": "Replica listing for a new collection cycle never returns accepted evidence from an earlier cycle."
+  },
+  {
+    "id": "authorization-identity-per-intent-id",
+    "description": "Concurrent authorization calls sharing an effect intent ID create one identity; exact inputs replay and different inputs conflict."
+  },
+  {
+    "id": "verdict-single-accepted-per-request",
+    "description": "Concurrent verdicts for one adjudication request persist at most one canonical verdict and one terminal transition."
+  },
+  {
+    "id": "charge-key-idempotent-under-race",
+    "description": "Concurrent reserve charges with the same charge key consume capacity exactly once."
+  },
+  {
+    "id": "reserve-last-unit-race-fails-closed",
+    "description": "Two authorizations racing for a lane's final unit yield one authorized and charged result plus one escalation-budget denial, never overdraw or uncharged authorization."
+  }
+]

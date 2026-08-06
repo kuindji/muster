@@ -1,0 +1,422 @@
+[
+  {
+    "id": "enqueue-hashes-exact-sanitized-payload",
+    "version": 1,
+    "area": "payload_binding",
+    "description": "Enqueue persists and hashes the exact canonical sanitized payload rather than a reference or pre-sanitized input.",
+    "setup": { "input:raw": { "title": "  claim  ", "secret": "removed" } },
+    "conditions": [],
+    "steps": [{ "command": "enqueue", "args": { "jobId": "j1", "sanitizedPayload": { "title": "claim" }, "inputHash": "ih-sanitized" }, "expect": { "kind": "enqueued" } }],
+    "expectFinal": { "states": { "job:j1": "collecting" }, "events": ["state_change"] }
+  },
+  {
+    "id": "input-hash-binds-both-schemas",
+    "version": 1,
+    "area": "payload_binding",
+    "description": "Changing either payload_schema or output_schema changes input_hash for otherwise identical class input.",
+    "setup": { "payload:p1": { "value": 1 } },
+    "conditions": [],
+    "steps": [{ "command": "enqueue", "args": { "jobId": "j2", "payloadSchema": "ps-v2", "outputSchema": "os-v1", "inputHash": "ih-schema-v2" }, "expect": { "kind": "enqueued" } }],
+    "expectFinal": { "states": { "job:j2": "collecting" } }
+  },
+  {
+    "id": "sub-retry-after-submission-closed",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "An exact retry after the accepted submission closes the lease replays the original receipt.",
+    "setup": { "submission:lease-1": { "inputHash": "ih-1", "resultHash": "rh-1", "outcome": "accepted" } },
+    "conditions": [],
+    "steps": [{ "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-1", "inputHash": "ih-1", "resultHash": "rh-1" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-1": "byte_identical" } }
+  },
+  {
+    "id": "sub-retry-after-lease-expiry",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "An exact accepted submission retry wins over the later lease-expiry terminal check.",
+    "setup": { "lease:lease-2": { "holder": "worker-1", "open": false }, "submission:lease-2": { "inputHash": "ih-2", "resultHash": "rh-2" } },
+    "conditions": [],
+    "steps": [{ "command": "expireLease", "args": { "leaseId": "lease-2" }, "expect": { "kind": "expired" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-2", "inputHash": "ih-2", "resultHash": "rh-2" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-2": "byte_identical" } }
+  },
+  {
+    "id": "sub-retry-after-contract-expiry",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "Contract expiry does not erase the exact-retry receipt for an already accepted holder submission.",
+    "setup": { "submission:lease-3": { "inputHash": "ih-3", "resultHash": "rh-3" } },
+    "conditions": ["contract_expired"],
+    "steps": [{ "command": "contractExpire", "args": { "contractVersion": "1.0.0" }, "expect": { "kind": "expired" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-3", "inputHash": "ih-3", "resultHash": "rh-3" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-3": "byte_identical" } }
+  },
+  {
+    "id": "sub-retry-after-admission-halt",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "Admission halt refuses new work but preserves exact retries for accepted in-flight submissions.",
+    "setup": { "submission:lease-4": { "inputHash": "ih-4", "resultHash": "rh-4" } },
+    "conditions": ["admission_halted"],
+    "steps": [{ "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-4", "inputHash": "ih-4", "resultHash": "rh-4" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-4": "byte_identical" } }
+  },
+  {
+    "id": "sub-retry-after-emergency-halt",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "Emergency halt invalidates future use but does not prevent an authenticated holder from replaying its immutable receipt.",
+    "setup": { "submission:lease-5": { "inputHash": "ih-5", "resultHash": "rh-5" } },
+    "conditions": ["emergency_halted"],
+    "steps": [{ "command": "emergencyHalt", "args": { "classId": "c1" }, "expect": { "kind": "halted" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-5", "inputHash": "ih-5", "resultHash": "rh-5" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-5": "byte_identical" } }
+  },
+  {
+    "id": "sub-retry-after-permit-withdrawal",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "Permit withdrawal supersedes work while retaining byte-identical replay of previously accepted receipts.",
+    "setup": { "submission:lease-6": { "inputHash": "ih-6", "resultHash": "rh-6", "permitEpoch": "e1" } },
+    "conditions": ["emergency_permit_withdrawal"],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "permitEpoch": "e1" }, "expect": { "kind": "withdrawn" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-6", "inputHash": "ih-6", "resultHash": "rh-6" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-6": "byte_identical" } }
+  },
+  {
+    "id": "sub-conflict-different-result",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "A retry with a different result hash conflicts and leaves the accepted row unchanged.",
+    "setup": { "submission:lease-7": { "inputHash": "ih-7", "resultHash": "rh-original" } },
+    "conditions": [],
+    "steps": [{ "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-7", "inputHash": "ih-7", "resultHash": "rh-different" }, "expect": { "kind": "conflict" } }],
+    "expectFinal": { "receipts": { "submission:lease-7": "terminal_immutable" } }
+  },
+  {
+    "id": "sub-exact-retry-wrong-worker-refused",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "Worker binding precedes replay lookup so another worker cannot retrieve an accepted receipt.",
+    "setup": { "lease:lease-8": { "holder": "worker-1" }, "submission:lease-8": { "inputHash": "ih-8", "resultHash": "rh-8" } },
+    "conditions": [],
+    "steps": [{ "command": "submit", "args": { "workerId": "worker-2", "leaseId": "lease-8", "inputHash": "ih-8", "resultHash": "rh-8" }, "expect": { "kind": "refused", "error": "lease_not_held" } }],
+    "expectFinal": { "receipts": { "submission:lease-8": "terminal_immutable" } }
+  },
+  {
+    "id": "extend-wrong-worker-refused",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "A non-holder cannot extend a lease and receives only the coarse refusal.",
+    "setup": { "lease:lease-9": { "holder": "worker-1", "open": true } },
+    "conditions": [],
+    "steps": [{ "command": "extendLease", "args": { "workerId": "worker-2", "leaseId": "lease-9" }, "expect": { "kind": "refused" } }],
+    "expectFinal": { "states": { "lease:lease-9": "open" } }
+  },
+  {
+    "id": "abandon-wrong-worker-refused",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "A non-holder cannot abandon or requeue another worker's lease.",
+    "setup": { "lease:lease-10": { "holder": "worker-1", "open": true } },
+    "conditions": [],
+    "steps": [{ "command": "abandonLease", "args": { "workerId": "worker-2", "leaseId": "lease-10" }, "expect": { "kind": "refused" } }],
+    "expectFinal": { "states": { "lease:lease-10": "open" } }
+  },
+  {
+    "id": "auth-exact-retry-replays-initial-receipt",
+    "version": 1,
+    "area": "authorization_retry",
+    "description": "An identical effect intent retry returns the immutable initial authorization receipt.",
+    "setup": { "authorization:intent-1": { "effectIntentHash": "eh-1", "decisionResultHash": "dh-1", "outcome": "pending_adjudication" } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "intent-1", "effectIntentHash": "eh-1", "decisionResultHash": "dh-1" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "authorization:intent-1": "byte_identical" } }
+  },
+  {
+    "id": "auth-authorized-retry-includes-same-authorization",
+    "version": 1,
+    "area": "authorization_retry",
+    "description": "An authorized retry replays the same complete ActionAuthorization inside its initial receipt.",
+    "setup": { "authorization:intent-2": { "effectIntentHash": "eh-2", "decisionResultHash": "dh-2", "outcome": "authorized", "authorizationRequestId": "ar-2" } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "intent-2", "effectIntentHash": "eh-2", "decisionResultHash": "dh-2" }, "expect": { "kind": "replayed", "outcome": "authorized", "authorizationRequestId": "ar-2" } }],
+    "expectFinal": { "receipts": { "authorization:intent-2": "byte_identical" } }
+  },
+  {
+    "id": "auth-conflict-different-decision-hash",
+    "version": 1,
+    "area": "authorization_retry",
+    "description": "Reusing an effect intent ID with a different decision result hash is an authorization conflict.",
+    "setup": { "authorization:intent-3": { "effectIntentHash": "eh-3", "decisionResultHash": "dh-original" } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "intent-3", "effectIntentHash": "eh-3", "decisionResultHash": "dh-different" }, "expect": { "kind": "conflict" } }],
+    "expectFinal": { "receipts": { "authorization:intent-3": "terminal_immutable" } }
+  },
+  {
+    "id": "auth-conflict-different-intent-hash",
+    "version": 1,
+    "area": "authorization_retry",
+    "description": "Reusing an effect intent ID with a different canonical intent hash is an authorization conflict.",
+    "setup": { "authorization:intent-4": { "effectIntentHash": "eh-original", "decisionResultHash": "dh-4" } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "intent-4", "effectIntentHash": "eh-different", "decisionResultHash": "dh-4" }, "expect": { "kind": "conflict" } }],
+    "expectFinal": { "receipts": { "authorization:intent-4": "terminal_immutable" } }
+  },
+  {
+    "id": "result-verdict-exact-retry",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "An identical result verdict retry replays the persisted canonical verdict receipt without consuming capacity twice.",
+    "setup": { "verdict:rr-1": { "verdictHash": "vh-1", "outcome": "resolved" } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-1", "verdictHash": "vh-1", "decision": "resolve" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "verdict:rr-1": "byte_identical" }, "charges": { "adjudication": 1 } }
+  },
+  {
+    "id": "result-verdict-conflict",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "A second different result verdict conflicts and preserves the canonical accepted verdict.",
+    "setup": { "verdict:rr-2": { "verdictHash": "vh-original", "outcome": "resolved" } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-2", "verdictHash": "vh-different", "decision": "reject" }, "expect": { "kind": "conflict" } }],
+    "expectFinal": { "receipts": { "verdict:rr-2": "terminal_immutable" } }
+  },
+  {
+    "id": "result-verdict-after-terminal",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "A new result verdict arriving after another terminal transition is rejected as terminal.",
+    "setup": { "resultAdjudication:rr-3": { "state": "expired" } },
+    "conditions": ["contract_expired"],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-3", "verdictHash": "vh-3", "decision": "resolve" }, "expect": { "kind": "terminal" } }],
+    "expectFinal": { "states": { "resultAdjudication:rr-3": "expired" } }
+  },
+  {
+    "id": "action-verdict-exact-retry",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "An identical action verdict retry replays the same receipt and authorization.",
+    "setup": { "verdict:ar-1": { "verdictHash": "avh-1", "outcome": "approved" } },
+    "conditions": [],
+    "steps": [{ "command": "applyActionAdjudicationVerdict", "args": { "authorizationRequestId": "ar-1", "verdictHash": "avh-1", "decision": "approve" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "verdict:ar-1": "byte_identical" } }
+  },
+  {
+    "id": "action-verdict-conflict",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "A different action verdict for the same request conflicts without changing the approved record.",
+    "setup": { "verdict:ar-2": { "verdictHash": "avh-original", "outcome": "approved" } },
+    "conditions": [],
+    "steps": [{ "command": "applyActionAdjudicationVerdict", "args": { "authorizationRequestId": "ar-2", "verdictHash": "avh-different", "decision": "reject" }, "expect": { "kind": "conflict" } }],
+    "expectFinal": { "receipts": { "verdict:ar-2": "terminal_immutable" } }
+  },
+  {
+    "id": "action-verdict-after-terminal",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "An action verdict cannot move a request that already reached a different terminal state.",
+    "setup": { "authorizationRequest:ar-3": { "state": "cancelled" } },
+    "conditions": ["operator_cancellation"],
+    "steps": [{ "command": "applyActionAdjudicationVerdict", "args": { "authorizationRequestId": "ar-3", "verdictHash": "avh-3", "decision": "approve" }, "expect": { "kind": "terminal" } }],
+    "expectFinal": { "states": { "authorizationRequest:ar-3": "cancelled" } }
+  },
+  {
+    "id": "invalidate-emergency-halted",
+    "version": 1,
+    "area": "invalidation",
+    "description": "Emergency halt cancels affected results, pending adjudications, and issued authorization validity atomically.",
+    "setup": { "result:j10:1": { "state": "verified" }, "authorization:ar-10": { "state": "authorized", "validity": "valid" } },
+    "conditions": ["emergency_halted"],
+    "steps": [{ "command": "emergencyHalt", "args": { "classId": "c1" }, "expect": { "kind": "invalidated", "reason": "emergency_halted" } }],
+    "expectFinal": { "states": { "result:j10:1": "cancelled", "authorization:ar-10": "invalid" }, "events": ["state_change"] }
+  },
+  {
+    "id": "invalidate-emergency-permit-withdrawal",
+    "version": 1,
+    "area": "invalidation",
+    "description": "Withdrawing a permit epoch supersedes its affected results and invalidates issued authorizations.",
+    "setup": { "result:j11:1": { "state": "verified", "permitEpoch": "e-old" } },
+    "conditions": ["emergency_permit_withdrawal"],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "permitEpoch": "e-old" }, "expect": { "kind": "invalidated", "reason": "emergency_permit_withdrawal" } }],
+    "expectFinal": { "states": { "result:j11:1": "superseded" } }
+  },
+  {
+    "id": "invalidate-contract-expired",
+    "version": 1,
+    "area": "invalidation",
+    "description": "Contract expiry expires affected results and invalidates authorizations under that version.",
+    "setup": { "result:j12:1": { "state": "verified", "contractVersion": "1.0.0" } },
+    "conditions": ["contract_expired"],
+    "steps": [{ "command": "contractExpire", "args": { "contractVersion": "1.0.0" }, "expect": { "kind": "invalidated", "reason": "contract_expired" } }],
+    "expectFinal": { "states": { "result:j12:1": "expired" } }
+  },
+  {
+    "id": "invalidate-max-in-flight",
+    "version": 1,
+    "area": "invalidation",
+    "description": "Max in-flight lifetime expiry invalidates prior authorizations and atomically starts a fresh cycle.",
+    "setup": { "result:j13:1": { "state": "verified", "collectionCycle": 1 } },
+    "conditions": ["max_in_flight_exceeded"],
+    "steps": [{ "command": "advanceTime", "args": { "seconds": 7201 }, "expect": { "kind": "expired_and_requeued", "newCollectionCycle": 2 } }],
+    "expectFinal": { "states": { "result:j13:1": "expired", "result:j13:2": "collecting" } }
+  },
+  {
+    "id": "invalidate-operator-cancelled",
+    "version": 1,
+    "area": "invalidation",
+    "description": "Operator cancellation cancels only the selected scope and invalidates its issued authorizations.",
+    "setup": { "result:j14:1": { "state": "verified" } },
+    "conditions": ["operator_cancellation"],
+    "steps": [{ "command": "operatorCancel", "args": { "jobId": "j14", "collectionCycle": 1 }, "expect": { "kind": "invalidated", "reason": "operator_cancelled" } }],
+    "expectFinal": { "states": { "result:j14:1": "cancelled" } }
+  },
+  {
+    "id": "retire-verified-before-second-intent",
+    "version": 1,
+    "area": "retirement",
+    "description": "A retired verified decision is unavailable to a new effect intent even though its historical record remains.",
+    "setup": { "decision:dh-20": { "state": "verified", "retired": true } },
+    "conditions": ["operator_cancellation"],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "intent-new", "decisionResultHash": "dh-20" }, "expect": { "kind": "refused", "error": "intent_invalid" } }],
+    "expectFinal": { "states": { "decision:dh-20": "retired" } }
+  },
+  {
+    "id": "withdrawal-supersedes-partially-authorized-result",
+    "version": 1,
+    "area": "retirement",
+    "description": "Permit withdrawal supersedes a result even when one authorization issued and another remains pending.",
+    "setup": { "result:j21:1": { "state": "verified", "permitEpoch": "e-old" }, "authorization:ar-21a": { "state": "authorized" }, "authorization:ar-21b": { "state": "pending_adjudication" } },
+    "conditions": ["emergency_permit_withdrawal"],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "permitEpoch": "e-old" }, "expect": { "kind": "superseded" } }],
+    "expectFinal": { "states": { "result:j21:1": "superseded", "authorization:ar-21a": "invalid", "authorization:ar-21b": "superseded" } }
+  },
+  {
+    "id": "requeue-after-rejected-dispute",
+    "version": 1,
+    "area": "requeue_cap",
+    "description": "A rejected result adjudication below the cap starts exactly one fresh collection cycle.",
+    "setup": { "job:j30": { "collectionCycle": 1, "rejectedDisputeRequeues": 0 } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-30", "decision": "reject", "cap": 2 }, "expect": { "kind": "applied", "rejectOutcome": "requeued" } }],
+    "expectFinal": { "states": { "result:j30:1": "rejected", "result:j30:2": "collecting" } }
+  },
+  {
+    "id": "requeue-cap-exhausted",
+    "version": 1,
+    "area": "requeue_cap",
+    "description": "A rejected dispute at the configured cap remains terminal and does not create another cycle.",
+    "setup": { "job:j31": { "collectionCycle": 3, "rejectedDisputeRequeues": 2 } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-31", "decision": "reject", "cap": 2 }, "expect": { "kind": "applied", "rejectOutcome": "cap_exhausted" } }],
+    "expectFinal": { "states": { "result:j31:3": "rejected" }, "events": ["dispute_requeue_exhausted"] }
+  },
+  {
+    "id": "rejected-dispute-starts-new-cycle",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "A result-level dispute requeue increments collectionCycle rather than replacing a lease in the same cycle.",
+    "setup": { "job:j40": { "collectionCycle": 1 } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-40", "decision": "reject", "newCycleEpoch": "e2", "newCycleInputHash": "ih-40-2" }, "expect": { "newCollectionCycle": 2 } }],
+    "expectFinal": { "states": { "result:j40:1": "rejected", "result:j40:2": "collecting" } }
+  },
+  {
+    "id": "old-cycle-receipt-replays",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "Starting a new collection cycle does not erase lease-keyed receipts from an older cycle.",
+    "setup": { "job:j41": { "collectionCycle": 2 }, "submission:lease-old": { "collectionCycle": 1, "inputHash": "ih-old", "resultHash": "rh-old" } },
+    "conditions": [],
+    "steps": [{ "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-old", "inputHash": "ih-old", "resultHash": "rh-old" }, "expect": { "kind": "replayed" } }],
+    "expectFinal": { "receipts": { "submission:lease-old": "byte_identical" } }
+  },
+  {
+    "id": "old-cycle-replicas-excluded-from-new-cycle",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "Verification queries for cycle two cannot see accepted replicas from cycle one.",
+    "setup": { "replica:lease-old": { "jobId": "j42", "collectionCycle": 1 }, "job:j42": { "collectionCycle": 2 } },
+    "conditions": [],
+    "steps": [{ "command": "claimLease", "args": { "jobId": "j42", "collectionCycle": 2 }, "expect": { "acceptedReplicaCount": 0 } }],
+    "expectFinal": { "states": { "result:j42:2": "collecting" } }
+  },
+  {
+    "id": "lease-expiry-stays-in-cycle",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "Lease expiry is attempt replacement and requeues work without incrementing collectionCycle.",
+    "setup": { "job:j43": { "collectionCycle": 1 }, "lease:lease-43": { "open": true } },
+    "conditions": [],
+    "steps": [{ "command": "expireLease", "args": { "leaseId": "lease-43", "sameCyclePermitEpoch": "e1" }, "expect": { "kind": "requeued", "collectionCycle": 1 } }],
+    "expectFinal": { "states": { "result:j43:1": "collecting" } }
+  },
+  {
+    "id": "mixed-cycle-evidence-refused",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "Agreement, verdict, and authorization evidence must all belong to the declared collection cycle.",
+    "setup": { "result:j44:2": { "state": "pending_result_adjudication" } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-44", "collectionCycle": 2, "evidenceCycles": [1, 2], "decision": "resolve" }, "expect": { "kind": "refused", "error": "mixed_collection_cycles" } }],
+    "expectFinal": { "states": { "result:j44:2": "pending_result_adjudication" } }
+  },
+  {
+    "id": "new-cycle-recomputes-input-hash",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "A result-level requeue atomically stamps the new epoch and recomputed input hash for the new cycle.",
+    "setup": { "job:j45": { "collectionCycle": 1, "permitEpoch": "e1", "inputHash": "ih-45-1" } },
+    "conditions": [],
+    "steps": [{ "command": "applyResultAdjudicationVerdict", "args": { "requestId": "rr-45", "decision": "reject", "newCycleEpoch": "e2", "newCycleInputHash": "ih-45-2" }, "expect": { "newCollectionCycle": 2 } }],
+    "expectFinal": { "states": { "job:j45:2": "collecting" } }
+  },
+  {
+    "id": "epoch-sticky-through-requeue",
+    "version": 1,
+    "area": "epoch_assignment",
+    "description": "Lease expiry and abandonment remain in-cycle and retain that cycle's stamped permit epoch.",
+    "setup": { "job:j50": { "collectionCycle": 1, "permitEpoch": "e1" } },
+    "conditions": ["permit_epoch"],
+    "steps": [{ "command": "expireLease", "args": { "leaseId": "lease-50", "sameCyclePermitEpoch": "e1" }, "expect": { "permitEpoch": "e1", "collectionCycle": 1 } }],
+    "expectFinal": { "states": { "job:j50:1": "collecting" } }
+  },
+  {
+    "id": "epoch-current-after-max-in-flight",
+    "version": 1,
+    "area": "epoch_assignment",
+    "description": "Max in-flight expiry creates a new cycle stamped with the current permit epoch.",
+    "setup": { "job:j51": { "collectionCycle": 1, "permitEpoch": "e1" }, "operator:permit": { "currentEpoch": "e2" } },
+    "conditions": ["max_in_flight_exceeded"],
+    "steps": [{ "command": "advanceTime", "args": { "seconds": 7201 }, "expect": { "newCollectionCycle": 2, "permitEpoch": "e2" } }],
+    "expectFinal": { "states": { "job:j51:2": "collecting" } }
+  },
+  {
+    "id": "epoch-split-evidence-reroute-stays",
+    "version": 1,
+    "area": "epoch_assignment",
+    "description": "Split-evidence rerouting continues under the result cycle's stamped epoch rather than adopting a newer epoch.",
+    "setup": { "result:j52:1": { "state": "pending_result_adjudication", "permitEpoch": "e1" }, "operator:permit": { "currentEpoch": "e2" } },
+    "conditions": ["permit_epoch"],
+    "steps": [{ "command": "openResultAdjudication", "args": { "jobId": "j52", "collectionCycle": 1 }, "expect": { "kind": "opened_charged", "permitEpoch": "e1" } }],
+    "expectFinal": { "states": { "result:j52:1": "pending_result_adjudication" } }
+  },
+  {
+    "id": "auth-urgent-saturated-denial",
+    "version": 1,
+    "area": "urgent_saturation",
+    "description": "An urgent-lane intent racing saturated capacity is denied atomically with a terminal typed receipt.",
+    "setup": { "decision:dh-60": { "state": "verified" } },
+    "conditions": ["urgent_saturated"],
+    "steps": [{ "command": "saturateReserve", "args": { "lane": "urgent" }, "expect": { "kind": "saturated" } }, { "command": "authorizeActions", "args": { "effectIntentId": "intent-60", "decisionResultHash": "dh-60", "actions": ["routeToHumanUrgent"] }, "expect": { "kind": "applied", "outcome": "denied", "denialReason": "escalation_budget_exhausted" } }],
+    "expectFinal": { "states": { "authorization:intent-60": "denied" }, "events": ["urgent_uncovered"], "charges": { "urgent": 0 }, "receipts": { "authorization:intent-60": "terminal_immutable" } }
+  },
+  {
+    "id": "urgent-fresh-intent-after-window",
+    "version": 1,
+    "area": "urgent_saturation",
+    "description": "After the reserve window rolls, a fresh effect intent ID can consume newly available urgent capacity.",
+    "setup": { "reserve:urgent": { "state": "saturated", "week": "2026-W32" }, "decision:dh-61": { "state": "verified" } },
+    "conditions": ["urgent_saturated"],
+    "steps": [{ "command": "rollReserveWindow", "args": { "week": "2026-W33" }, "expect": { "lane": "urgent", "state": "available" } }, { "command": "authorizeActions", "args": { "effectIntentId": "intent-61-new", "decisionResultHash": "dh-61", "actions": ["routeToHumanUrgent"] }, "expect": { "kind": "applied", "outcome": "authorized" } }],
+    "expectFinal": { "states": { "authorization:intent-61-new": "authorized" }, "charges": { "urgent": 1 } }
+  }
+]
