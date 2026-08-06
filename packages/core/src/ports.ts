@@ -6,10 +6,12 @@ import type {
   AuthorizationDenialReason,
   AuthorizationInitialReceipt,
   AuthorizationInvalidationReason,
+  AuthorizationRequestState,
   AuthorizationStatus,
   AutomaticVerificationStrength,
   CanonicalJsonValue,
   ClassHealth,
+  ContractLifecycleState,
   EffectIntent,
   ResultAdjudicationRequest,
   ResultAdjudicationVerdict,
@@ -42,6 +44,44 @@ export interface AdjudicationSource {
   authenticate(
     verdict: ResultAdjudicationVerdict | ActionAdjudicationVerdict,
   ): boolean;
+}
+
+export type ReputationEvidenceSource =
+  | "checked_success"
+  | "adjudicated_falsehood"
+  | "deterministic_oracle"
+  | "completeness_oracle"
+  | "held_out_canary"
+  | "human_audit"
+  | "published_correction"
+  | "structural_failure"
+  | "validator_failure"
+  | "post_payload_abandonment"
+  | "escalation_quota_abuse";
+
+interface ReputationEvidenceRecordBase {
+  evidenceId: string;
+  workerId: WorkerId;
+  at: Timestamp;
+  job?: { jobId: string; collectionCycle: number };
+  detailHash?: string;
+}
+
+export type ReputationEvidenceRecord = ReputationEvidenceRecordBase &
+  (
+    | { source: "checked_success"; impact: "positive" }
+    | {
+        source: Exclude<ReputationEvidenceSource, "checked_success">;
+        impact: "negative";
+      }
+  );
+
+/** Consumer-owned routing policy; deterministic and I/O-free. */
+export interface ReputationPolicy {
+  assess(input: {
+    worker: WorkerRecord;
+    evidence: readonly ReputationEvidenceRecord[];
+  }): { eligible: boolean; /** Finite routing tiebreaker. */ priority: number };
 }
 
 export interface WorkerRecord {
@@ -114,6 +154,140 @@ export interface LeaseRecord {
   open: boolean;
 }
 
+export interface ClassVersionRecord {
+  classId: string;
+  contractVersion: string;
+  payloadSchemaHash: string;
+  outputSchemaHash: string;
+  state: ContractLifecycleState;
+  registeredAt: Timestamp;
+  leaseDisabledAt?: Timestamp;
+  acceptedUntil?: Timestamp;
+}
+
+export interface ClassVersionRegistration {
+  classId: string;
+  contractVersion: string;
+  payloadSchemaHash: string;
+  outputSchemaHash: string;
+  registeredAt: Timestamp;
+}
+
+export type RegisterClassVersionOutcome =
+  | { kind: "registered"; record: ClassVersionRecord }
+  | { kind: "replayed"; record: ClassVersionRecord }
+  | { kind: "conflict"; existing: ClassVersionRecord };
+
+export type ContractTransitionOutcome =
+  | { kind: "applied"; record: ClassVersionRecord }
+  | { kind: "replayed"; record: ClassVersionRecord }
+  | { kind: "state_conflict"; actual: ContractLifecycleState }
+  | { kind: "not_found" };
+
+export interface RequeuedLeaseIdentity {
+  leaseId: string;
+  classId: string;
+  jobId: string;
+  collectionCycle: number;
+}
+
+export type WorkerStateTransitionOutcome =
+  | {
+      kind: "applied" | "replayed";
+      worker: WorkerRecord;
+      requeuedOpenLeases: RequeuedLeaseIdentity[];
+    }
+  | { kind: "state_conflict"; actual: WorkerState }
+  | { kind: "not_found" };
+
+export type InvalidationScope =
+  | { kind: "class"; classId: string }
+  | {
+      kind: "job_cycles";
+      classId: string;
+      jobCycles: Array<{ jobId: string; collectionCycle: number }>;
+    }
+  | {
+      kind: "decision_results";
+      classId: string;
+      decisionResultHashes: string[];
+    }
+  | { kind: "permit_epoch"; classId: string; permitEpoch: string }
+  | {
+      kind: "contract_version";
+      classId: string;
+      contractVersion: string;
+    };
+
+export interface InvalidationTarget {
+  jobId: string;
+  collectionCycle: number;
+  state: ResultState;
+  inputHash: string;
+  permitEpoch: string;
+  contractVersion: string;
+}
+
+export interface CycleRequeuePlan {
+  jobId: string;
+  fromCollectionCycle: number;
+  newCollectionCycle: number;
+  permitEpoch: string;
+  inputHash: string;
+  cycleStartedAt: Timestamp;
+}
+
+export interface PermitEpochTransition {
+  classId: string;
+  fromEpoch: string | null;
+  toEpoch: string;
+}
+
+export type PermitEpochTransitionOutcome =
+  | { kind: "applied" | "replayed"; currentEpoch: string }
+  | { kind: "conflict"; currentEpoch: string | null };
+
+export interface InvalidationSnapshot {
+  scope: InvalidationScope;
+  targets: InvalidationTarget[];
+}
+
+export type InvalidationOutcome =
+  | { kind: "conflict"; current: InvalidationSnapshot }
+  | {
+      kind: "applied";
+      resultTransitions: Array<{
+        jobId: string;
+        collectionCycle: number;
+        from: ResultState;
+        to: ResultState;
+      }>;
+      authorizationTransitions: Array<{
+        authorizationRequestId: string;
+        from: AuthorizationRequestState;
+        to: AuthorizationRequestState;
+      }>;
+      invalidatedAuthorizations: Array<{
+        authorizationRequestId: string;
+        classId: string;
+        jobId: string;
+        collectionCycle: number;
+        reason: AuthorizationInvalidationReason;
+      }>;
+      newCycles: CycleRequeuePlan[];
+      epochTransition?: PermitEpochTransition;
+    };
+
+export interface PendingAdjudication<Request> {
+  request: Request;
+  openedAt: Timestamp;
+}
+
+export type ReputationEvidenceOutcome =
+  | { kind: "recorded"; record: ReputationEvidenceRecord }
+  | { kind: "replayed"; record: ReputationEvidenceRecord }
+  | { kind: "conflict"; existing: ReputationEvidenceRecord };
+
 export type SubmitOutcome =
   | { kind: "accepted"; receipt: SubmissionReceipt }
   | { kind: "replayed"; receipt: SubmissionReceipt }
@@ -164,6 +338,33 @@ export type TransitionOutcome =
 export interface Store {
   getWorker(workerId: WorkerId): Promise<WorkerRecord | null>;
   putWorker(record: WorkerRecord): Promise<void>;
+  transitionWorkerState(input: {
+    workerId: WorkerId;
+    from: WorkerState;
+    to: WorkerState;
+    at: Timestamp;
+  }): Promise<WorkerStateTransitionOutcome>;
+
+  registerClassVersion(
+    registration: ClassVersionRegistration,
+  ): Promise<RegisterClassVersionOutcome>;
+  getClassVersion(
+    classId: string,
+    contractVersion: string,
+  ): Promise<ClassVersionRecord | null>;
+  transitionClassVersion(input: {
+    classId: string;
+    contractVersion: string;
+    from: ContractLifecycleState;
+    to: ContractLifecycleState;
+    at: Timestamp;
+    leaseDisabledAt?: Timestamp;
+    acceptedUntil?: Timestamp;
+  }): Promise<ContractTransitionOutcome>;
+  getCurrentPermitEpoch(classId: string): Promise<string | null>;
+  transitionPermitEpoch(
+    transition: PermitEpochTransition & { at: Timestamp },
+  ): Promise<PermitEpochTransitionOutcome>;
 
   enqueueJob(input: {
     job: JobRecord;
@@ -273,20 +474,27 @@ export interface Store {
     authorizationRequestId: string,
   ): Promise<ActionAuthorization | null>;
 
+  inspectInvalidationScope(
+    scope: InvalidationScope,
+  ): Promise<InvalidationSnapshot>;
   invalidateResultScope(input: {
-    scope:
-      | { jobCycles: Array<{ jobId: string; collectionCycle: number }> }
-      | { decisionResultHashes: string[] }
-      | { permitEpoch: string }
-      | { contractVersion: string };
-    reason: AuthorizationInvalidationReason;
-    startNewCycle?: {
-      permitEpoch: string;
-      inputHash: string;
-      cycleStartedAt: Timestamp;
-    };
+    scope: InvalidationScope;
+    expectedTargets: InvalidationTarget[];
+    requeuePlans: CycleRequeuePlan[];
     at: Timestamp;
-  }): Promise<void>;
+  } & (
+    | {
+        reason: "emergency_permit_withdrawal";
+        epochTransition: PermitEpochTransition;
+      }
+    | {
+        reason: Exclude<
+          AuthorizationInvalidationReason,
+          "emergency_permit_withdrawal"
+        >;
+        epochTransition?: never;
+      }
+  )): Promise<InvalidationOutcome>;
 
   openResultAdjudication(input: {
     request: ResultAdjudicationRequest;
@@ -303,7 +511,7 @@ export interface Store {
   ): Promise<ResultAdjudicationRequest | null>;
   listPendingResultAdjudications(
     classId: string,
-  ): Promise<ResultAdjudicationRequest[]>;
+  ): Promise<Array<PendingAdjudication<ResultAdjudicationRequest>>>;
   applyResultAdjudicationVerdict(input: {
     verdict: ResultAdjudicationVerdict;
     verdictHash: string;
@@ -325,7 +533,7 @@ export interface Store {
   ): Promise<ActionAdjudicationRequest | null>;
   listPendingActionAdjudications(
     classId: string,
-  ): Promise<ActionAdjudicationRequest[]>;
+  ): Promise<Array<PendingAdjudication<ActionAdjudicationRequest>>>;
   applyActionAdjudicationVerdict(input: {
     verdict: ActionAdjudicationVerdict;
     verdictHash: string;
@@ -346,4 +554,10 @@ export interface Store {
     kind: string;
     detail: CanonicalJsonValue;
   }): Promise<void>;
+  recordReputationEvidence(
+    record: ReputationEvidenceRecord,
+  ): Promise<ReputationEvidenceOutcome>;
+  listReputationEvidence(
+    workerId: WorkerId,
+  ): Promise<ReputationEvidenceRecord[]>;
 }

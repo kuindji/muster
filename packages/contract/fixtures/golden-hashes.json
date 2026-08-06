@@ -14,24 +14,46 @@
         ]
       },
       "payload_schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "items": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text"
+              ],
+              "additionalProperties": false
+            }
           }
-        }
+        },
+        "required": [
+          "items"
+        ]
       },
       "job_class_id": "extract-claims",
       "contract_version": "1.0.0",
       "output_schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
         "type": "object",
+        "properties": {},
         "additionalProperties": false
       },
       "policy_version": "policy-1",
       "permit_epoch": "epoch-1"
     },
-    "hash": "06178a0d7c92a486c0fc718379cd977560355354d3d76fc29f524e88565f19f8"
+    "hash": "9de95d09d5fbfeb6ae03cb8a94d5a4ff076da9499c52a3e5dfc68e57721f28e9"
   },
   "result_hash": {
     "body": {

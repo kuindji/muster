@@ -1,5 +1,20 @@
 # Changelog
 
+## contract-freeze-2 — 2026-08-06
+
+Revision 13 amendment before Milestone 2. Freezes Muster Schema 1 and its
+zero-dependency structural/value/path implementation; class-qualified
+compare-and-apply invalidation; distinct per-cycle requeue hashes; atomic
+emergency epoch and worker-state/lease transitions; durable class-version
+schema identity and lifecycle; timestamped pending-adjudication reads;
+idempotent ordered reputation evidence and the pure consumer-owned
+`ReputationPolicy`; explicit authorization-validity audit events; and the
+corresponding schema, lifecycle, and concurrency fixtures. Wire contract
+version: `1.1.0`.
+
+No runtime coordinator mechanics, Postgres adapter, or MCP server behavior is
+included. `contract-freeze-1` remains historical.
+
 ## contract-freeze-1 — 2026-08-06
 
 Milestone 1 of

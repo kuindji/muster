@@ -16,6 +16,7 @@ export * from "./lifecycle-fixtures.js";
 export * from "./mcp-schemas.js";
 export * from "./oracle.js";
 export * from "./primitives.js";
+export * from "./schema.js";
 export * from "./skill.js";
 export * from "./states.js";
 export * from "./tables/action-gates.js";

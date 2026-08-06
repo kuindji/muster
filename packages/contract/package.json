@@ -12,14 +12,21 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./fixtures/golden-hashes.json": "./fixtures/golden-hashes.json",
+    "./fixtures/jcs-rfc8785.json": "./fixtures/jcs-rfc8785.json",
+    "./fixtures/lifecycle-fixtures.json": "./fixtures/lifecycle-fixtures.json",
+    "./fixtures/prompt-injection.json": "./fixtures/prompt-injection.json",
+    "./fixtures/schema-conformance.json": "./fixtures/schema-conformance.json",
+    "./fixtures/store-concurrency-cases.json": "./fixtures/store-concurrency-cases.json"
   },
-  "files": ["dist"],
+  "files": ["dist", "fixtures/*.json"],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "build": "tsup",
+    "fixtures:check": "node fixtures/generate.mjs --check",
     "fixtures:generate": "node fixtures/generate.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

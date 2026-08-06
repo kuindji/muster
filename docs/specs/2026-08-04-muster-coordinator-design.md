@@ -1,10 +1,10 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 12)
+**Date:** 2026-08-04 (revision 13)
 
-**Status:** Design, converged for `oneshot` scope. Authorizes an implementation
-plan for a one-shot v1; not code. The platform gate (section 9) blocks anything
-beyond a stub until it passes.
+**Status:** Design and executable contract, converged for `oneshot` scope.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 2 must be
+complete before Milestone 2 runtime mechanics begin.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -120,6 +120,18 @@ contains the immutable `ActionAuthorization` rather than changing response
 shape between the first call and replay. Revision 12 also absorbs revision
 11's signed `payloadSchema`, `job_class_id`, `policy_version`, `JsonPath`,
 `AbsenceDomain`, and `PrivacyClass` interpretations into the normative text.
+
+Revision 13 closes the pre-Milestone-2 implementability review. It defines the
+previously unnamed JSON Schema dialect that registration, structural result
+validation, effect validation, and path coverage depend on; the dialect is a
+closed, deterministic, reference-free subset implemented without adding a
+runtime dependency. It also amends the frozen core persistence boundary so
+class and epoch invalidation is class-qualified and compare-and-apply atomic,
+multi-job requeues carry one recomputed hash per cycle, worker suspension or
+revocation atomically closes that worker's open leases, class-version schema
+identity and lifecycle are durable, adjudication backlog age is observable,
+and reputation evidence is durable without freezing a universal scoring
+formula. These are freeze corrections, not coordinator runtime mechanics.
 
 ## 1. What Muster is
 
@@ -306,7 +318,7 @@ calibration job that opens probation. `enrolled -> active` is gated by section
 | `@kuindji/muster-mcp` | tool surfaces, skill Resource, OAuth and JWKS, rate limits, as a mountable handler | `muster-core`, `muster-contract` |
 
 `muster-core` performs no I/O. Ports: `Store`, `Clock`, `EventSink`,
-`AdmissionHook`, `AdjudicationSource`.
+`AdmissionHook`, `AdjudicationSource`, `ReputationPolicy`.
 
 ### 4.2 `JobClass`
 
@@ -419,6 +431,40 @@ interface AdjudicationPolicy {
 simply omit is not a control: a bounded consumer that never declares itself
 gets the weaker gate for free, which is the failure the flag existed to
 prevent.
+
+**Every class schema uses Muster Schema 1.** The root carries
+`$schema: 'urn:kuindji:muster:schema:1'`. This is a deliberately small,
+deterministic, reference-free JSON Schema dialect rather than an unspecified
+claim of compatibility with every JSON Schema draft. The allowed assertion
+keywords are `type`, `properties`, `required`, `additionalProperties`, `items`,
+`enum`, `const`, `minLength`, `maxLength`, `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum`, `minItems`, `maxItems`, `uniqueItems`,
+`minProperties`, and `maxProperties`; `title` and `description` are allowed
+annotations. Every schema node has one explicit type, or exactly one non-null
+type plus `null`. Every object node declares `properties` (empty is allowed)
+and `additionalProperties: false`; every array node has one `items` schema.
+Property names use the section 6.7
+`JsonPath` name grammar. Unknown keywords, boolean schemas, `$ref`, dynamic
+references, recursion, conditionals, combinators, coercion, defaults, formats,
+and regular-expression patterns are rejected at registration.
+
+`required` is a unique subset of declared properties. `enum` is non-empty,
+JCS-unique, type-correct, and mutually exclusive with `const`. Annotation
+values are strings. Size bounds are non-negative integers; numeric bounds are
+finite and their combined inclusive/exclusive interval must not be empty.
+Using a type-specific keyword with another type is a schema error.
+
+String length counts Unicode code points. Array uniqueness and `enum`/`const`
+identity use JCS byte identity. Numbers must be finite; `integer` means
+`Number.isInteger`. Bounds use exact JavaScript-number comparison because JCS
+already freezes the representable number domain. Validation returns all issues
+in deterministic instance-path then schema-path order. The executable dialect
+validator and schema-path walker live in `muster-contract`; registration,
+result validation, effect validation, and conformance suites call that one
+implementation rather than re-encoding these rules.
+The durable schema identity is
+`SHA-256(JCS(schema))`; `computeMusterSchemaHash` refuses an invalid schema
+before hashing it.
 
 Registration freezes the canonical `payloadSchema` and `outputSchema` for the
 class version and rejects any second registration of the same `(id,
@@ -1434,6 +1480,109 @@ work already in flight, or an attacker who triggers starvation also destroys
 the partially verified work in the queue. Rules 9–11 must not be collapsed into
 one generic saturation state.
 
+**Atomic persistence boundary.** These precedence rules are domain commands,
+not a sequence of row-level updates. Every invalidation scope is explicitly
+class-qualified. Core first reads an immutable target snapshot, computes one
+new-cycle hash and epoch for each collecting cycle that must be requeued, and
+submits the complete expected target set plus those per-cycle plans. The store
+locks the scope, compares the current target set and states with the expected
+snapshot, and either applies every result transition, pending-request
+transition, authorization-validity change, optional permit-epoch transition,
+and new cycle together, or reports a conflict and changes nothing. It never
+silently applies a partial or stale target list. The applied outcome returns
+the result, pending-authorization, and issued-authorization-validity
+transitions needed for audit events.
+
+Scopes are one class, explicit job cycles in one class, decision-result hashes
+in one class, one class's permit epoch, or one class/version pair. Epoch labels
+and contract-version labels are not assumed globally unique. An emergency
+permit withdrawal changes the class's current epoch and invalidates/requeues
+the withdrawn epoch in this same transaction. A multi-job requeue therefore
+cannot reuse one job's `input_hash` for another.
+
+Worker suspension or revocation is likewise one atomic Store command: compare
+the expected worker state, perform the allowed worker-state transition, close
+and same-cycle requeue every still-open lease held by that worker, and return
+the affected lease identities. Accepted evidence is untouched. Exact receipt
+replay remains available to the authenticated mapped holder under section 6.5.
+
+Class-version registration durably stores `(classId, contractVersion)`, the
+canonical payload- and output-schema hashes, lifecycle state, and lifecycle
+timestamps. Registration always creates `draft`; lifecycle changes use the
+forward-only transition command. Re-registering identical hashes is a replay;
+different hashes are a conflict. This record does not persist consumer
+functions, which must be loaded by each core process and matched to the stored
+hashes before use. The class's current permit epoch has a separate durable
+compare-and-transition read surface; initial assignment compares from `null`.
+An emergency withdrawal must carry that transition inside the invalidation
+command, while an ordinary epoch change uses the standalone transition.
+Pending-adjudication Store reads wrap the frozen wire request with `openedAt`;
+the timestamp is operational metadata, not part of the request or its verdict
+hash. This makes oldest-backlog dwell measurable without changing the wire
+request shape.
+
+```ts
+interface ClassVersionRegistration {
+  classId: string
+  contractVersion: string
+  payloadSchemaHash: string
+  outputSchemaHash: string
+  registeredAt: Timestamp
+}
+
+interface ClassVersionRecord extends ClassVersionRegistration {
+  state: ContractLifecycleState
+  leaseDisabledAt?: Timestamp
+  acceptedUntil?: Timestamp
+}
+
+type InvalidationScope =
+  | { kind: 'class'; classId: string }
+  | { kind: 'job_cycles'; classId: string; jobCycles: Array<{ jobId: string; collectionCycle: number }> }
+  | { kind: 'decision_results'; classId: string; decisionResultHashes: string[] }
+  | { kind: 'permit_epoch'; classId: string; permitEpoch: string }
+  | { kind: 'contract_version'; classId: string; contractVersion: string }
+
+interface InvalidationTarget {
+  jobId: string
+  collectionCycle: number
+  state: ResultState
+  inputHash: string
+  permitEpoch: string
+  contractVersion: string
+}
+
+interface CycleRequeuePlan {
+  jobId: string
+  fromCollectionCycle: number
+  newCollectionCycle: number
+  permitEpoch: string
+  inputHash: string
+  cycleStartedAt: Timestamp
+}
+
+interface PermitEpochTransition {
+  classId: string
+  fromEpoch: string | null
+  toEpoch: string
+}
+
+interface PendingAdjudication<Request> {
+  request: Request
+  openedAt: Timestamp
+}
+```
+
+The Store amendment exposes `registerClassVersion`, `getClassVersion`,
+`transitionClassVersion`, `getCurrentPermitEpoch`, `transitionPermitEpoch`,
+`transitionWorkerState`, `inspectInvalidationScope`, and the amended
+`invalidateResultScope`. Emergency-withdrawal input requires
+`epochTransition`; every other invalidation reason forbids it. Applied
+invalidation returns result transitions, authorization-request state
+transitions, issued-authorization validity transitions with their job/cycle
+scope and typed reason, the exact new-cycle plans, and the epoch transition.
+Conflict returns the current complete snapshot and changes nothing.
+
 ### 6.7 `OracleSpec`
 
 `JsonPath` has exactly three productions: `$` is the payload or result root,
@@ -1566,6 +1715,58 @@ authorization.
 
 Reputation is a routing signal, never proof of truth.
 
+Muster freezes **reputation evidence, not universal weights**. Core records an
+idempotent `ReputationEvidenceRecord` containing an opaque evidence ID,
+pseudonymous worker ID, one frozen source kind, timestamp, and optional
+job/cycle and detail-hash bindings. `checked_success` is the sole positive
+record; every named failure/falsehood/correction source is negative. The Store
+returns those records in `(at, evidenceId)` order. Duplicate evidence IDs with
+the same canonical record replay; a different record under the same ID
+conflicts. Raw bodies and OAuth subjects never enter this ledger.
+
+A consumer supplies a deterministic, I/O-free `ReputationPolicy` that maps a
+worker record plus its ordered evidence to `{ eligible, priority }`, where
+priority is finite. Core uses
+eligibility before candidate selection and priority only as a routing
+tiebreaker after hard capability, contribution-cap, diversity, exclusion,
+contract, and `not_before` constraints. This keeps policy and local risk
+tolerance consumer-owned while making the evidence paths and replay behavior
+portable and testable. No policy may turn reputation into verification
+strength or satisfy an action gate.
+
+```ts
+type ReputationEvidenceSource =
+  | 'checked_success'
+  | 'adjudicated_falsehood'
+  | 'deterministic_oracle'
+  | 'completeness_oracle'
+  | 'held_out_canary'
+  | 'human_audit'
+  | 'published_correction'
+  | 'structural_failure'
+  | 'validator_failure'
+  | 'post_payload_abandonment'
+  | 'escalation_quota_abuse'
+
+type ReputationEvidenceRecord = {
+  evidenceId: string
+  workerId: WorkerId
+  at: Timestamp
+  job?: { jobId: string; collectionCycle: number }
+  detailHash?: string
+} & (
+  | { source: 'checked_success'; impact: 'positive' }
+  | { source: Exclude<ReputationEvidenceSource, 'checked_success'>; impact: 'negative' }
+)
+
+interface ReputationPolicy {
+  assess(input: {
+    worker: WorkerRecord
+    evidence: readonly ReputationEvidenceRecord[]
+  }): { eligible: boolean; priority: number }
+}
+```
+
 ### 6.9 Fair-attempt classification
 
 | Outcome | Counts for contribution | Raises suspicion |
@@ -1630,8 +1831,9 @@ heartbeat workers pay for.
 ## 7. Observability, privacy, retention
 
 An append-only event schema — enrollment, lease, extend, submit, verdict, gate
-decision, escalation, adjudication, state change, permit epoch change, contract
-transition — and metrics dimensioned by worker, provider, job class, and
+decision, escalation, adjudication, state change, authorization-validity
+change, permit epoch change, contract transition — and metrics dimensioned by
+worker, provider, job class, and
 contract version: lease latency, expiry rate, split rate, canary failure, audit
 failure, validator failure, duplicate-lease count, agreement clustering,
 diversity shortfall, escalation budget consumption, adjudication backlog,
@@ -1721,6 +1923,14 @@ accepted verdict; exact retries reuse its receipt and a different verdict
 returns `verdict_conflict`. Authorization exact retries are exercised after
 every invalidation reason and return the immutable historical record rather than
 creating a new request; a separate status read returns current validity.
+Conformance also races class-qualified invalidation against target discovery:
+the Store either applies the exact complete target snapshot or reports a
+conflict, never a subset. It covers two classes reusing the same epoch label,
+multi-job requeue hashes, atomic emergency epoch transition, and worker
+suspension/revocation with multiple open leases. Class registration tests
+identical-schema replay versus schema-digest conflict. Pending adjudication
+reads preserve `openedAt`, and reputation evidence IDs are idempotent and
+ordered without exposing raw bodies.
 
 ### 8.2 Protocol conformance
 
@@ -1741,6 +1951,9 @@ urgent-saturation denial of an in-flight urgent action request,
 rejected-dispute requeue under the current epoch, dispute-requeue cap
 exhaustion, typed denial reasons across replay and status reads, immutable
 submission receipts, and contract-lifecycle transitions ship as fixtures.
+Muster Schema 1 ships its own accepted/rejected schema, value-validation, path,
+Unicode-length, and JCS-identity fixtures; every package uses the same
+zero-dependency implementation.
 
 ### 8.3 The invariant
 
@@ -1756,11 +1969,12 @@ claims nothing further.
 
 ## 9. Platform gate
 
-Muster rests on an unproven assumption: that a scheduled task on a
-mobile-manageable plan can execute a skill and call a remote MCP connector
-unattended. **No implementation beyond a stub is authorized until a real-device
-test passes on at least one provider surface.** Hosted scheduled-agent execution
-is an adapter capability recorded at enrollment, not a core assumption.
+Muster's initial platform assumption passed on 2026-08-06: a scheduled task on
+a mobile-manageable provider plan executed the gate skill and completed the
+nonce-bound remote MCP lease/submit sequence unattended. The committed protocol
+and raw evidence remain under `docs/gate/`. Hosted scheduled-agent execution is
+still an adapter capability recorded at enrollment, not a universal core
+assumption; each additional surface is measured independently.
 
 ## 10. Packaging
 
@@ -1798,7 +2012,7 @@ minimum:
 `AuthorizationDenialReason`, `AuthorizationValidity`, `AuthorizationStatus`,
 `SubmissionReceipt`, `ClassHealth`,
 `AuthenticatedWorkerSubject`, `WorkerId`, `Store`, `EventSink`, `AdmissionHook`,
-`AdjudicationSource`.
+`AdjudicationSource`, `ReputationPolicy`.
 
 **Tables and state machines.** The worker state machine (3.1); the action gate
 table (6.3); the precedence table (6.6); the fair-attempt classification table
@@ -1830,7 +2044,22 @@ automatic effect-derivation fixtures; human effect-path and absence-domain
 coverage; verified-result retirement before a second intent; the store
 concurrency suite; the prompt-injection corpus.
 
-### 11.2 Open
+Milestone one completed as `contract-freeze-1` on 2026-08-06. Revision 13 does
+not reopen runtime feature scope; it corrects the frozen boundary before any
+runtime mechanics depend on it.
+
+### 11.2 Contract-freeze amendment 2
+
+Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
+validation; schema path/leaf discovery; durable class-version schema identity;
+class-qualified compare-and-apply invalidation with per-cycle requeue hashes;
+atomic emergency epoch changes; atomic worker suspension/revocation and lease
+requeue; timestamped pending-adjudication reads; idempotent ordered reputation
+evidence and the pure `ReputationPolicy` boundary. Add the corresponding schema,
+lifecycle, and concurrency fixtures. No routing, verification pipeline, action
+gate, Postgres, or MCP runtime behavior belongs in this amendment.
+
+### 11.3 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

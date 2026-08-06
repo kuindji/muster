@@ -46,7 +46,7 @@
     "description": "Contract expiry does not erase the exact-retry receipt for an already accepted holder submission.",
     "setup": { "submission:lease-3": { "inputHash": "ih-3", "resultHash": "rh-3" } },
     "conditions": ["contract_expired"],
-    "steps": [{ "command": "contractExpire", "args": { "contractVersion": "1.0.0" }, "expect": { "kind": "expired" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-3", "inputHash": "ih-3", "resultHash": "rh-3" }, "expect": { "kind": "replayed" } }],
+    "steps": [{ "command": "contractExpire", "args": { "classId": "c1", "contractVersion": "1.0.0" }, "expect": { "kind": "expired" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-3", "inputHash": "ih-3", "resultHash": "rh-3" }, "expect": { "kind": "replayed" } }],
     "expectFinal": { "receipts": { "submission:lease-3": "byte_identical" } }
   },
   {
@@ -76,7 +76,7 @@
     "description": "Permit withdrawal supersedes work while retaining byte-identical replay of previously accepted receipts.",
     "setup": { "submission:lease-6": { "inputHash": "ih-6", "resultHash": "rh-6", "permitEpoch": "e1" } },
     "conditions": ["emergency_permit_withdrawal"],
-    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "permitEpoch": "e1" }, "expect": { "kind": "withdrawn" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-6", "inputHash": "ih-6", "resultHash": "rh-6" }, "expect": { "kind": "replayed" } }],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "classId": "c1", "permitEpoch": "e1", "currentEpoch": "e2" }, "expect": { "kind": "withdrawn" } }, { "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-6", "inputHash": "ih-6", "resultHash": "rh-6" }, "expect": { "kind": "replayed" } }],
     "expectFinal": { "receipts": { "submission:lease-6": "byte_identical" } }
   },
   {
@@ -227,16 +227,16 @@
     "setup": { "result:j10:1": { "state": "verified" }, "authorization:ar-10": { "state": "authorized", "validity": "valid" } },
     "conditions": ["emergency_halted"],
     "steps": [{ "command": "emergencyHalt", "args": { "classId": "c1" }, "expect": { "kind": "invalidated", "reason": "emergency_halted" } }],
-    "expectFinal": { "states": { "result:j10:1": "cancelled", "authorization:ar-10": "invalid" }, "events": ["state_change"] }
+    "expectFinal": { "states": { "result:j10:1": "cancelled", "authorization:ar-10": "invalid" }, "events": ["state_change", "authorization_validity_change"] }
   },
   {
     "id": "invalidate-emergency-permit-withdrawal",
     "version": 1,
     "area": "invalidation",
     "description": "Withdrawing a permit epoch supersedes its affected results and invalidates issued authorizations.",
-    "setup": { "result:j11:1": { "state": "verified", "permitEpoch": "e-old" } },
+    "setup": { "result:j11:1": { "state": "verified", "classId": "c1", "permitEpoch": "e-old" } },
     "conditions": ["emergency_permit_withdrawal"],
-    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "permitEpoch": "e-old" }, "expect": { "kind": "invalidated", "reason": "emergency_permit_withdrawal" } }],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "classId": "c1", "permitEpoch": "e-old", "currentEpoch": "e-new" }, "expect": { "kind": "invalidated", "reason": "emergency_permit_withdrawal" } }],
     "expectFinal": { "states": { "result:j11:1": "superseded" } }
   },
   {
@@ -244,9 +244,9 @@
     "version": 1,
     "area": "invalidation",
     "description": "Contract expiry expires affected results and invalidates authorizations under that version.",
-    "setup": { "result:j12:1": { "state": "verified", "contractVersion": "1.0.0" } },
+    "setup": { "result:j12:1": { "state": "verified", "classId": "c1", "contractVersion": "1.0.0" } },
     "conditions": ["contract_expired"],
-    "steps": [{ "command": "contractExpire", "args": { "contractVersion": "1.0.0" }, "expect": { "kind": "invalidated", "reason": "contract_expired" } }],
+    "steps": [{ "command": "contractExpire", "args": { "classId": "c1", "contractVersion": "1.0.0" }, "expect": { "kind": "invalidated", "reason": "contract_expired" } }],
     "expectFinal": { "states": { "result:j12:1": "expired" } }
   },
   {
@@ -266,7 +266,7 @@
     "description": "Operator cancellation cancels only the selected scope and invalidates its issued authorizations.",
     "setup": { "result:j14:1": { "state": "verified" } },
     "conditions": ["operator_cancellation"],
-    "steps": [{ "command": "operatorCancel", "args": { "jobId": "j14", "collectionCycle": 1 }, "expect": { "kind": "invalidated", "reason": "operator_cancelled" } }],
+    "steps": [{ "command": "operatorCancel", "args": { "classId": "c1", "jobId": "j14", "collectionCycle": 1 }, "expect": { "kind": "invalidated", "reason": "operator_cancelled" } }],
     "expectFinal": { "states": { "result:j14:1": "cancelled" } }
   },
   {
@@ -284,9 +284,9 @@
     "version": 1,
     "area": "retirement",
     "description": "Permit withdrawal supersedes a result even when one authorization issued and another remains pending.",
-    "setup": { "result:j21:1": { "state": "verified", "permitEpoch": "e-old" }, "authorization:ar-21a": { "state": "authorized" }, "authorization:ar-21b": { "state": "pending_adjudication" } },
+    "setup": { "result:j21:1": { "state": "verified", "classId": "c1", "permitEpoch": "e-old" }, "authorization:ar-21a": { "state": "authorized" }, "authorization:ar-21b": { "state": "pending_adjudication" } },
     "conditions": ["emergency_permit_withdrawal"],
-    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "permitEpoch": "e-old" }, "expect": { "kind": "superseded" } }],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "classId": "c1", "permitEpoch": "e-old", "currentEpoch": "e-new" }, "expect": { "kind": "superseded" } }],
     "expectFinal": { "states": { "result:j21:1": "superseded", "authorization:ar-21a": "invalid", "authorization:ar-21b": "superseded" } }
   },
   {
@@ -418,5 +418,93 @@
     "conditions": ["urgent_saturated"],
     "steps": [{ "command": "rollReserveWindow", "args": { "week": "2026-W33" }, "expect": { "lane": "urgent", "state": "available" } }, { "command": "authorizeActions", "args": { "effectIntentId": "intent-61-new", "decisionResultHash": "dh-61", "actions": ["routeToHumanUrgent"] }, "expect": { "kind": "applied", "outcome": "authorized" } }],
     "expectFinal": { "states": { "authorization:intent-61-new": "authorized" }, "charges": { "urgent": 1 } }
+  },
+  {
+    "id": "epoch-label-isolated-by-class",
+    "version": 1,
+    "area": "invalidation",
+    "description": "Emergency withdrawal of an epoch label is scoped to one class even when another class reuses the label.",
+    "setup": {
+      "result:c1:j70:1": { "state": "verified", "classId": "c1", "permitEpoch": "shared" },
+      "result:c2:j71:1": { "state": "verified", "classId": "c2", "permitEpoch": "shared" }
+    },
+    "conditions": ["emergency_permit_withdrawal"],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "classId": "c1", "permitEpoch": "shared", "currentEpoch": "next" }, "expect": { "kind": "applied", "affected": 1 } }],
+    "expectFinal": { "states": { "result:c1:j70:1": "superseded", "result:c2:j71:1": "verified" } }
+  },
+  {
+    "id": "withdrawal-requeues-distinct-job-hashes",
+    "version": 1,
+    "area": "invalidation",
+    "description": "A class withdrawal atomically requeues multiple collecting cycles with one recomputed input hash per job.",
+    "setup": {
+      "result:c1:j72:1": { "state": "collecting", "permitEpoch": "old", "inputHash": "ih-j72-old" },
+      "result:c1:j73:1": { "state": "collecting", "permitEpoch": "old", "inputHash": "ih-j73-old" }
+    },
+    "conditions": ["emergency_permit_withdrawal"],
+    "steps": [{ "command": "emergencyWithdrawEpoch", "args": { "classId": "c1", "permitEpoch": "old", "currentEpoch": "new", "requeueInputHashes": ["ih-j72-new", "ih-j73-new"] }, "expect": { "kind": "applied", "newCycles": 2 } }],
+    "expectFinal": { "states": { "result:c1:j72:1": "superseded", "result:c1:j72:2": "collecting", "result:c1:j73:1": "superseded", "result:c1:j73:2": "collecting" } }
+  },
+  {
+    "id": "worker-revocation-requeues-open-leases",
+    "version": 1,
+    "area": "worker_state",
+    "description": "Revocation atomically changes worker state and requeues every open lease without discarding accepted evidence.",
+    "setup": {
+      "worker:w70": { "state": "suspended" },
+      "lease:l70": { "holder": "w70", "open": true },
+      "lease:l71": { "holder": "w70", "open": true },
+      "evidence:l69": { "workerId": "w70", "state": "accepted" }
+    },
+    "conditions": ["lease_holder_revoked"],
+    "steps": [{ "command": "transitionWorkerState", "args": { "workerId": "w70", "from": "suspended", "to": "revoked" }, "expect": { "kind": "applied", "requeuedLeaseCount": 2 } }],
+    "expectFinal": { "states": { "worker:w70": "revoked", "lease:l70": "requeued", "lease:l71": "requeued", "evidence:l69": "accepted" } }
+  },
+  {
+    "id": "class-version-identical-schema-replays",
+    "version": 1,
+    "area": "class_registration",
+    "description": "An identical class-version schema registration replays the durable record.",
+    "setup": {},
+    "conditions": [],
+    "steps": [
+      { "command": "registerClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "payloadSchemaHash": "ph1", "outputSchemaHash": "oh1" }, "expect": { "kind": "registered" } },
+      { "command": "registerClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "payloadSchemaHash": "ph1", "outputSchemaHash": "oh1" }, "expect": { "kind": "replayed" } }
+    ],
+    "expectFinal": { "states": { "class-version:c1:v1": "draft" } }
+  },
+  {
+    "id": "class-version-schema-conflicts",
+    "version": 1,
+    "area": "class_registration",
+    "description": "A reused class/version with different schema hashes conflicts without replacing the frozen record.",
+    "setup": { "class-version:c1:v1": { "state": "draft", "payloadSchemaHash": "ph1", "outputSchemaHash": "oh1" } },
+    "conditions": [],
+    "steps": [{ "command": "registerClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "payloadSchemaHash": "ph2", "outputSchemaHash": "oh1" }, "expect": { "kind": "conflict" } }],
+    "expectFinal": { "states": { "class-version:c1:v1": "draft" } }
+  },
+  {
+    "id": "adjudication-backlog-age-is-observable",
+    "version": 1,
+    "area": "adjudication_health",
+    "description": "Pending adjudication reads preserve openedAt so oldest-backlog dwell can fail closed.",
+    "setup": { "result-adjudication:rr-70": { "state": "pending_result_adjudication", "openedAt": "2026-08-06T00:00:00.000Z" } },
+    "conditions": ["adjudication_starved"],
+    "steps": [{ "command": "advanceTime", "args": { "seconds": 3601 }, "expect": { "now": "2026-08-06T01:00:01.000Z" } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
+    "expectFinal": { "states": { "class-health:c1": "adjudication_starved" } }
+  },
+  {
+    "id": "reputation-evidence-replays-and-conflicts",
+    "version": 1,
+    "area": "reputation",
+    "description": "Reputation evidence IDs replay exact records, conflict on changed records, and never replace the first entry.",
+    "setup": {},
+    "conditions": [],
+    "steps": [
+      { "command": "recordReputationEvidence", "args": { "evidenceId": "rep-70", "workerId": "w70", "source": "held_out_canary", "impact": "negative", "detailHash": "dh1" }, "expect": { "kind": "recorded" } },
+      { "command": "recordReputationEvidence", "args": { "evidenceId": "rep-70", "workerId": "w70", "source": "held_out_canary", "impact": "negative", "detailHash": "dh1" }, "expect": { "kind": "replayed" } },
+      { "command": "recordReputationEvidence", "args": { "evidenceId": "rep-70", "workerId": "w70", "source": "held_out_canary", "impact": "negative", "detailHash": "dh2" }, "expect": { "kind": "conflict" } }
+    ],
+    "expectFinal": { "states": { "reputation-evidence:rep-70": "recorded" } }
   }
 ]

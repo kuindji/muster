@@ -27,6 +27,12 @@ const corpus: Array<{ id: string; category: string; payloadText: string }> =
       "utf8",
     ),
   );
+const packageManifest: {
+  files: string[];
+  exports: Record<string, unknown>;
+} = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
 
 describe("lifecycle fixture pack (spec 11.1)", () => {
   it("every fixture is well-formed with a unique id", () => {
@@ -111,9 +117,37 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
     }
   });
 
+  it("class-qualifies every frozen invalidation command", () => {
+    const invalidationCommands = new Set([
+      "contractExpire",
+      "emergencyHalt",
+      "emergencyWithdrawEpoch",
+      "operatorCancel",
+    ]);
+    for (const fixture of fixtures as Array<{
+      id: string;
+      steps: Array<{ command: string; args: Record<string, unknown> }>;
+    }>) {
+      for (const step of fixture.steps) {
+        if (invalidationCommands.has(step.command)) {
+          expect(typeof step.args.classId, `${fixture.id}:${step.command}`)
+            .toBe("string");
+        }
+      }
+    }
+  });
+
   it("the store concurrency case list covers the frozen 8.1 matrix", () => {
     const ids = new Set(cases.map((entry) => entry.id));
     expect(ids.size).toBe(cases.length);
+    for (const entry of cases) {
+      expect(Object.keys(entry).sort(), entry.id).toEqual([
+        "description",
+        "id",
+      ]);
+      expect(entry.id.length).toBeGreaterThan(0);
+      expect(entry.description.length).toBeGreaterThan(0);
+    }
     for (const required of REQUIRED_CONCURRENCY_CASE_IDS) {
       expect(ids.has(required), `missing concurrency case ${required}`).toBe(true);
     }
@@ -128,7 +162,28 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
       ).toBe(true);
     }
     for (const entry of corpus) {
+      expect(Object.keys(entry).sort(), entry.id).toEqual([
+        "category",
+        "id",
+        "payloadText",
+      ]);
       expect(entry.payloadText.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("publishes every frozen fixture through an explicit package export", () => {
+    const fixtureNames = [
+      "golden-hashes.json",
+      "jcs-rfc8785.json",
+      "lifecycle-fixtures.json",
+      "prompt-injection.json",
+      "schema-conformance.json",
+      "store-concurrency-cases.json",
+    ];
+    expect(packageManifest.files).toContain("fixtures/*.json");
+    for (const name of fixtureNames) {
+      expect(Object.hasOwn(packageManifest.exports, `./fixtures/${name}`))
+        .toBe(true);
     }
   });
 });

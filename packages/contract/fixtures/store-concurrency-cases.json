@@ -50,5 +50,37 @@
   {
     "id": "reserve-last-unit-race-fails-closed",
     "description": "Two authorizations racing for a lane's final unit yield one authorized and charged result plus one escalation-budget denial, never overdraw or uncharged authorization."
+  },
+  {
+    "id": "class-qualified-epoch-invalidation",
+    "description": "Invalidating an epoch in one class never selects a second class that reuses the same epoch label."
+  },
+  {
+    "id": "multi-cycle-invalidation-set-atomic",
+    "description": "A multi-cycle invalidation applies every expected target and distinct requeue plan in one transaction or changes nothing."
+  },
+  {
+    "id": "stale-invalidation-snapshot-conflicts",
+    "description": "A target created or transitioned after scope inspection makes compare-and-apply invalidation conflict without partial mutation."
+  },
+  {
+    "id": "emergency-epoch-transition-and-requeue-atomic",
+    "description": "Emergency withdrawal publishes the new current epoch together with every invalidation and requeue, never before or after."
+  },
+  {
+    "id": "worker-suspension-requeues-open-leases",
+    "description": "Suspension or revocation and closure/requeue of every holder lease are one atomic worker-state command."
+  },
+  {
+    "id": "class-version-schema-digest-conflict",
+    "description": "Concurrent class-version registrations replay identical schema hashes and conflict on different hashes without replacement."
+  },
+  {
+    "id": "pending-backlog-preserves-opened-at",
+    "description": "Concurrent adjudication reads retain the persisted openedAt used for starvation dwell calculations."
+  },
+  {
+    "id": "reputation-evidence-idempotent-under-race",
+    "description": "Concurrent reputation records with one evidence ID persist one canonical record; exact records replay and changed records conflict."
   }
 ]

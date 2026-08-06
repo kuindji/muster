@@ -13,6 +13,10 @@ export const LIFECYCLE_FIXTURE_AREAS = deepFreeze([
   "collection_cycle",
   "epoch_assignment",
   "urgent_saturation",
+  "class_registration",
+  "worker_state",
+  "adjudication_health",
+  "reputation",
 ] as const);
 
 export type LifecycleFixtureArea =
@@ -37,6 +41,10 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "advanceTime",
   "saturateReserve",
   "rollReserveWindow",
+  "registerClassVersion",
+  "transitionWorkerState",
+  "refreshClassHealth",
+  "recordReputationEvidence",
 ] as const);
 
 export type LifecycleCommand = (typeof LIFECYCLE_COMMANDS)[number];
@@ -85,6 +93,14 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "verdict-single-accepted-per-request",
   "charge-key-idempotent-under-race",
   "reserve-last-unit-race-fails-closed",
+  "class-qualified-epoch-invalidation",
+  "multi-cycle-invalidation-set-atomic",
+  "stale-invalidation-snapshot-conflicts",
+  "emergency-epoch-transition-and-requeue-atomic",
+  "worker-suspension-requeues-open-leases",
+  "class-version-schema-digest-conflict",
+  "pending-backlog-preserves-opened-at",
+  "reputation-evidence-idempotent-under-race",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -139,6 +155,13 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "epoch-split-evidence-reroute-stays",
   "auth-urgent-saturated-denial",
   "urgent-fresh-intent-after-window",
+  "epoch-label-isolated-by-class",
+  "withdrawal-requeues-distinct-job-hashes",
+  "worker-revocation-requeues-open-leases",
+  "class-version-identical-schema-replays",
+  "class-version-schema-conflicts",
+  "adjudication-backlog-age-is-observable",
+  "reputation-evidence-replays-and-conflicts",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

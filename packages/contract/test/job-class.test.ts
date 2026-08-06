@@ -5,6 +5,7 @@ import {
   PRIVACY_CLASS_RULES,
 } from "../src/job-class.js";
 import type { JobClass } from "../src/job-class.js";
+import { validateMusterSchema } from "../src/schema.js";
 
 type Payload = { items: Array<{ id: string; text: string }> };
 type Result = {
@@ -18,14 +19,44 @@ describe("JobClass shape (spec 4.2)", () => {
       contractVersion: "1.0.0",
       kind: "oneshot",
       outputSchema: {
+        $schema: "urn:kuindji:muster:schema:1",
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          claims: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                itemId: { type: "string" },
+                claim: { type: "string" },
+              },
+              required: ["itemId", "claim"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["claims"],
       },
       payloadSchema: {
+        $schema: "urn:kuindji:muster:schema:1",
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                text: { type: "string" },
+              },
+              required: ["id", "text"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["items"],
       },
       maxPayloadBytes: 65_536,
       maxResultBytes: 32_768,
@@ -104,6 +135,8 @@ describe("JobClass shape (spec 4.2)", () => {
 
     expect(jobClass.kind).toBe("oneshot");
     expect(jobClass.surface).toBe("unbounded");
+    expect(validateMusterSchema(jobClass.payloadSchema).ok).toBe(true);
+    expect(validateMusterSchema(jobClass.outputSchema).ok).toBe(true);
   });
 
   it("freezes axis confidence per spec 6.2", () => {

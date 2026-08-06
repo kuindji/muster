@@ -17,8 +17,9 @@ the evidence that a decision was necessary and what would falsify it.
 **Revision 12 absorbed these decisions into the spec.** It also superseded one
 part of decision 1 before any freeze tag or golden-vector file existed: the
 exact canonical sanitized payload and `payload_schema` now both enter
-`input_hash`. Current implementations follow revision 12 and the revised plan,
-not the historical wording below.
+`input_hash`. Current implementations preserve those revision-12 decisions
+through revision 13 and follow the normative coordinator spec, not the
+historical wording below.
 
 ---
 
@@ -173,4 +174,4 @@ adjudicable.
 Frozen design decisions that filled a gap revision 11 left *open* rather than
 resolving something it *stated* — the quantization bucket values, the ASCII
 wire-identifier grammar, the typed error vocabularies — remain recorded in the
-plan at their point of use. Revision 12 is now the complete normative spec.
+plan at their point of use. Revision 13 is now the complete normative spec.

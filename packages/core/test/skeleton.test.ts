@@ -4,8 +4,14 @@ import type { MusterEvent } from "../src/events.js";
 import type {
   AdmissionHook,
   AdjudicationSource,
+  ClassVersionRegistration,
   Clock,
   EventSink,
+  InvalidationScope,
+  InvalidationTarget,
+  PendingAdjudication,
+  ReputationEvidenceRecord,
+  ReputationPolicy,
   Store,
   VerdictReceipt,
 } from "../src/ports.js";
@@ -24,7 +30,7 @@ describe("event schema (spec 7)", () => {
     expect(AUDIT_EVENT_TYPES).toEqual([
       "enrollment", "lease", "lease_extend", "submit", "verdict", "gate_decision",
       "escalation_charge", "adjudication", "state_change", "permit_epoch_change",
-      "contract_transition",
+      "contract_transition", "authorization_validity_change",
     ]);
   });
 
@@ -95,6 +101,29 @@ describe("event schema (spec 7)", () => {
     void extra;
   });
 
+  it("represents initial epochs and authorization-validity invalidation", () => {
+    const initialEpoch: MusterEvent = {
+      type: "permit_epoch_change",
+      at: "2026-08-06T00:00:00.000Z",
+      classId: "c1",
+      fromEpoch: null,
+      toEpoch: "e1",
+      emergency: false,
+    };
+    const invalidated: MusterEvent = {
+      type: "authorization_validity_change",
+      at: "2026-08-06T00:01:00.000Z",
+      classId: "c1",
+      jobId: "j1",
+      collectionCycle: 1,
+      authorizationRequestId: "ar1",
+      from: "valid",
+      to: "invalid",
+      reason: "emergency_permit_withdrawal",
+    };
+    expect([initialEpoch.fromEpoch, invalidated.to]).toEqual([null, "invalid"]);
+  });
+
   it("ports are pure interfaces (compile-only)", () => {
     const use = (
       _s: Store,
@@ -102,7 +131,126 @@ describe("event schema (spec 7)", () => {
       _e: EventSink,
       _a: AdmissionHook,
       _j: AdjudicationSource,
+      _r: ReputationPolicy,
     ) => true;
     expect(typeof use).toBe("function");
+  });
+
+  it("qualifies every invalidation scope by class", () => {
+    const scopes: InvalidationScope[] = [
+      { kind: "class", classId: "c1" },
+      {
+        kind: "job_cycles",
+        classId: "c1",
+        jobCycles: [{ jobId: "j1", collectionCycle: 1 }],
+      },
+      {
+        kind: "decision_results",
+        classId: "c1",
+        decisionResultHashes: ["dh1"],
+      },
+      { kind: "permit_epoch", classId: "c1", permitEpoch: "e1" },
+      {
+        kind: "contract_version",
+        classId: "c1",
+        contractVersion: "v1",
+      },
+    ];
+    expect(scopes.every((scope) => scope.classId === "c1")).toBe(true);
+
+    // @ts-expect-error epoch invalidation must never be globally scoped
+    const unqualified: InvalidationScope = {
+      kind: "permit_epoch", permitEpoch: "e1",
+    };
+    void unqualified;
+  });
+
+  it("represents one expected target and one hash per requeued cycle", () => {
+    const targets: InvalidationTarget[] = [
+      {
+        jobId: "j1",
+        collectionCycle: 1,
+        state: "collecting",
+        inputHash: "old-1",
+        permitEpoch: "e1",
+        contractVersion: "v1",
+      },
+      {
+        jobId: "j2",
+        collectionCycle: 1,
+        state: "collecting",
+        inputHash: "old-2",
+        permitEpoch: "e1",
+        contractVersion: "v1",
+      },
+    ];
+    const hashes = ["new-1", "new-2"];
+    expect(new Set(hashes).size).toBe(targets.length);
+
+    type InvalidationInput = Parameters<Store["invalidateResultScope"]>[0];
+    const emergency: InvalidationInput = {
+      scope: { kind: "permit_epoch", classId: "c1", permitEpoch: "e1" },
+      expectedTargets: targets,
+      reason: "emergency_permit_withdrawal",
+      requeuePlans: [],
+      epochTransition: { classId: "c1", fromEpoch: "e1", toEpoch: "e2" },
+      at: "2026-08-06T00:00:00.000Z",
+    };
+    expect(emergency.epochTransition.toEpoch).toBe("e2");
+
+    // @ts-expect-error emergency withdrawal must atomically carry its epoch transition
+    const unsafeEmergency: InvalidationInput = {
+      scope: { kind: "permit_epoch", classId: "c1", permitEpoch: "e1" },
+      expectedTargets: targets,
+      reason: "emergency_permit_withdrawal",
+      requeuePlans: [],
+      at: "2026-08-06T00:00:00.000Z",
+    };
+    void unsafeEmergency;
+  });
+
+  it("keeps backlog timestamps and reputation bodies outside frozen records", () => {
+    const pending: PendingAdjudication<{ id: string }> = {
+      request: { id: "rr1" },
+      openedAt: "2026-08-06T00:00:00.000Z",
+    };
+    const evidence: ReputationEvidenceRecord = {
+      evidenceId: "rep1",
+      workerId: "worker-1",
+      source: "held_out_canary",
+      impact: "negative",
+      at: "2026-08-06T00:00:00.000Z",
+      job: { jobId: "j1", collectionCycle: 1 },
+      detailHash: "sha256-detail",
+    };
+    expect([pending.openedAt, evidence.detailHash]).toHaveLength(2);
+
+    const leaked: ReputationEvidenceRecord = {
+      ...evidence,
+      // @ts-expect-error reputation records carry hashes, never raw bodies
+      body: { secret: true },
+    };
+    void leaked;
+
+    const registration: ClassVersionRegistration = {
+      classId: "c1",
+      contractVersion: "v1",
+      payloadSchemaHash: "ph1",
+      outputSchemaHash: "oh1",
+      registeredAt: "2026-08-06T00:00:00.000Z",
+    };
+    const unsafeRegistration: ClassVersionRegistration = {
+      ...registration,
+      // @ts-expect-error registration always creates draft; callers cannot choose state
+      state: "active",
+    };
+    // @ts-expect-error only checked_success may be positive
+    const invalidPositive: ReputationEvidenceRecord = {
+      ...evidence,
+      source: "held_out_canary",
+      impact: "positive",
+    };
+    void unsafeRegistration;
+    void invalidPositive;
   });
 });

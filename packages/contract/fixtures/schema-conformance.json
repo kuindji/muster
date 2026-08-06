@@ -1,0 +1,243 @@
+{
+  "version": 1,
+  "schemas": [
+    {
+      "id": "closed-nested-object",
+      "valid": true,
+      "schemaHash": "d5c7ea53cae474c9501aea6878a60cf28b7a8f2c7cf59ff427ce619eb9ddf606",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "object",
+        "properties": {
+          "aliases": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "name": { "type": "string", "minLength": 2 }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "enum-and-const",
+      "valid": true,
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "const": "article" },
+          "state": { "type": "string", "enum": ["draft", "ready"] }
+        },
+        "required": ["kind", "state"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "unknown-keyword",
+      "valid": false,
+      "issueCode": "unknown_keyword",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "string",
+        "format": "uri"
+      }
+    },
+    {
+      "id": "open-object",
+      "valid": false,
+      "issueCode": "object_not_closed",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "id": "reference-rejected",
+      "valid": false,
+      "issueCode": "unknown_keyword",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "object",
+        "$ref": "#/$defs/x",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "unaddressable-property",
+      "valid": false,
+      "issueCode": "property_name_invalid",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "object",
+        "properties": { "display name": { "type": "string" } },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "required-property-undeclared",
+      "valid": false,
+      "issueCode": "required_property_missing",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "object",
+        "properties": {},
+        "required": ["missing"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "nullable-union-only",
+      "valid": false,
+      "issueCode": "type_invalid",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": ["string", "number"]
+      }
+    },
+    {
+      "id": "bounded-number",
+      "valid": true,
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "number",
+        "minimum": 0,
+        "exclusiveMaximum": 10
+      }
+    },
+    {
+      "id": "bounded-array",
+      "valid": true,
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "array",
+        "items": { "type": "integer" },
+        "minItems": 1,
+        "maxItems": 2
+      }
+    },
+    {
+      "id": "combinator-rejected",
+      "valid": false,
+      "issueCode": "unknown_keyword",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "string",
+        "oneOf": [{ "type": "string" }]
+      }
+    },
+    {
+      "id": "array-without-items",
+      "valid": false,
+      "issueCode": "items_required",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "array"
+      }
+    },
+    {
+      "id": "enum-and-const-together",
+      "valid": false,
+      "issueCode": "const_and_enum",
+      "schema": {
+        "$schema": "urn:kuindji:muster:schema:1",
+        "type": "string",
+        "enum": ["x"],
+        "const": "x"
+      }
+    }
+  ],
+  "values": [
+    {
+      "id": "unicode-code-point-length",
+      "schemaId": "closed-nested-object",
+      "value": { "name": "😀😀", "aliases": null },
+      "valid": true
+    },
+    {
+      "id": "unicode-too-short",
+      "schemaId": "closed-nested-object",
+      "value": { "name": "😀" },
+      "valid": false,
+      "issueCode": "min_length"
+    },
+    {
+      "id": "closed-object-extra-field",
+      "schemaId": "closed-nested-object",
+      "value": { "name": "Ada", "extra": true },
+      "valid": false,
+      "issueCode": "additional_property"
+    },
+    {
+      "id": "jcs-array-uniqueness",
+      "schemaId": "closed-nested-object",
+      "value": { "name": "Ada", "aliases": ["x", "x"] },
+      "valid": false,
+      "issueCode": "unique_items"
+    },
+    {
+      "id": "enum-and-const-valid",
+      "schemaId": "enum-and-const",
+      "value": { "kind": "article", "state": "ready" },
+      "valid": true
+    },
+    {
+      "id": "const-mismatch",
+      "schemaId": "enum-and-const",
+      "value": { "kind": "note", "state": "ready" },
+      "valid": false,
+      "issueCode": "const_mismatch"
+    },
+    {
+      "id": "enum-mismatch",
+      "schemaId": "enum-and-const",
+      "value": { "kind": "article", "state": "published" },
+      "valid": false,
+      "issueCode": "enum_mismatch"
+    },
+    {
+      "id": "number-at-exclusive-boundary",
+      "schemaId": "bounded-number",
+      "value": 10,
+      "valid": false,
+      "issueCode": "exclusive_maximum"
+    },
+    {
+      "id": "number-type-mismatch",
+      "schemaId": "bounded-number",
+      "value": "5",
+      "valid": false,
+      "issueCode": "type_mismatch"
+    },
+    {
+      "id": "array-too-short",
+      "schemaId": "bounded-array",
+      "value": [],
+      "valid": false,
+      "issueCode": "min_items"
+    },
+    {
+      "id": "array-item-not-integer",
+      "schemaId": "bounded-array",
+      "value": [1.5],
+      "valid": false,
+      "issueCode": "type_mismatch"
+    }
+  ],
+  "paths": [
+    { "schemaId": "closed-nested-object", "path": "$.name", "declared": true },
+    { "schemaId": "closed-nested-object", "path": "$.aliases[*]", "declared": true },
+    { "schemaId": "closed-nested-object", "path": "$.missing", "declared": false },
+    { "schemaId": "closed-nested-object", "path": "$.aliases.value", "declared": false }
+  ],
+  "leafPaths": [
+    {
+      "schemaId": "closed-nested-object",
+      "paths": ["$.aliases[*]", "$.name"]
+    }
+  ]
+}

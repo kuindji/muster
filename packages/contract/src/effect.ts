@@ -12,8 +12,8 @@ import type {
 } from "./primitives.js";
 
 /**
- * JSON Schema type alias for the contract freeze. Core validates schemas at
- * registration in M2; this package only carries their canonical JSON shape.
+ * Canonical shape for Muster Schema 1. The zero-dependency validator and path
+ * walker live in schema.ts; core consumes those at registration and runtime.
  */
 export type JSONSchema = Record<string, CanonicalJsonValue>;
 

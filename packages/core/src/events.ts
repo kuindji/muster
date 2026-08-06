@@ -1,6 +1,7 @@
 import {
   deepFreeze,
   type AuthorizationDenialReason,
+  type AuthorizationInvalidationReason,
   type AuthorizationRequestState,
   type CanonicalJsonValue,
   type ClassHealth,
@@ -22,7 +23,7 @@ export const NOTIFICATION_TYPES = deepFreeze([
 export const AUDIT_EVENT_TYPES = deepFreeze([
   "enrollment", "lease", "lease_extend", "submit", "verdict", "gate_decision",
   "escalation_charge", "adjudication", "state_change", "permit_epoch_change",
-  "contract_transition",
+  "contract_transition", "authorization_validity_change",
 ] as const);
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -173,9 +174,15 @@ export type MusterAuditEvent =
       to: AuthorizationRequestState;
     })
   | (ClassScoped<"permit_epoch_change"> & {
-      fromEpoch: string;
+      fromEpoch: string | null;
       toEpoch: string;
       emergency: boolean;
+    })
+  | (JobCycleScoped<"authorization_validity_change"> & {
+      authorizationRequestId: string;
+      from: "valid";
+      to: "invalid";
+      reason: AuthorizationInvalidationReason;
     })
   | (ClassScoped<"contract_transition"> & {
       contractVersion: string;
