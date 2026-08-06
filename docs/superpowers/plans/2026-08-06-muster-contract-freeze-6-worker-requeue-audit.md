@@ -1,8 +1,7 @@
 # Muster contract-freeze-6 worker-requeue audit amendment plan
 
-**Status:** Implemented locally in coordinator revision 17; awaiting independent
-review and the `contract-freeze-6` tag. No worker-control runtime mechanics are
-authorized before that boundary.
+**Status:** Complete in coordinator revision 17 and the local
+`contract-freeze-6` tag. No worker-control runtime mechanics were added.
 
 **Goal:** Amend revision 16 into revision 17 so M2 Task 3 can emit a truthful,
 self-contained append-only audit event for every lease atomically closed and
