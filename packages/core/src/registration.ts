@@ -139,6 +139,10 @@ export class RuntimeClassRegistry {
   clear(): void {
     this.entries.clear();
   }
+
+  unload(classId: string, contractVersion: string): boolean {
+    return this.entries.delete(pairKey(classId, contractVersion));
+  }
 }
 
 export type ClassRegistrationResult =

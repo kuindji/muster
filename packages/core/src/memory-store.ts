@@ -30,6 +30,7 @@ import type {
   PermitEpochTransition,
   PermitEpochTransitionOutcome,
   QueueModeSnapshot,
+  ReputationEvidenceRecord,
   RegisterClassVersionOutcome,
   RegisterWorkerOutcome,
   Store,
@@ -111,6 +112,7 @@ export class InMemoryStore implements Store {
   private coreIdentities = new Map<string, CoreIdentityKind>();
   private resultStates = new Map<string, ResultState>();
   private decisions = new Map<string, DecisionResultRecord>();
+  private reputationEvidence = new Map<string, ReputationEvidenceRecord>();
 
   private classTransitionHistory = new Map<string, ContractTransitionOutcome>();
   private permitTransitionHistory = new Map<string, PermitEpochTransitionOutcome>();
@@ -161,6 +163,7 @@ export class InMemoryStore implements Store {
     this.coreIdentities.clear();
     this.resultStates.clear();
     this.decisions.clear();
+    this.reputationEvidence.clear();
     this.classTransitionHistory.clear();
     this.permitTransitionHistory.clear();
     this.workerTransitionHistory.clear();
@@ -1146,14 +1149,30 @@ export class InMemoryStore implements Store {
   }
 
   recordReputationEvidence(
-    _record: Parameters<Store["recordReputationEvidence"]>[0],
+    record: Parameters<Store["recordReputationEvidence"]>[0],
   ): ReturnType<Store["recordReputationEvidence"]> {
-    return this.unsupported("recordReputationEvidence");
+    return this.atomicInput(record, (record) => {
+      const existing = this.reputationEvidence.get(record.evidenceId);
+      if (existing !== undefined) {
+        return equal(existing, record)
+          ? { kind: "replayed", record: clone(existing) }
+          : { kind: "conflict", existing: clone(existing) };
+      }
+      this.reputationEvidence.set(record.evidenceId, clone(record));
+      return { kind: "recorded", record: clone(record) };
+    });
   }
 
   listReputationEvidence(
-    _workerId: WorkerId,
+    workerId: WorkerId,
   ): ReturnType<Store["listReputationEvidence"]> {
-    return this.unsupported("listReputationEvidence");
+    return this.atomic(() =>
+      clone([...this.reputationEvidence.values()]
+        .filter((record) => record.workerId === workerId)
+        .sort((left, right) =>
+          left.at.localeCompare(right.at) ||
+          left.evidenceId.localeCompare(right.evidenceId),
+        )),
+    );
   }
 }

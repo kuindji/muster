@@ -141,3 +141,37 @@ describe("deterministic Task 1 test ports", () => {
     expect(sink.all()).toEqual([]);
   });
 });
+
+describe("reference Store reputation evidence needed by Task 3 probation", () => {
+  it("records idempotently, conflicts on identity reuse, and reads in order", async () => {
+    const store = createStore();
+    const later = {
+      evidenceId: "evidence-b",
+      workerId: "worker-1",
+      at: "2026-08-06T16:02:00.000Z",
+      source: "checked_success" as const,
+      impact: "positive" as const,
+    };
+    const earlier = {
+      ...later,
+      evidenceId: "evidence-a",
+      at: "2026-08-06T16:01:00.000Z",
+    };
+    await expect(store.recordReputationEvidence(later))
+      .resolves.toMatchObject({ kind: "recorded" });
+    await expect(store.recordReputationEvidence(earlier))
+      .resolves.toMatchObject({ kind: "recorded" });
+    await expect(store.recordReputationEvidence(later))
+      .resolves.toMatchObject({ kind: "replayed" });
+    await expect(store.recordReputationEvidence({
+      ...later,
+      workerId: "worker-2",
+    })).resolves.toMatchObject({
+      kind: "conflict",
+      existing: { workerId: "worker-1" },
+    });
+    expect(await store.listReputationEvidence("worker-1"))
+      .toEqual([earlier, later]);
+    expect(await store.listReputationEvidence("worker-2")).toEqual([]);
+  });
+});

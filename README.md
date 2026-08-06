@@ -16,9 +16,11 @@ the consumer to obey those authorizations.
 
 **Contract freeze 7 complete.** The real-provider unattended platform gate
 passed. Revision 18 freezes the worker-control policy inputs found missing by
-the first M2 Task-3 runtime trace. M2 currently includes the reference in-memory
-Store foundation plus the runtime class registry and registration validator;
-Task 3 may now resume from the reviewed freeze-7 boundary.
+the first M2 Task-3 runtime trace. M2 now includes the reference in-memory Store
+foundation, runtime class registry and registration validator, and the
+class/permit/worker control plane. Enqueue, routing, leases, verification,
+authorization, and the remaining coordinator behavior are still Milestone 2
+work.
 
 ## Specs
 
