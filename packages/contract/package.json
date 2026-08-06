@@ -20,6 +20,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "fixtures:generate": "node fixtures/generate.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

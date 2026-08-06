@@ -14,10 +14,10 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Design phase.** The design is converged for one-shot scope and authorizes an
-implementation plan, not code. A platform gate blocks anything beyond a stub
-until a real-device test proves that a scheduled task on a mobile-manageable
-plan can execute a skill and call a remote MCP connector unattended.
+**Contract freeze complete.** The real-provider unattended platform gate
+passed, and Milestone 1 now freezes the one-shot wire contract, executable
+tables and state machines, conformance fixtures, and the types-only core port
+boundary. Runtime coordinator behavior remains Milestone 2 work.
 
 ## Specs
 
@@ -41,6 +41,19 @@ plan can execute a skill and call a remote MCP connector unattended.
 | `@kuindji/muster-core` | routing, leases, verification, action gates, reputation, escalation budgets, ledger |
 | `@kuindji/muster-store-postgres` | store adapter and migrations |
 | `@kuindji/muster-mcp` | tool surfaces, skill Resource, OAuth, rate limits |
+
+## Contract freeze
+
+The Milestone 1 contract is frozen at wire version `1.0.0` and tagged locally
+as `contract-freeze-1`. The binding scope is defined by
+[spec §11.1](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else)
+and the checked-in
+[M0+M1 implementation plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md).
+Golden hash vectors, lifecycle fixtures, store-concurrency cases, and the
+prompt-injection corpus live under `packages/contract/fixtures/`.
+
+Changes to a frozen type, table, state machine, hash envelope, schema, or
+fixture require a spec revision before implementation.
 
 ## License
 
