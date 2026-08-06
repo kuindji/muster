@@ -1,0 +1,2 @@
+{"at":"2026-08-06T11:10:38.104Z","nonce":"20260806T085811Z-eac66456bb2215ec","tool":"lease_job","args":{}}
+{"at":"2026-08-06T11:10:43.877Z","nonce":"20260806T085811Z-eac66456bb2215ec","tool":"submit_result","args":{"lease_id":"gate-lease-20260806T085811Z-eac66456bb2215ec","input_hash":"gate-input-hash-20260806T085811Z-eac66456bb2215ec","result":{"echo":"muster-gate-20260806T085811Z-eac66456bb2215ec"},"outcome":"accepted"}}

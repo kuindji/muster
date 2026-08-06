@@ -51,7 +51,12 @@ FAIL for attribution purposes even if tools were called.
 
 | Date | Provider surface | Plan | Nonce | Scheduled? | Unattended? | Accepted echo? | Verdict |
 |------|------------------|------|-------|------------|-------------|----------------|---------|
-| _pending_ | | | | | | | |
+| 2026-08-06 | Claude Cowork scheduled task (mobile-managed) | Paid Cowork plan | `20260806T085811Z-eac66456bb2215ec` | Yes | Yes | Yes | **PASS** |
+
+The provider UI advanced from the approximately 15:00 occurrence to the next
+approximately 16:00 occurrence after the run. The committed raw evidence records
+`lease_job` at 15:10:38 Asia/Yerevan followed by an accepted nonce-bound
+`submit_result` at 15:10:43; no manual tool call was made against this nonce.
 
 For every PASS row, commit the raw `gate-<nonce>.jsonl` next to this document
 and keep a screenshot or export of the provider's schedule configuration. The
