@@ -134,5 +134,17 @@
   {
     "id": "reserve-policy-change-race-fails-closed",
     "description": "A charge carrying an old reserve policy version or rollover identity conflicts without consuming either old or current capacity."
+  },
+  {
+    "id": "worker-registration-routing-atomic",
+    "description": "Concurrent registration of one worker persists the immutable worker and initial routing record together; identical input replays and changed input conflicts."
+  },
+  {
+    "id": "worker-routing-period-transition-race",
+    "description": "Two routing-period transitions comparing one revision produce one winner while preserving the Store-owned open-lease set."
+  },
+  {
+    "id": "class-health-initialization-replay-conflict",
+    "description": "Concurrent class-health initialization creates one snapshot; identical input replays and a different initial value conflicts without replacement."
   }
 ]

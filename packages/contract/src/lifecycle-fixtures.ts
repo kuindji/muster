@@ -47,8 +47,11 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "advanceTime",
   "saturateReserve",
   "rollReserveWindow",
+  "registerWorker",
   "registerClassVersion",
   "transitionWorkerState",
+  "transitionWorkerRouting",
+  "initializeClassHealth",
   "refreshClassHealth",
   "recordReputationEvidence",
   "listLeaseCandidates",
@@ -93,6 +96,44 @@ export const REVISION_14_COMMAND_ARGUMENT_KEYS = deepFreeze({
       "operating",
       "source",
     ],
+  },
+} as const);
+
+/** Closed argument shapes for revision-15 commands added by freeze 4. */
+export const REVISION_15_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  registerWorker: {
+    required: [
+      "workerId",
+      "contributionWindowId",
+      "contributionUsed",
+      "assignedSlotOccurrence",
+    ],
+    allowed: [
+      "workerId",
+      "contributionWindowId",
+      "contributionUsed",
+      "assignedSlotOccurrence",
+    ],
+  },
+  transitionWorkerRouting: {
+    required: [
+      "workerId",
+      "expectedRevision",
+      "contributionWindowId",
+      "contributionUsed",
+      "assignedSlotOccurrence",
+    ],
+    allowed: [
+      "workerId",
+      "expectedRevision",
+      "contributionWindowId",
+      "contributionUsed",
+      "assignedSlotOccurrence",
+    ],
+  },
+  initializeClassHealth: {
+    required: ["classId", "operating", "source"],
+    allowed: ["classId", "operating", "source"],
   },
 } as const);
 
@@ -161,6 +202,9 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "stale-health-refresh-cannot-replace-operator-halt",
   "queue-class-precedence-atomic",
   "reserve-policy-change-race-fails-closed",
+  "worker-registration-routing-atomic",
+  "worker-routing-period-transition-race",
+  "class-health-initialization-replay-conflict",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -238,6 +282,10 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "reserve-window-rollover-isolated",
   "agreement-fixture-families-required",
   "oracle-negative-fixture-families-bound",
+  "worker-registration-routing-atomic",
+  "worker-routing-transition-preserves-open-leases",
+  "worker-state-transition-fences-prepared-claim",
+  "class-health-initialization-replay-conflict",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -332,12 +380,20 @@ export function isLifecycleFixture(
     ) return false;
     if (!isRecord(step.args)) return false;
     const args = step.args;
-    const revision14Shape = REVISION_14_COMMAND_ARGUMENT_KEYS[
-      step.command as keyof typeof REVISION_14_COMMAND_ARGUMENT_KEYS
-    ];
-    if (revision14Shape !== undefined) {
-      if (!hasOnlyKeys(args, revision14Shape.allowed)) return false;
-      if (!revision14Shape.required.every((key) =>
+    const closedShape = (
+      REVISION_14_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
+      REVISION_15_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string];
+    if (closedShape !== undefined) {
+      if (!hasOnlyKeys(args, closedShape.allowed)) return false;
+      if (!closedShape.required.every((key) =>
         Object.hasOwn(args, key),
       )) return false;
     }

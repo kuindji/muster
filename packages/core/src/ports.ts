@@ -329,6 +329,34 @@ export type OperationalTransitionOutcome<T> =
   | { kind: "applied" | "replayed"; current: T }
   | { kind: "conflict"; current: T };
 
+export interface WorkerRegistration {
+  readonly worker: WorkerRecord;
+  readonly routing: {
+    readonly contributionWindowId: string;
+    readonly contributionUsed: 0;
+    readonly assignedSlotOccurrence: string;
+  };
+}
+
+export type RegisterWorkerOutcome =
+  | {
+      kind: "registered" | "replayed";
+      worker: WorkerRecord;
+      routing: WorkerRoutingSnapshot;
+    }
+  | {
+      kind: "conflict";
+      existingWorker: WorkerRecord;
+      existingRouting: WorkerRoutingSnapshot;
+    };
+
+export type WorkerRoutingTransitionOutcome =
+  OperationalTransitionOutcome<WorkerRoutingSnapshot>;
+
+export type InitializeClassHealthOutcome =
+  | { kind: "initialized" | "replayed"; current: ClassHealthSnapshot }
+  | { kind: "conflict"; current: ClassHealthSnapshot };
+
 export type EnqueueOutcome =
   | { kind: "enqueued" | "replayed" }
   | { kind: "conflict" }
@@ -538,7 +566,9 @@ export type TransitionOutcome =
 /** Atomic persistence commands consumed by the Milestone 2 core engine. */
 export interface Store {
   getWorker(workerId: WorkerId): Promise<WorkerRecord | null>;
-  putWorker(record: WorkerRecord): Promise<void>;
+  registerWorker(
+    registration: WorkerRegistration,
+  ): Promise<RegisterWorkerOutcome>;
   transitionWorkerState(input: {
     workerId: WorkerId;
     from: WorkerState;
@@ -579,7 +609,16 @@ export interface Store {
   }): Promise<readonly LeaseCandidateSnapshot[]>;
   getWorkerRoutingSnapshot(
     workerId: WorkerId,
-  ): Promise<WorkerRoutingSnapshot>;
+  ): Promise<WorkerRoutingSnapshot | null>;
+  transitionWorkerRouting(input: {
+    expected: WorkerRoutingSnapshot;
+    next: Pick<
+      WorkerRoutingSnapshot,
+      | "contributionWindowId"
+      | "contributionUsed"
+      | "assignedSlotOccurrence"
+    >;
+  }): Promise<WorkerRoutingTransitionOutcome>;
   compareAndClaimLease(input: {
     expectedCandidate: LeaseCandidateSnapshot;
     expectedWorker: WorkerRoutingSnapshot;
@@ -759,7 +798,10 @@ export interface Store {
     expected: QueueModeSnapshot;
     next: Pick<QueueModeSnapshot, "mode" | "updatedAt">;
   }): Promise<OperationalTransitionOutcome<QueueModeSnapshot>>;
-  getClassHealth(classId: string): Promise<ClassHealthSnapshot>;
+  initializeClassHealth(input: {
+    initial: Omit<ClassHealthSnapshot, "revision">;
+  }): Promise<InitializeClassHealthOutcome>;
+  getClassHealth(classId: string): Promise<ClassHealthSnapshot | null>;
   transitionClassHealth(input: {
     expected: ClassHealthSnapshot;
     next: Pick<

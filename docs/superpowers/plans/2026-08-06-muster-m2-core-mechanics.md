@@ -1,7 +1,7 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 14 and `contract-freeze-3`, including an
+`@kuindji/muster-core` against revision 15 and `contract-freeze-4`, including an
 in-memory Store and reusable Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -21,7 +21,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-3 (satisfied)
+## Entry gate: contract-freeze-4 (satisfied)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -50,13 +50,18 @@ separate `2026-08-06-muster-contract-freeze-3-m2-entry.md` amendment. It fixed:
   that are not represented in fixture metadata and therefore cannot be checked
   mechanically as written.
 
-The amended port and fixtures now make these choices explicit. Task 1 may begin
-only from the clean `contract-freeze-3` boundary; later contract changes still
-require a new normative revision and freeze amendment.
+The revision-14 port and fixtures made those choices explicit, but the first
+Task-1 implementation trace found that no command can create or advance the
+worker-routing snapshot and no command can initialize per-class health without
+adapter-owned defaults. Revision 15 and the separate
+`2026-08-06-muster-contract-freeze-4-store-bootstrap.md` amendment correct that
+last bootstrap boundary. Task 1 may begin only from a clean, independently
+reviewed `contract-freeze-4` tag; later contract changes still require a new
+normative revision and freeze amendment.
 
 ## Global constraints
 
-- Revision 14 and `contract-freeze-3` are normative. The worker wire version is
+- Revision 15 and `contract-freeze-4` are normative. The worker wire version is
   the version recorded by that freeze. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,
@@ -108,6 +113,9 @@ registration service that:
   reserve-floor violations, and incompatible adjudication policy;
 - durably registers `(classId, contractVersion, payloadSchemaHash,
   outputSchemaHash)` as `draft`, with identical replay and digest conflict;
+- initializes one core-prepared class-health snapshot for a new class and
+  treats an existing snapshot as durable shared class state rather than
+  resetting it for each contract version;
 - requires the loaded runtime functions to match the durable hashes before
   enqueue, lease, verification, or authorization;
 - returns all deterministic registration issues rather than failing at the
@@ -125,7 +133,8 @@ cover each rejection family and durable replay/conflict behavior.
   compare-and-transition changes.
 - Implement enrollment through `AdmissionHook`, immutable provider/capability
   recording, slot assignment, contract acceptance, probation, and the frozen
-  worker state machine.
+  worker state machine. Registration atomically persists the worker and its
+  core-prepared zero-usage contribution window/assigned-slot occurrence.
 - Suspension/revocation must use the atomic Store transition and emit audit
   events for the worker and every requeued open lease.
 
@@ -140,6 +149,9 @@ cover each rejection family and durable replay/conflict behavior.
 - Select eligible workers by hard capabilities, contract acceptance,
   contribution cap, slot, exclusions, `notBefore`, class health, deterministic
   reputation eligibility/priority, and declared diversity axes.
+- Compare-and-transition complete worker routing periods before claim whenever
+  the deterministic contribution window or assigned-slot occurrence advances;
+  never ask Store to derive either calendar.
 - Implement replication targets, canary/audit assignment, coarse no-work
   outcomes, `IdSource`-allocated lease identity, quantized initial TTL, absolute
   in-flight deadlines, extension caps, lease snapshots, abandon classifications,
@@ -219,7 +231,7 @@ reuse the protocol-level expectations at its adapter boundary.
 
 Run frozen install, invariants, package typechecks, fixtures check, all tests,
 builds, package-content inspection, Markdown fence/local-link checks, and
-`git diff --check`. Review from revision-14 prose through public operations,
+`git diff --check`. Review from revision-15 prose through public operations,
 Store calls, events, fixture IDs, and conformance tests. Search specifically for
 raw OAuth identity, direct I/O/entropy, unowned identifiers, unqualified
 epochs/versions, non-quantized TTL bounds, mutable aliases, stale operational or

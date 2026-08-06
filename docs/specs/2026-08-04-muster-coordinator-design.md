@@ -1,11 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 14)
+**Date:** 2026-08-04 (revision 15)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 3 completes
-the final M2-entry boundary; Milestone 2 runtime mechanics begin only from its
-reviewed local tag.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 4 completes
+the reviewed Store-bootstrap boundary; Milestone 2 runtime mechanics begin only
+from its reviewed local tag.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -148,6 +148,18 @@ version, rollover identity, and applicable per-worker limits. Finally,
 agreement and oracle fixtures carry the metadata registration needs to check
 equivalent/split and out-of-domain/support/omission families mechanically.
 These remain contract corrections; revision 14 implements no runtime engine.
+
+Revision 15 closes the Store-bootstrap ownership gap found by the first M2
+Task-1 implementation trace. Worker registration now atomically persists the
+immutable worker and core-prepared initial contribution-window/slot routing
+state; exact replay and changed-ID conflict are typed. Core can compare and
+advance a complete worker-routing period without asking an adapter to derive a
+week or slot calendar, while Store retains open leases and owns the next
+revision. Every applied worker-state change advances that routing revision and
+therefore fences a prepared claim. Per-class health likewise has an explicit
+core-prepared initialization command and nullable pre-initialization read.
+Queue state remains explicit deployment bootstrap state. These are contract
+corrections only; revision 15 implements no runtime engine.
 
 ## 1. What Muster is
 
@@ -867,6 +879,23 @@ Candidate and worker-routing revisions are Store-owned monotonically increasing
 integers for their durable record; they are comparison tokens, not identities,
 and core never allocates them.
 
+Enrollment calls one atomic `registerWorker` Store command with the immutable
+worker record and core-prepared initial routing period. The initial period
+contains a contribution-window identity, zero usage, and the assigned-slot
+occurrence. An unknown worker has neither record. Exact registration replay
+returns both persisted records; reuse of the worker ID with any changed worker
+or routing field conflicts without replacement.
+
+Core, not Store, derives contribution-window and assigned-slot occurrences
+from explicit deterministic deployment policy and time. When either period
+advances, core submits the complete next window identity, usage, and slot
+occurrence through `transitionWorkerRouting` against the last snapshot. Store
+retains the current open-lease IDs, increments its revision, and atomically
+applies, replays, or conflicts. A successful claim is the only Store command
+that increments contribution usage for a lease. Every applied worker-state
+transition increments the routing revision even when it closes no lease, so a
+claim prepared against the old eligibility state cannot cross that transition.
+
 Core checks worker state and contribution cap, then selects among candidates —
 job classes the worker's contract version supports, capability match against
 the *enrolled* record, diversity constraints, exclusion of workers already on
@@ -1380,9 +1409,12 @@ withdrawal, halt, or cancellation may later move the parent result to
 decision hash or the historical state of an authorization already issued from
 it.
 
-`getQueueMode()` and `getClassHealth(classId)` return durable snapshots with a
-revision, update timestamp, and value; class health also records whether the
-transition was automatic or operator-owned. A revision is a Store-owned
+`getQueueMode()` returns the deployment-bootstrapped durable queue snapshot.
+`getClassHealth(classId)` returns `null` until core has created the class's
+durable snapshot through `initializeClassHealth`; enqueue and claim fail closed
+while it is absent. Thereafter both reads return snapshots with a revision,
+update timestamp, and value; class health also records whether the transition
+was automatic or operator-owned. A revision is a Store-owned
 monotonically increasing integer for that record; core compares it but never
 allocates it. Prepared enqueue and claim
 commands carry the queue and class-health revisions they evaluated. A revision
@@ -1707,6 +1739,18 @@ assignment, and routing snapshots. `ReserveCharge` contains a closed policy
 snapshot and returns a typed charged/replayed/exhausted/policy-conflict outcome.
 These are atomic domain commands rather than row CRUD; a conforming Store can
 implement them without importing consumer functions or duplicating policy.
+
+Revision 15 replaces `putWorker(record)` with atomic
+`registerWorker({ worker, routing })`, makes an unknown
+`getWorkerRoutingSnapshot` read return `null`, and adds
+`transitionWorkerRouting({ expected, next })`. The next value contains the
+complete contribution-window, usage, and assigned-slot occurrence; Store
+preserves open leases and owns the revision increment. It also adds
+`initializeClassHealth({ initial })`, with initialized/replayed/conflict
+outcomes, and makes `getClassHealth` nullable before initialization. Class
+registration initializes health before activation. Every deployment bootstraps
+one explicit queue snapshot when constructing or migrating its Store; adapters
+must not invent a default on first read.
 
 ### 6.7 `OracleSpec`
 
@@ -2084,6 +2128,13 @@ changed policy version, rollover-window identity, exact charge replay, and the
 last-unit race. A Store adapter passes without loading JobClass functions or
 reimplementing routing, diversity, TTL, canary, health, or reserve policy.
 
+Revision-15 conformance additionally proves atomic worker-plus-routing
+registration, exact registration replay and changed registration conflict,
+nullable unknown routing/health reads, stale routing-period conflict with open
+leases preserved, worker-state fencing of prepared claims, and class-health
+initialization replay/conflict. A Store adapter passes without deriving a
+contribution window, assigned-slot occurrence, or initial class-health value.
+
 ### 8.2 Protocol conformance
 
 Golden `input_hash` over the exact canonical sanitized payload and both frozen
@@ -2113,6 +2164,9 @@ canary/routing records, bounded initial/extended lease lifetimes, atomic
 emergency operational transitions, and reserve policy/window conflicts. The
 worker wire remains version `1.1.0`: no MCP input/output schema or hash envelope
 changed in revision 14; only the internal core/Store package contract changed.
+Revision-15 fixtures additionally pin atomic worker/routing registration,
+routing-period comparison, worker-state claim fencing, and class-health
+initialization. Wire version `1.1.0` remains unchanged.
 
 ### 8.3 The invariant
 
@@ -2174,8 +2228,10 @@ minimum:
 `AuthenticatedWorkerSubject`, `WorkerId`, `Store`, `EventSink`, `AdmissionHook`,
 `AdjudicationSource`, `ReputationPolicy`, `IdSource`, `CoreIdentityKind`,
 `CoreDeploymentPolicy`, `QueuePriority`, `LeaseCandidateSnapshot`,
-`WorkerRoutingSnapshot`, `LeaseAssignment`, `LeaseRoutingSnapshot`,
+`WorkerRegistration`, `RegisterWorkerOutcome`, `WorkerRoutingSnapshot`,
+`WorkerRoutingTransitionOutcome`, `LeaseAssignment`, `LeaseRoutingSnapshot`,
 `QueueModeSnapshot`, `ClassHealthSnapshot`, `OperationalStateExpectation`,
+`InitializeClassHealthOutcome`,
 `ReservePolicySnapshot`, `ReserveChargeOutcome`, `OracleNegativeFixture`,
 `OracleNegativeFixtureCategory`.
 
@@ -2209,10 +2265,10 @@ automatic effect-derivation fixtures; human effect-path and absence-domain
 coverage; verified-result retirement before a second intent; the store
 concurrency suite; the prompt-injection corpus.
 
-Milestone one completed as `contract-freeze-1` on 2026-08-06 and its second
-amendment as `contract-freeze-2`. Revisions 13 and 14 do not reopen runtime
-feature scope; they correct the frozen boundary before runtime mechanics depend
-on it.
+Milestone one completed as `contract-freeze-1` on 2026-08-06, with reviewed
+amendments tagged `contract-freeze-2`, `contract-freeze-3`, and
+`contract-freeze-4`. Revisions 13-15 do not reopen runtime feature scope; they
+correct the frozen boundary before runtime mechanics depend on it.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2246,7 +2302,22 @@ all worker MCP schemas, and every frozen hash envelope remain unchanged. The
 reviewed commit is tagged `contract-freeze-3`; no runtime coordinator behavior,
 Postgres adapter, or MCP adapter belongs before that tag.
 
-### 11.4 Open
+### 11.4 Contract-freeze amendment 4: Store bootstrap and routing periods
+
+Revision 15 is complete only when worker registration persists the worker and
+initial routing period atomically; changed registration conflicts; unknown
+routing and class-health reads are nullable; core can compare-and-transition a
+complete routing period while Store preserves open leases; every worker-state
+transition fences prepared claims; class health has an explicit typed
+initialization path; and queue bootstrap ownership is documented. The new
+fixture identities and compile-time port tests are mandatory.
+
+The amendment changes only the internal core/Store package boundary. Wire
+version `1.1.0`, worker MCP schemas, hash envelopes, and existing fixture
+outcomes remain unchanged. Runtime mechanics resume only from an independently
+reviewed commit tagged `contract-freeze-4`.
+
+### 11.5 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

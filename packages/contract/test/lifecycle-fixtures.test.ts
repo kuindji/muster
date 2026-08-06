@@ -95,6 +95,18 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
           candidateRevison: "typo",
         } },
       ] }],
+      ["missing revision-15 required arg", { ...wellFormed, steps: [
+        { command: "registerWorker", args: {
+          workerId: "w1", contributionWindowId: "2026-W32",
+          assignedSlotOccurrence: "2026-W32-slot-1",
+        } },
+      ] }],
+      ["unknown revision-15 arg", { ...wellFormed, steps: [
+        { command: "initializeClassHealth", args: {
+          classId: "c1", operating: "ready", source: "automatic",
+          initialRevision: 1,
+        } },
+      ] }],
       ["non-finite charge", {
         ...wellFormed, expectFinal: { charges: { urgent: NaN } },
       }],

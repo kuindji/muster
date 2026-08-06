@@ -669,5 +669,58 @@
     "conditions": [],
     "steps": [{ "command": "registerClassVersion", "args": { "classId": "c2", "contractVersion": "v1", "oracleId": "o1" }, "expect": { "kind": "refused", "reason": "missing_predicate_negative_family" } }],
     "expectFinal": { "states": { "class-version:c2:v1": "absent" } }
+  },
+  {
+    "id": "worker-registration-routing-atomic",
+    "version": 1,
+    "area": "worker_state",
+    "description": "Worker registration creates the immutable worker and its core-prepared initial routing period atomically, with exact replay.",
+    "setup": {},
+    "conditions": [],
+    "steps": [
+      { "command": "registerWorker", "args": { "workerId": "w91", "contributionWindowId": "2026-W32", "contributionUsed": 0, "assignedSlotOccurrence": "2026-W32-slot-3" }, "expect": { "kind": "registered", "routingRevision": 1 } },
+      { "command": "registerWorker", "args": { "workerId": "w91", "contributionWindowId": "2026-W32", "contributionUsed": 0, "assignedSlotOccurrence": "2026-W32-slot-3" }, "expect": { "kind": "replayed", "routingRevision": 1 } },
+      { "command": "registerWorker", "args": { "workerId": "w91", "contributionWindowId": "2026-W32", "contributionUsed": 0, "assignedSlotOccurrence": "2026-W32-slot-4" }, "expect": { "kind": "conflict", "routingRevision": 1 } }
+    ],
+    "expectFinal": { "states": { "worker:w91": "enrolled", "worker-routing:w91": "2026-W32-slot-3" } }
+  },
+  {
+    "id": "worker-routing-transition-preserves-open-leases",
+    "version": 1,
+    "area": "routing",
+    "description": "Core advances a complete routing period while Store preserves the open-lease set and owns the revision increment.",
+    "setup": { "worker-routing:w92": { "revision": 4, "contributionWindowId": "2026-W32", "contributionUsed": 3, "assignedSlotOccurrence": "2026-W32-slot-2", "openLeaseIds": ["l92"] } },
+    "conditions": [],
+    "steps": [
+      { "command": "transitionWorkerRouting", "args": { "workerId": "w92", "expectedRevision": 4, "contributionWindowId": "2026-W33", "contributionUsed": 0, "assignedSlotOccurrence": "2026-W33-slot-2" }, "expect": { "kind": "applied", "routingRevision": 5 } }
+    ],
+    "expectFinal": { "states": { "worker-routing:w92": "2026-W33-slot-2", "lease:l92": "open" } }
+  },
+  {
+    "id": "worker-state-transition-fences-prepared-claim",
+    "version": 1,
+    "area": "worker_state",
+    "description": "Every applied worker-state transition advances the routing revision so a claim prepared from the old eligibility state conflicts.",
+    "setup": { "worker:w93": { "state": "active" }, "worker-routing:w93": { "revision": 2, "contributionWindowId": "2026-W32", "contributionUsed": 0, "assignedSlotOccurrence": "2026-W32-slot-1", "openLeaseIds": [] }, "candidate:j93:1": { "revision": 2 } },
+    "conditions": [],
+    "steps": [
+      { "command": "transitionWorkerState", "args": { "workerId": "w93", "from": "active", "to": "maintenance" }, "expect": { "kind": "applied" } },
+      { "command": "compareAndClaimLease", "args": { "leaseId": "l93", "candidateRevision": 2, "workerRevision": 2 }, "expect": { "kind": "conflict", "reason": "worker_snapshot_stale" } }
+    ],
+    "expectFinal": { "states": { "worker:w93": "maintenance", "lease:l93": "absent" } }
+  },
+  {
+    "id": "class-health-initialization-replay-conflict",
+    "version": 1,
+    "area": "operational_state",
+    "description": "Class-health initialization is explicit: identical input replays and a changed initial value conflicts without replacement.",
+    "setup": {},
+    "conditions": [],
+    "steps": [
+      { "command": "initializeClassHealth", "args": { "classId": "c94", "operating": "ready", "source": "automatic" }, "expect": { "kind": "initialized", "revision": 1 } },
+      { "command": "initializeClassHealth", "args": { "classId": "c94", "operating": "ready", "source": "automatic" }, "expect": { "kind": "replayed", "revision": 1 } },
+      { "command": "initializeClassHealth", "args": { "classId": "c94", "operating": "admission_halted", "source": "operator" }, "expect": { "kind": "conflict", "revision": 1 } }
+    ],
+    "expectFinal": { "states": { "class-health:c94": "ready" } }
   }
 ]
