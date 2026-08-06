@@ -6,6 +6,7 @@ export { hashCanonical, sha256Hex } from "./canonical/sha256.js";
 export * from "./agreement.js";
 export * from "./actions.js";
 export * from "./effect.js";
+export * from "./hashes.js";
 export * from "./job-class.js";
 export * from "./jsonpath.js";
 export * from "./oracle.js";
