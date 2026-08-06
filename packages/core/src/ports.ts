@@ -77,6 +77,31 @@ export interface CoreDeploymentPolicy {
   readonly maxExtensionsPerLease: number;
 }
 
+/** Complete deterministic routing period prepared by worker-control policy. */
+export interface WorkerRoutingPeriod {
+  readonly contributionWindowId: string;
+  readonly assignedSlotOccurrence: string;
+  readonly slotOpen: boolean;
+}
+
+/**
+ * Deployment-owned worker policy. Functions are deterministic and I/O-free;
+ * their closed inputs deliberately contain no job or payload selector.
+ */
+export interface WorkerControlPolicy {
+  readonly probationCheckedSuccesses: number;
+  readonly probationMinimumEnrollmentAge: Seconds;
+  assignSlot(input: {
+    readonly workerId: WorkerId;
+    readonly enrolledAt: Timestamp;
+  }): number;
+  routingAt(input: {
+    readonly workerId: WorkerId;
+    readonly slot: number;
+    readonly at: Timestamp;
+  }): WorkerRoutingPeriod;
+}
+
 export interface EventSink {
   emit(event: MusterEvent): void;
 }

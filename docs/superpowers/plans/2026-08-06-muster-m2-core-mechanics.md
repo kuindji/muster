@@ -1,7 +1,7 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 17 and `contract-freeze-6`, including an
+`@kuindji/muster-core` against revision 18 and `contract-freeze-7`, including an
 in-memory Store and reusable Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -21,7 +21,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-6 (satisfied)
+## Entry gate: contract-freeze-7 (awaiting independent review)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -75,11 +75,18 @@ and the separate
 minimal Store outcome and audit event. Task 3 may begin only after independent
 review and the local `contract-freeze-6` tag.
 
+The first Task-3 runtime pass then found that probation named no configured
+checked-success count or minimum enrollment age and worker scheduling named no
+deterministic policy owner for slots or routing periods. Revision 18 and the
+separate `2026-08-06-muster-contract-freeze-7-worker-control-policy.md`
+amendment add that closed deployment-owned policy. Task 3 may resume only after
+independent review and the local `contract-freeze-7` tag.
+
 ## Global constraints
 
-- Revision 17 and `contract-freeze-6` are normative. The worker wire version is
-  unchanged. Frozen exported types, tables, state machines, schemas, and
-  fixtures are read-only in M2.
+- Revision 18 and `contract-freeze-7` are normative after the entry gate is
+  reviewed and tagged. The worker wire version is unchanged. Frozen exported
+  types, tables, state machines, schemas, and fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,
   filesystem, environment, or model-inference API.
 - Core sees only opaque `WorkerId`; raw OAuth issuer and subject fields stop at
@@ -148,9 +155,10 @@ cover each rejection family and durable replay/conflict behavior.
 - Implement class-qualified permit-epoch initialization and ordinary
   compare-and-transition changes.
 - Implement enrollment through `AdmissionHook`, immutable provider/capability
-  recording, slot assignment, contract acceptance, probation, and the frozen
-  worker state machine. Registration atomically persists the worker and its
-  core-prepared zero-usage contribution window/assigned-slot occurrence.
+  recording, policy-derived slot assignment, contract acceptance, evidence- and
+  age-gated probation, and the frozen worker state machine. Registration
+  atomically persists the worker and its policy-prepared zero-usage contribution
+  window/assigned-slot occurrence.
 - Suspension/revocation must use the atomic Store transition, emit one worker
   state-change audit event, and emit one identity-bearing `lease_requeue` audit
   event for every requeued open lease.

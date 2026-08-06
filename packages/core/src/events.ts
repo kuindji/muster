@@ -43,7 +43,7 @@ interface JobCycleScoped<T extends string> extends ClassScoped<T> {
   collectionCycle: number;
 }
 
-/** Spec revision 17 section 7 consumer events; wire names remain unchanged. */
+/** Spec revision 18 section 7 consumer events; wire names remain unchanged. */
 export type MusterNotification =
   | (ClassScoped<"suspicion"> & { workerId: WorkerId; signal: string })
   | (JobCycleScoped<"split"> & { equivalenceKeyCount: number })

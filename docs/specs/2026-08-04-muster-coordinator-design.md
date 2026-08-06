@@ -1,11 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 17)
+**Date:** 2026-08-04 (revision 18)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 6 completed
-the reviewed worker-requeue audit boundary; Milestone 2 Task 3 may resume only
-from its reviewed local tag.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 7 is
+implemented locally and awaiting independent review; Milestone 2 Task 3 remains
+paused until the reviewed local tag exists.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -180,6 +180,15 @@ worker, provider surface, job cycle, contract version, permit epoch, and
 suspension/revocation reason. This is a contract correction only; revision 17
 implements no worker-control runtime and does not change the worker wire.
 
+Revision 18 closes two worker-control policy gaps found by the Task-3 runtime
+trace. The frozen boundary named neither the checked-success count nor minimum
+enrollment age required for probation promotion, and it provided no explicit
+owner for deterministic slot assignment or contribution/slot calendar
+resolution. A deployment-owned `WorkerControlPolicy` now owns those values and
+functions through closed inputs that expose no job or payload content. This is
+a contract correction only; revision 18 implements no worker-control runtime
+and does not change durable records or the worker wire.
+
 ## 1. What Muster is
 
 A coordinator library for distributing bounded, sanitized, schema-bound
@@ -333,6 +342,14 @@ enrolled --(N checked successes over >= T days)--> active <--> maintenance
 
 `maintenance` is worker-declared and costs no standing. `paused` is
 coordinator-imposed by suspicion. `suspended` is an operator action.
+
+The deployment-owned `WorkerControlPolicy` supplies a positive integer `N` and
+positive minimum enrollment age `T`. Every transition from `enrolled` or
+`paused` to `active` requires at least `N` durable `checked_success` records at
+or after enrollment and elapsed enrollment age of at least `T`; this prevents
+`enrolled -> paused -> active` from bypassing probation. A previously active
+worker retains the qualifying evidence. The calibration job alone is never
+sufficient.
 
 ### 3.2 Capabilities are enrolled, never claimed at lease time
 
@@ -908,6 +925,14 @@ contains a contribution-window identity, zero usage, and the assigned-slot
 occurrence. An unknown worker has neither record. Exact registration replay
 returns both persisted records; reuse of the worker ID with any changed worker
 or routing field conflicts without replacement.
+
+Core prepares the slot and routing period through `WorkerControlPolicy`.
+`assignSlot({ workerId, enrolledAt })` receives no job or payload selector.
+`routingAt({ workerId, slot, at })` returns wire-safe contribution-window and
+assigned-slot-occurrence identities plus whether that occurrence is open at the
+supplied instant. Invalid policy configuration or output fails closed before
+registration or lease selection. The functions are deterministic and I/O-free;
+deployment policy, not Store, owns their calendar semantics.
 
 Core, not Store, derives contribution-window and assigned-slot occurrences
 from explicit deterministic deployment policy and time. When either period
@@ -2261,7 +2286,8 @@ minimum:
 `SubmissionReceipt`, `ClassHealth`,
 `AuthenticatedWorkerSubject`, `WorkerId`, `Store`, `EventSink`, `AdmissionHook`,
 `AdjudicationSource`, `ReputationPolicy`, `IdSource`, `CoreIdentityKind`,
-`CoreDeploymentPolicy`, `QueuePriority`, `LeaseCandidateSnapshot`,
+`CoreDeploymentPolicy`, `WorkerControlPolicy`, `WorkerRoutingPeriod`,
+`QueuePriority`, `LeaseCandidateSnapshot`,
 `WorkerRegistration`, `RegisterWorkerOutcome`, `WorkerRoutingSnapshot`,
 `WorkerRoutingTransitionOutcome`, `LeaseAssignment`, `LeaseRoutingSnapshot`,
 `QueueModeSnapshot`, `ClassHealthSnapshot`, `OperationalStateExpectation`,
@@ -2301,9 +2327,10 @@ concurrency suite; the prompt-injection corpus.
 
 Milestone one completed as `contract-freeze-1` on 2026-08-06, with reviewed
 amendments tagged `contract-freeze-2`, `contract-freeze-3`,
-`contract-freeze-4`, `contract-freeze-5`, and `contract-freeze-6`. Revisions
-13-17 do not reopen runtime feature scope; they correct the frozen boundary
-before runtime mechanics depend on it.
+`contract-freeze-4`, `contract-freeze-5`, and `contract-freeze-6`. Revision 18
+is the local, unreviewed `contract-freeze-7` amendment. Revisions 13-18 do not
+reopen runtime feature scope; they correct the frozen boundary before runtime
+mechanics depend on it.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2383,7 +2410,24 @@ boundary. Wire version `1.1.0`, worker MCP schemas, hash envelopes, job/result
 state, and requeue behavior remain unchanged. M2 Task 3 resumes only from an
 independently reviewed commit tagged `contract-freeze-6`.
 
-### 11.7 Open
+### 11.7 Contract-freeze amendment 7: worker-control policy inputs
+
+Revision 18 is complete only when a deployment-owned `WorkerControlPolicy`
+provides the positive checked-success count and minimum enrollment age for
+probation, deterministic slot assignment, and complete contribution-window and
+assigned-slot occurrence resolution at an explicit instant. Policy function
+inputs expose worker identity, assigned slot, and time only; they never observe
+job, payload, queue, class, or result content. Enrollment and later routing
+fail closed on invalid policy values or outputs, and every `enrolled -> active`
+or `paused -> active` transition evaluates durable post-enrollment
+`checked_success` evidence against both probation thresholds.
+
+The amendment changes only the internal core/deployment boundary. Store ports,
+durable worker/routing records, wire version `1.1.0`, events, hashes, and frozen
+fixtures remain unchanged. M2 Task 3 resumes only from an independently
+reviewed commit tagged `contract-freeze-7`.
+
+### 11.8 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.
