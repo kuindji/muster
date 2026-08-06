@@ -12,6 +12,7 @@ export * from "./errors.js";
 export * from "./hashes.js";
 export * from "./job-class.js";
 export * from "./jsonpath.js";
+export * from "./mcp-schemas.js";
 export * from "./oracle.js";
 export * from "./primitives.js";
 export * from "./states.js";
