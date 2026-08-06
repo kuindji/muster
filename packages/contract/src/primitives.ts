@@ -1,3 +1,5 @@
+import { deepFreeze } from "./deep-freeze.js";
+
 export type NonEmptyArray<T> = [T, ...T[]];
 
 export function isNonEmptyArray<T>(
@@ -41,7 +43,7 @@ export interface SubmissionEvidence {
  * every "bytewise" ordering in the spec implementable as plain JS string
  * comparison (UTF-16 and UTF-8 orders agree on ASCII, diverge outside it).
  */
-export const WIRE_ID_PATTERN = /^[\x21-\x7e]+$/;
+export const WIRE_ID_PATTERN = deepFreeze(/^[\x21-\x7e]+$/);
 
 export function isWireId(value: string): boolean {
   return WIRE_ID_PATTERN.test(value);
