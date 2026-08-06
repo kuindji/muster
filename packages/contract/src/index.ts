@@ -3,6 +3,7 @@ export {
   CanonicalizationError,
 } from "./canonical/jcs.js";
 export { hashCanonical, sha256Hex } from "./canonical/sha256.js";
+export * from "./agreement.js";
 export * from "./actions.js";
 export * from "./effect.js";
 export * from "./jsonpath.js";
