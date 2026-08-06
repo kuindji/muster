@@ -1,5 +1,17 @@
 # Changelog
 
+## contract-freeze-5 — 2026-08-06
+
+Revision 16 amendment discovered by the first Milestone 2 Task-2 registration
+trace. Agreement fixtures now bind one schema-valid payload to every candidate
+result set so registration can run payload-dependent validators and oracles.
+`EscalationReserves` now declares
+`retrospectiveAuditProjectionPerWeek`, making the audit-reserve floor
+deterministic and class-owned. The closed agreement-fixture shape validator and
+compile-time contract tests cover both additions. Wire contract version remains
+`1.1.0`; Store ports, durable records, and runtime coordinator behavior are
+unchanged.
+
 ## contract-freeze-2 — 2026-08-06
 
 Revision 13 amendment before Milestone 2. Freezes Muster Schema 1 and its

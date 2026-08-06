@@ -5,15 +5,19 @@ import type {
 } from "./primitives.js";
 import { canonicalize } from "./canonical/jcs.js";
 
-export type AgreementFixture<Result> =
+export type AgreementFixture<Payload, Result> =
   | {
       kind: "equivalent";
+      /** Schema-valid payload supplied to validators and applicable oracles. */
+      payload: Payload;
       /** At least two JCS-distinct representations resolving to one key. */
       results: AtLeastTwo<Result>;
       expected: "equivalent";
     }
   | {
       kind: "split";
+      /** Schema-valid payload shared by every candidate result. */
+      payload: Payload;
       /** At least two representations producing different keys. */
       results: AtLeastTwo<Result>;
       expected: "split";
@@ -22,20 +26,22 @@ export type AgreementFixture<Result> =
 /** Closed shape check used before registration invokes consumer functions. */
 export function isAgreementFixtureShape(
   value: unknown,
-): value is AgreementFixture<CanonicalJsonValue> {
+): value is AgreementFixture<CanonicalJsonValue, CanonicalJsonValue> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
   const fixture = value as Record<string, unknown>;
   if (
     !Object.keys(fixture).every((key) =>
-      ["kind", "results", "expected"].includes(key),
+      ["kind", "payload", "results", "expected"].includes(key),
     ) ||
+    !Object.hasOwn(fixture, "payload") ||
     !Array.isArray(fixture.results) ||
     fixture.results.length < 2
   ) return false;
   const canonicalResults: string[] = [];
   try {
+    canonicalize(fixture.payload);
     for (const result of fixture.results) {
       canonicalResults.push(canonicalize(result));
     }
@@ -49,10 +55,10 @@ export function isAgreementFixtureShape(
   );
 }
 
-export interface AgreementPolicy<Result> {
+export interface AgreementPolicy<Payload, Result> {
   equivalenceKey(result: Result): CanonicalJsonValue;
   resolveEquivalent(results: NonEmptyArray<Result>): Result;
-  agreementFixtures: NonEmptyArray<AgreementFixture<Result>>;
+  agreementFixtures: NonEmptyArray<AgreementFixture<Payload, Result>>;
 }
 
 export type AgreementOutcome<Result> =

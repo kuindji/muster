@@ -14,16 +14,16 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Contract freeze 4 complete.** The real-provider unattended platform gate
-passed. Revision 15 freezes the worker-routing and class-health bootstrap
-ownership found by the first M2 Task-1 implementation trace. Runtime coordinator
-behavior remains Milestone 2 work.
+**Contract freeze 5 complete.** The real-provider unattended platform gate
+passed. Revision 16 freezes the registration inputs found missing by the first
+M2 Task-2 implementation trace. Runtime coordinator behavior remains Milestone
+2 work.
 
 ## Specs
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 15) | `oneshot` scope; contract-freeze-4 amendment | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, core-owned routing and bootstrap state with atomic Store comparison, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement with absorbing splits, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 16) | `oneshot` scope; contract-freeze-5 amendment | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, core-owned routing and bootstrap state with atomic Store comparison, payload-bound agreement fixtures, explicit retrospective-audit projections, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement with absorbing splits, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -45,12 +45,13 @@ behavior remains Milestone 2 work.
 ## Contract freeze
 
 The wire contract remains frozen at version `1.1.0`. The current reviewed
-internal boundary is tagged `contract-freeze-4`; `contract-freeze-1` through
-`contract-freeze-3` remain historical boundaries. The binding scope is defined by [spec §11.1–11.4](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+internal boundary is tagged `contract-freeze-5`; `contract-freeze-1` through
+`contract-freeze-4` remain historical boundaries. The binding scope is defined by [spec §11.1–11.5](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
 the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
 the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md),
-and the [freeze-4 Store-bootstrap amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-4-store-bootstrap.md).
+the [freeze-4 Store-bootstrap amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-4-store-bootstrap.md),
+and the [freeze-5 registration-input amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-5-registration-inputs.md).
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

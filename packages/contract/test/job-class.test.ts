@@ -4,7 +4,10 @@ import {
   AXIS_CONFIDENCE,
   PRIVACY_CLASS_RULES,
 } from "../src/job-class.js";
-import type { JobClass } from "../src/job-class.js";
+import type {
+  EscalationReserves,
+  JobClass,
+} from "../src/job-class.js";
 import { validateMusterSchema } from "../src/schema.js";
 
 type Payload = { items: Array<{ id: string; text: string }> };
@@ -104,6 +107,7 @@ describe("JobClass shape (spec 4.2)", () => {
         agreementFixtures: [
           {
             kind: "equivalent",
+            payload: { items: [] },
             results: [
               { claims: [{ itemId: "a", claim: "first" }] },
               { claims: [{ itemId: "b", claim: "second" }] },
@@ -112,6 +116,7 @@ describe("JobClass shape (spec 4.2)", () => {
           },
           {
             kind: "split",
+            payload: { items: [] },
             results: [
               { claims: [] },
               { claims: [{ itemId: "a", claim: "b" }] },
@@ -140,6 +145,7 @@ describe("JobClass shape (spec 4.2)", () => {
         lowCostPerWeek: 50,
         urgentPerWeek: 5,
         splitAndAdjudicationPerWeek: 10,
+        retrospectiveAuditProjectionPerWeek: 10,
         auditPerWeek: 10,
         perWorkerLowCostQuotaPerWeek: 5,
         perWorkerUrgentQuotaPerWeek: 1,
@@ -157,6 +163,19 @@ describe("JobClass shape (spec 4.2)", () => {
     expect(jobClass.surface).toBe("unbounded");
     expect(validateMusterSchema(jobClass.payloadSchema).ok).toBe(true);
     expect(validateMusterSchema(jobClass.outputSchema).ok).toBe(true);
+    expect(jobClass.escalation.auditPerWeek).toBeGreaterThanOrEqual(
+      jobClass.escalation.retrospectiveAuditProjectionPerWeek,
+    );
+    // @ts-expect-error revision 16 keeps the projection distinct and mandatory
+    const missingAuditProjection: EscalationReserves = {
+      lowCostPerWeek: 50,
+      urgentPerWeek: 5,
+      splitAndAdjudicationPerWeek: 10,
+      auditPerWeek: 10,
+      perWorkerLowCostQuotaPerWeek: 5,
+      perWorkerUrgentQuotaPerWeek: 1,
+    };
+    void missingAuditProjection;
   });
 
   it("freezes axis confidence per spec 6.2", () => {

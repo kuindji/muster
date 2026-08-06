@@ -30,19 +30,36 @@ describe("unanimousEquivalence (spec 6.2)", () => {
 
 describe("AgreementPolicy shape compiles as specified", () => {
   it("equivalenceKey feeds canonical comparison", () => {
+    type Payload = { source: string };
     type Result = { value: number; note: string };
-    const policy: AgreementPolicy<Result> = {
+    const policy: AgreementPolicy<Payload, Result> = {
       equivalenceKey: (result) => ({ value: result.value }),
       resolveEquivalent: (results) => results[0],
       agreementFixtures: [
         {
           kind: "equivalent",
+          payload: { source: "fixture-equivalent" },
           results: [
             { value: 1, note: "x" },
             { value: 1, note: "y" },
           ],
           expected: "equivalent",
         },
+        {
+          kind: "split",
+          payload: { source: "fixture-split" },
+          results: [
+            { value: 1, note: "x" },
+            { value: 2, note: "x" },
+          ],
+          expected: "split",
+        },
+      ],
+    };
+    const missingFixturePayload: AgreementPolicy<Payload, Result> = {
+      ...policy,
+      agreementFixtures: [
+        // @ts-expect-error revision 16 requires a payload for every fixture
         {
           kind: "split",
           results: [
@@ -53,6 +70,7 @@ describe("AgreementPolicy shape compiles as specified", () => {
         },
       ],
     };
+    void missingFixturePayload;
     const keys = policy.agreementFixtures[0].results.map((result) =>
       canonicalize(policy.equivalenceKey(result)),
     );
@@ -70,33 +88,50 @@ describe("AgreementPolicy shape compiles as specified", () => {
   it("rejects malformed or under-specified fixture metadata", () => {
     expect(isAgreementFixtureShape({
       kind: "equivalent",
+      payload: { source: "fixture" },
       results: [{ value: 1 }, { value: 1, note: "distinct" }],
       expected: "equivalent",
     })).toBe(true);
     expect(isAgreementFixtureShape({
       kind: "equivalent",
+      payload: { source: "fixture" },
       results: [{ value: 1 }],
       expected: "equivalent",
     })).toBe(false);
     expect(isAgreementFixtureShape({
       kind: "equivalent",
+      payload: { source: "fixture" },
       results: [{ value: 1 }, { value: 1 }],
       expected: "equivalent",
     })).toBe(false);
     expect(isAgreementFixtureShape({
       kind: "equivalent",
+      payload: { source: "fixture" },
       results: [{ value: 1 }, { value: 2 }],
       expected: "split",
     })).toBe(false);
     expect(isAgreementFixtureShape({
       kind: "split",
+      payload: { source: "fixture" },
       results: [{ value: 1 }, { value: 2 }],
       expected: "split",
       typo: true,
     })).toBe(false);
     expect(isAgreementFixtureShape({
       kind: "split",
+      payload: { source: "fixture" },
       results: [{ value: 1 }, { value: undefined }],
+      expected: "split",
+    })).toBe(false);
+    expect(isAgreementFixtureShape({
+      kind: "split",
+      results: [{ value: 1 }, { value: 2 }],
+      expected: "split",
+    })).toBe(false);
+    expect(isAgreementFixtureShape({
+      kind: "split",
+      payload: { source: undefined },
+      results: [{ value: 1 }, { value: 2 }],
       expected: "split",
     })).toBe(false);
   });

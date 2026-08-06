@@ -1,7 +1,7 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 15 and `contract-freeze-4`, including an
+`@kuindji/muster-core` against revision 16 and `contract-freeze-5`, including an
 in-memory Store and reusable Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -21,7 +21,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-4 (satisfied)
+## Entry gate: contract-freeze-5 (satisfied)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -59,9 +59,17 @@ last bootstrap boundary. Task 1 may begin only from a clean, independently
 reviewed `contract-freeze-4` tag; later contract changes still require a new
 normative revision and freeze amendment.
 
+The first Task-2 registration trace then found that agreement fixtures carried
+no payload for the required validator/oracle calls and that the retrospective
+audit floor named no configured projection. Revision 16 and the separate
+`2026-08-06-muster-contract-freeze-5-registration-inputs.md` amendment bind a
+schema-valid payload to each agreement fixture and make the weekly retrospective
+audit projection explicit. Task 2 may resume only from the independently
+reviewed `contract-freeze-5` tag.
+
 ## Global constraints
 
-- Revision 15 and `contract-freeze-4` are normative. The worker wire version is
+- Revision 16 and `contract-freeze-5` are normative. The worker wire version is
   the version recorded by that freeze. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,

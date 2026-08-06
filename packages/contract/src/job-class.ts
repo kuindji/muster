@@ -139,6 +139,8 @@ export interface EscalationReserves {
   lowCostPerWeek: number;
   urgentPerWeek: number;
   splitAndAdjudicationPerWeek: number;
+  /** Declared retrospective checks per week that the audit reserve must cover. */
+  retrospectiveAuditProjectionPerWeek: number;
   auditPerWeek: number;
   perWorkerLowCostQuotaPerWeek: number;
   perWorkerUrgentQuotaPerWeek: number;
@@ -176,7 +178,7 @@ export interface JobClass<Payload, Result> {
   validators: Validator<Payload, Result>[];
   oracles: OracleSpec<Payload, Result>[];
   /** Required when replication.target > 1. */
-  agreement?: AgreementPolicy<Result>;
+  agreement?: AgreementPolicy<Payload, Result>;
   replication: ReplicationPolicy;
   canaries?: CanarySource<Payload, Result>;
 

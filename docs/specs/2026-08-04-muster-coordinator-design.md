@@ -1,11 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 15)
+**Date:** 2026-08-04 (revision 16)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 4 completes
-the reviewed Store-bootstrap boundary; Milestone 2 runtime mechanics begin only
-from its reviewed local tag.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 5 completes
+the reviewed registration-input boundary; Milestone 2 runtime mechanics resume
+only from its reviewed local tag.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -160,6 +160,15 @@ therefore fences a prepared claim. Per-class health likewise has an explicit
 core-prepared initialization command and nullable pre-initialization read.
 Queue state remains explicit deployment bootstrap state. These are contract
 corrections only; revision 15 implements no runtime engine.
+
+Revision 16 closes two registration-input gaps found by the first M2 Task-2
+implementation trace. Every agreement fixture now carries the exact payload
+against which its candidate results, normalized result, validators, and oracles
+run. Every class also declares its retrospective-audit projection separately
+from the audit reserve that must cover it. Registration can therefore execute
+both frozen refusal rules without fabricating a payload or obtaining hidden
+deployment policy. These are contract corrections only; revision 16 implements
+no runtime engine and does not change the worker wire.
 
 ## 1. What Muster is
 
@@ -366,7 +375,7 @@ interface JobClass<Payload, Result> {
   resultEvidenceRequirement?: EvidenceRequirement // required for deterministic floor
   validators: Validator<Payload, Result>[] // deterministic, no I/O
   oracles: OracleSpec<Payload, Result>[]   // section 6.7
-  agreement?: AgreementPolicy<Result>       // section 6.2; deterministic, no I/O
+  agreement?: AgreementPolicy<Payload, Result> // section 6.2; deterministic, no I/O
   replication: ReplicationPolicy
   canaries?: CanarySource<Payload, Result>
 
@@ -395,20 +404,22 @@ interface ReplicationPolicy {
   maxSplitEvidenceReroutes: number    // integer >= 0; evidence only after a split
 }
 
-interface AgreementPolicy<Result> {
+interface AgreementPolicy<Payload, Result> {
   equivalenceKey(result: Result): CanonicalJsonValue
   resolveEquivalent(results: NonEmptyArray<Result>): Result
-  agreementFixtures: NonEmptyArray<AgreementFixture<Result>>
+  agreementFixtures: NonEmptyArray<AgreementFixture<Payload, Result>>
 }
 
-type AgreementFixture<Result> =
+type AgreementFixture<Payload, Result> =
   | {
       kind: 'equivalent'
+      payload: Payload
       results: AtLeastTwo<Result>       // JCS-distinct representations
       expected: 'equivalent'
     }
   | {
       kind: 'split'
+      payload: Payload
       results: AtLeastTwo<Result>
       expected: 'split'
     }
@@ -521,11 +532,13 @@ snapshotted into each lease and does not enter `input_hash`.
 
 When replication declares agreement, registration requires at least one
 `split` fixture and at least one `equivalent` fixture containing at least two
-JCS-distinct result representations. It computes every equivalence key, runs
-`resolveEquivalent` for the equivalent case, and passes the resolved output
-through the frozen output schema, validators, applicable oracles, and
-equivalence-key check. This is consumer-supplied evidence, not proof of
-real-world semantics. A class declaring a
+JCS-distinct result representations. Each fixture carries one payload that must
+pass the frozen payload schema; every fixture result must pass the frozen output
+schema. Registration computes every equivalence key against that result set,
+runs `resolveEquivalent` for the equivalent case, and passes the resolved output
+and fixture payload through the frozen output schema, validators, applicable
+oracles, and equivalence-key check. This is consumer-supplied evidence, not
+proof of real-world semantics. A class declaring a
 `deterministic_oracle` result floor must declare a matching
 `resultEvidenceRequirement`. Each `automatic` permit whose gate requires
 deterministic evidence must have exactly one matching entry in
@@ -951,9 +964,11 @@ key. Its output then reruns schema, validators, and oracles, and the audit recor
 retains every input result hash. Any non-unanimous set produces a `split`
 outcome.
 Mandatory `agreementFixtures` exercise equivalent representations and domain
-pairs that must split; as with oracle fixtures, they are checked evidence at the
-trusted-consumer boundary rather than proof that arbitrary consumer code
-expresses the intended semantics.
+pairs that must split. Each fixture binds one schema-valid payload shared by all
+of its results, so registration and the runtime agreement path invoke validators
+and oracles with the same `(payload, result)` shape. As with oracle fixtures,
+they are checked evidence at the trusted-consumer boundary rather than proof
+that arbitrary consumer code expresses the intended semantics.
 
 **A split is absorbing for automatic agreement.** Once any accepted results
 have different equivalence keys, retaining the dissent means no later superset
@@ -1076,16 +1091,22 @@ interface EscalationReserves {
   lowCostPerWeek: number        // routine review queue
   urgentPerWeek: number         // routeToHumanUrgent and routeToUrgent
   splitAndAdjudicationPerWeek: number   // core-routed split and human gates only
+  retrospectiveAuditProjectionPerWeek: number // declared checks that must be funded
   auditPerWeek: number          // reserved for retrospective checks
   perWorkerLowCostQuotaPerWeek: number
   perWorkerUrgentQuotaPerWeek: number
 }
 ```
 
-Registration rejects negative reserves, an adjudication requirement below the
+Every reserve and `retrospectiveAuditProjectionPerWeek` must be finite and
+non-negative. The projection is class-owned registration policy: it is the
+number of retrospective checks the class declares it must fund in each reserve
+window, independently of probabilistic canary rates. Registration rejects an
+adjudication requirement below the
 sum of `lowCostPerWeek`, `urgentPerWeek`, and
 `splitAndAdjudicationPerWeek`, or an audit reserve below the class's configured
-retrospective audit projection.
+`retrospectiveAuditProjectionPerWeek`. The projection is not charged; it is the
+floor against which the separately charged `auditPerWeek` reserve is validated.
 
 Every charge-bearing Store command carries one immutable
 `ReservePolicySnapshot`: class and contract version, reserve-policy version,
@@ -2266,9 +2287,10 @@ coverage; verified-result retirement before a second intent; the store
 concurrency suite; the prompt-injection corpus.
 
 Milestone one completed as `contract-freeze-1` on 2026-08-06, with reviewed
-amendments tagged `contract-freeze-2`, `contract-freeze-3`, and
-`contract-freeze-4`. Revisions 13-15 do not reopen runtime feature scope; they
-correct the frozen boundary before runtime mechanics depend on it.
+amendments tagged `contract-freeze-2`, `contract-freeze-3`,
+`contract-freeze-4`, and `contract-freeze-5`. Revisions 13-16 do not reopen
+runtime feature scope; they correct the frozen boundary before runtime mechanics
+depend on it.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2317,7 +2339,22 @@ version `1.1.0`, worker MCP schemas, hash envelopes, and existing fixture
 outcomes remain unchanged. Runtime mechanics resume only from an independently
 reviewed commit tagged `contract-freeze-4`.
 
-### 11.5 Open
+### 11.5 Contract-freeze amendment 5: registration fixture and reserve inputs
+
+Revision 16 is complete only when `AgreementFixture` carries one canonical,
+schema-valid payload shared by its result set; its closed shape validator
+requires and canonicalizes that payload before consumer functions run; and
+`AgreementPolicy`/`JobClass` preserve the payload type through registration.
+Every `EscalationReserves` value also carries a finite, non-negative
+`retrospectiveAuditProjectionPerWeek`, and registration rejects
+`auditPerWeek < retrospectiveAuditProjectionPerWeek`.
+
+The amendment changes only the consumer-loaded internal contract. Wire version
+`1.1.0`, worker MCP schemas, Store ports, hash envelopes, and existing durable
+records remain unchanged. M2 Task 2 resumes only from an independently reviewed
+commit tagged `contract-freeze-5`.
+
+### 11.6 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.
