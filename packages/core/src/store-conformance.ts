@@ -1,0 +1,594 @@
+import type { ClassHealth } from "@kuindji/muster-contract";
+
+import type {
+  ClassHealthSnapshot,
+  JobRecord,
+  LeaseCandidateSnapshot,
+  LeaseRecord,
+  Store,
+  WorkerRegistration,
+  WorkerRoutingSnapshot,
+} from "./ports.js";
+
+export type StoreFactory = () => Store | Promise<Store>;
+
+export interface StoreConformanceCase {
+  readonly id: string;
+  readonly run: (factory: StoreFactory) => Promise<void>;
+}
+
+const NOW = "2026-08-06T16:00:00.000Z";
+const LATER = "2026-08-06T16:01:00.000Z";
+
+const fail = (message: string): never => {
+  throw new Error(`Store conformance failure: ${message}`);
+};
+
+const assert: (condition: unknown, message: string) => asserts condition = (
+  condition,
+  message,
+) => {
+  if (!condition) fail(message);
+};
+
+const readyHealth = (): ClassHealth => ({
+  operating: "ready",
+  reserves: {
+    lowCost: "available",
+    urgent: "available",
+    splitAndAdjudication: "available",
+    audit: "available",
+  },
+});
+
+const workerRegistration = (
+  workerId = "worker-1",
+  slot = 2,
+): WorkerRegistration => ({
+  worker: {
+    workerId,
+    state: "active",
+    enrolledAt: NOW,
+    declaredCapPerWeek: 4,
+    capabilities: {
+      providerSurface: "provider.example",
+      unattendedScheduling: true,
+      languages: ["en"],
+      jobClassIds: ["class-1"],
+    },
+    accountCluster: `cluster-${slot}`,
+    slot,
+    contractAcceptance: {
+      contractVersion: "1.1.0",
+      acceptedAt: NOW,
+    },
+  },
+  routing: {
+    contributionWindowId: "2026-W32",
+    contributionUsed: 0,
+    assignedSlotOccurrence: `2026-W32-slot-${slot}`,
+  },
+});
+
+const jobRecord = (jobId = "job-1"): JobRecord => ({
+  jobId,
+  classId: "class-1",
+  contractVersion: "1.0.0",
+  inputHash: `input-${jobId}`,
+  payloadRef: `payload-${jobId}`,
+  policyVersion: "policy-1",
+  permitEpoch: "epoch-1",
+  collectionCycle: 1,
+  firstEnqueuedAt: NOW,
+  cycleStartedAt: NOW,
+  rejectedDisputeRequeues: 0,
+  queuePriority: {
+    lane: "normal",
+    value: 10,
+    enqueuedAt: NOW,
+    sequence: `sequence-${jobId}`,
+  },
+});
+
+const preparedLease = (
+  candidate: LeaseCandidateSnapshot,
+  worker: WorkerRoutingSnapshot,
+  leaseId: string,
+): LeaseRecord => ({
+  leaseId,
+  jobId: candidate.job.jobId,
+  collectionCycle: candidate.job.collectionCycle,
+  classId: candidate.job.classId,
+  holder: worker.workerId,
+  inputHash: candidate.job.inputHash,
+  contractVersion: candidate.job.contractVersion,
+  policyVersion: candidate.job.policyVersion,
+  permitEpoch: candidate.job.permitEpoch,
+  issuedAt: NOW,
+  expiresAt: "2026-08-06T16:15:00.000Z",
+  absoluteInFlightDeadline: "2026-08-06T17:00:00.000Z",
+  extensionsUsed: 0,
+  extensionPolicy: {
+    version: "deployment-1",
+    extensionTtl: 300,
+    maxExtensionsPerLease: 2,
+  },
+  snapshot: { maxResultBytes: 1_024, maxPayloadBytes: 2_048 },
+  assignment: { kind: "ordinary" },
+  routing: {
+    candidateRevision: candidate.revision,
+    workerRevision: worker.revision,
+    operational: candidate.operational,
+    contributionWindowId: worker.contributionWindowId,
+    contributionOrdinal: worker.contributionUsed + 1,
+    assignedSlotOccurrence: worker.assignedSlotOccurrence,
+    attemptNumber: candidate.attempts.attemptCount + 1,
+    queuePriority: candidate.job.queuePriority,
+  },
+  open: true,
+});
+
+const initializeClass = async (store: Store): Promise<ClassHealthSnapshot> => {
+  const registered = await store.registerClassVersion({
+    classId: "class-1",
+    contractVersion: "1.0.0",
+    payloadSchemaHash: "payload-schema-1",
+    outputSchemaHash: "output-schema-1",
+    registeredAt: NOW,
+  });
+  assert(registered.kind === "registered", "class registration must succeed");
+  const health = await store.initializeClassHealth({
+    initial: {
+      classId: "class-1",
+      health: readyHealth(),
+      updatedAt: NOW,
+      source: "automatic",
+    },
+  });
+  assert(health.kind === "initialized", "class health must initialize");
+  const activated = await store.transitionClassVersion({
+    classId: "class-1",
+    contractVersion: "1.0.0",
+    from: "draft",
+    to: "active",
+    at: NOW,
+  });
+  assert(activated.kind === "applied", "class must activate");
+  const epoch = await store.transitionPermitEpoch({
+    classId: "class-1",
+    fromEpoch: null,
+    toEpoch: "epoch-1",
+    at: NOW,
+  });
+  assert(epoch.kind === "applied", "permit epoch must initialize");
+  return health.current;
+};
+
+const initializeWorker = async (
+  store: Store,
+  workerId = "worker-1",
+  slot = 2,
+): Promise<WorkerRoutingSnapshot> => {
+  const result = await store.registerWorker(workerRegistration(workerId, slot));
+  assert(result.kind === "registered", "worker registration must succeed");
+  return result.routing;
+};
+
+const enqueue = async (
+  store: Store,
+  jobId = "job-1",
+): Promise<LeaseCandidateSnapshot> => {
+  const queue = await store.getQueueMode();
+  const health = await store.getClassHealth("class-1");
+  assert(health !== null, "class health must exist before enqueue");
+  const job = jobRecord(jobId);
+  const result = await store.enqueueJob({
+    job,
+    payload: { instruction: `process ${jobId}` },
+    expectedOperationalState: {
+      queueRevision: queue.revision,
+      classHealthRevision: health.revision,
+    },
+  });
+  assert(result.kind === "enqueued", `${jobId} must enqueue`);
+  const candidates = await store.listLeaseCandidates({ classIds: ["class-1"] });
+  const candidate = candidates.find((entry) => entry.job.jobId === jobId);
+  assert(candidate !== undefined, `${jobId} candidate must be readable`);
+  return candidate;
+};
+
+const classLifecycleAndEpoch: StoreConformanceCase = {
+  id: "class-version-schema-digest-conflict",
+  run: async (factory) => {
+    const store = await factory();
+    const registration = {
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      payloadSchemaHash: "payload-schema-1",
+      outputSchemaHash: "output-schema-1",
+      registeredAt: NOW,
+    };
+    const [first, second] = await Promise.all([
+      store.registerClassVersion(registration),
+      store.registerClassVersion(registration),
+    ]);
+    assert(first.kind === "registered", "first class registration must win");
+    assert(second.kind === "replayed", "identical class registration must replay");
+    const conflict = await store.registerClassVersion({
+      ...registration,
+      outputSchemaHash: "different-output-schema",
+    });
+    assert(conflict.kind === "conflict", "schema digest reuse must conflict");
+
+    const applied = await store.transitionClassVersion({
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      from: "draft",
+      to: "active",
+      at: NOW,
+    });
+    const replayed = await store.transitionClassVersion({
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      from: "draft",
+      to: "active",
+      at: NOW,
+    });
+    assert(applied.kind === "applied", "class transition must apply");
+    assert(replayed.kind === "replayed", "class transition must replay");
+
+    const epoch = await store.transitionPermitEpoch({
+      classId: "class-1",
+      fromEpoch: null,
+      toEpoch: "shared-label",
+      at: NOW,
+    });
+    const epochReplay = await store.transitionPermitEpoch({
+      classId: "class-1",
+      fromEpoch: null,
+      toEpoch: "shared-label",
+      at: NOW,
+    });
+    const otherClass = await store.transitionPermitEpoch({
+      classId: "class-2",
+      fromEpoch: null,
+      toEpoch: "shared-label",
+      at: NOW,
+    });
+    assert(epoch.kind === "applied", "initial epoch must apply");
+    assert(epochReplay.kind === "replayed", "initial epoch must replay");
+    assert(otherClass.kind === "applied", "epochs must be class-qualified");
+  },
+};
+
+const workerRegistrationCase: StoreConformanceCase = {
+  id: "worker-registration-routing-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    const registration = workerRegistration();
+    const [first, replay] = await Promise.all([
+      store.registerWorker(registration),
+      store.registerWorker(registration),
+    ]);
+    assert(first.kind === "registered", "first worker registration must win");
+    assert(replay.kind === "replayed", "identical worker registration must replay");
+    assert(first.routing.revision === 1, "routing revision must start at one");
+    assert(first.routing.openLeaseIds.length === 0, "new routing must have no leases");
+
+    registration.worker.capabilities.languages.push("fr");
+    const persisted = await store.getWorker("worker-1");
+    assert(
+      persisted?.capabilities.languages.length === 1,
+      "Store must clone worker registration input",
+    );
+    if (persisted !== null) persisted.capabilities.languages.push("de");
+    const reread = await store.getWorker("worker-1");
+    assert(
+      reread?.capabilities.languages.length === 1,
+      "Store must clone worker reads",
+    );
+
+    const conflict = await store.registerWorker(workerRegistration("worker-1", 3));
+    assert(conflict.kind === "conflict", "changed worker registration must conflict");
+    const missing = await store.getWorkerRoutingSnapshot("missing-worker");
+    assert(missing === null, "unknown worker routing must be null");
+  },
+};
+
+const classHealthCase: StoreConformanceCase = {
+  id: "class-health-initialization-replay-conflict",
+  run: async (factory) => {
+    const store = await factory();
+    assert(await store.getClassHealth("class-1") === null, "unknown health must be null");
+    const initial = {
+      classId: "class-1",
+      health: readyHealth(),
+      updatedAt: NOW,
+      source: "automatic" as const,
+    };
+    const first = await store.initializeClassHealth({ initial });
+    const replay = await store.initializeClassHealth({ initial });
+    const conflict = await store.initializeClassHealth({
+      initial: {
+        ...initial,
+        health: { ...initial.health, operating: "admission_halted" },
+        source: "operator",
+      },
+    });
+    assert(first.kind === "initialized", "health must initialize");
+    assert(replay.kind === "replayed", "identical health must replay");
+    assert(conflict.kind === "conflict", "different initial health must conflict");
+  },
+};
+
+const routingTransitionCase: StoreConformanceCase = {
+  id: "worker-routing-period-transition-race",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const initialWorker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: initialWorker,
+      preparedLease: preparedLease(candidate, initialWorker, "lease-routing"),
+    });
+    assert(claimed.kind === "claimed", "routing fixture lease must claim");
+    const expected = await store.getWorkerRoutingSnapshot("worker-1");
+    assert(expected !== null, "claimed worker routing must exist");
+    const firstNext = {
+      contributionWindowId: "2026-W33",
+      contributionUsed: 0,
+      assignedSlotOccurrence: "2026-W33-slot-2",
+    };
+    const secondNext = {
+      contributionWindowId: "2026-W34",
+      contributionUsed: 0,
+      assignedSlotOccurrence: "2026-W34-slot-2",
+    };
+    const [first, second] = await Promise.all([
+      store.transitionWorkerRouting({ expected, next: firstNext }),
+      store.transitionWorkerRouting({ expected, next: secondNext }),
+    ]);
+    assert(first.kind === "applied", "first routing transition must apply");
+    assert(second.kind === "conflict", "stale routing transition must conflict");
+    assert(
+      first.current.openLeaseIds.includes("lease-routing"),
+      "routing transition must preserve Store-owned open leases",
+    );
+    const replay = await store.transitionWorkerRouting({ expected, next: firstNext });
+    assert(replay.kind === "replayed", "routing transition must replay exactly");
+  },
+};
+
+const claimRaceCase: StoreConformanceCase = {
+  id: "candidate-compare-and-claim-single-winner",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const firstLease = preparedLease(candidate, worker, "lease-1");
+    const losingLease = preparedLease(candidate, worker, "lease-losing");
+    const [first, second] = await Promise.all([
+      store.compareAndClaimLease({
+        expectedCandidate: candidate,
+        expectedWorker: worker,
+        preparedLease: firstLease,
+      }),
+      store.compareAndClaimLease({
+        expectedCandidate: candidate,
+        expectedWorker: worker,
+        preparedLease: losingLease,
+      }),
+    ]);
+    assert(first.kind === "claimed", "one prepared lease must win");
+    assert(second.kind === "conflict", "the stale prepared lease must lose");
+    assert(await store.getLease("lease-losing") === null, "losing ID must leave no state");
+    const replay = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: firstLease,
+    });
+    assert(replay.kind === "claimed", "exact claim must replay the persisted identity");
+  },
+};
+
+const identityCollisionCase: StoreConformanceCase = {
+  id: "core-id-collision-refused",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const firstWorker = await initializeWorker(store, "worker-1", 1);
+    const firstCandidate = await enqueue(store, "job-1");
+    const first = await store.compareAndClaimLease({
+      expectedCandidate: firstCandidate,
+      expectedWorker: firstWorker,
+      preparedLease: preparedLease(firstCandidate, firstWorker, "lease-shared"),
+    });
+    assert(first.kind === "claimed", "first identity use must claim");
+
+    const secondWorker = await initializeWorker(store, "worker-2", 2);
+    const secondCandidate = await enqueue(store, "job-2");
+    const collision = await store.compareAndClaimLease({
+      expectedCandidate: secondCandidate,
+      expectedWorker: secondWorker,
+      preparedLease: preparedLease(secondCandidate, secondWorker, "lease-shared"),
+    });
+    assert(
+      collision.kind === "conflict" && collision.reason === "identity_collision",
+      "reused durable lease identity must conflict",
+    );
+    const existing = await store.getLease("lease-shared");
+    assert(existing?.jobId === "job-1", "identity collision must not replace state");
+  },
+};
+
+const losingClaimIdentityCase: StoreConformanceCase = {
+  id: "losing-claim-id-leaves-no-state",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const queue = await store.getQueueMode();
+    const changed = await store.transitionQueueMode({
+      expected: queue,
+      next: { mode: "degraded", updatedAt: LATER },
+    });
+    assert(changed.kind === "applied", "queue transition must apply");
+    const claim = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: preparedLease(candidate, worker, "lease-skipped"),
+    });
+    assert(
+      claim.kind === "conflict" && claim.reason === "operational_state_stale",
+      "stale operational snapshot must refuse claim",
+    );
+    assert(
+      await store.getLease("lease-skipped") === null,
+      "losing IdSource value must leave no durable state",
+    );
+  },
+};
+
+const workerStateCase: StoreConformanceCase = {
+  id: "worker-suspension-requeues-open-leases",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-1");
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+    });
+    assert(claimed.kind === "claimed", "lease must exist before suspension");
+    const suspended = await store.transitionWorkerState({
+      workerId: "worker-1",
+      from: "active",
+      to: "suspended",
+      at: LATER,
+    });
+    assert(suspended.kind === "applied", "suspension must apply");
+    assert(suspended.requeuedOpenLeases.length === 1, "suspension must requeue lease");
+    const closed = await store.getLease("lease-1");
+    assert(closed?.open === false, "suspension must close lease atomically");
+    const routing = await store.getWorkerRoutingSnapshot("worker-1");
+    assert(routing?.openLeaseIds.length === 0, "suspension must clear routing leases");
+  },
+};
+
+const workerStateFenceCase: StoreConformanceCase = {
+  id: "worker-state-transition-fences-prepared-claim",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const transitioned = await store.transitionWorkerState({
+      workerId: "worker-1",
+      from: "active",
+      to: "maintenance",
+      at: LATER,
+    });
+    assert(transitioned.kind === "applied", "worker state transition must apply");
+    const claim = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: preparedLease(candidate, worker, "lease-stale-worker"),
+    });
+    assert(
+      claim.kind === "conflict" && claim.reason === "worker_snapshot_stale",
+      "worker-state transition must fence prepared claim",
+    );
+  },
+};
+
+const emergencyCase: StoreConformanceCase = {
+  id: "queue-class-precedence-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    const health = await initializeClass(store);
+    await enqueue(store, "job-before-halt");
+    const queue = await store.getQueueMode();
+    const invalidation = await store.inspectInvalidationScope({
+      kind: "class",
+      classId: "class-1",
+    });
+    const halt = await store.enterEmergencyHalt({
+      expectedQueue: queue,
+      nextQueue: { mode: "emergency_halted", updatedAt: LATER },
+      expectedClassHealth: [health],
+      nextClassHealth: [{
+        classId: "class-1",
+        health: { ...health.health, operating: "emergency_halted" },
+        updatedAt: LATER,
+        source: "operator",
+      }],
+      invalidation: {
+        scope: { kind: "class", classId: "class-1" },
+        expectedTargets: invalidation.targets,
+        requeuePlans: [],
+      },
+      at: LATER,
+    });
+    assert(halt.kind === "applied", "emergency halt must apply atomically");
+    assert(halt.invalidation.resultTransitions.length === 1, "halt must invalidate result");
+    assert(
+      await store.getResultState("job-before-halt", 1) === "cancelled",
+      "halted result must be cancelled",
+    );
+    const staleRefresh = await store.transitionClassHealth({
+      expected: health,
+      next: { health: readyHealth(), updatedAt: LATER, source: "automatic" },
+    });
+    assert(staleRefresh.kind === "conflict", "stale health refresh must conflict");
+
+    const staleEnqueue = await store.enqueueJob({
+      job: jobRecord("job-after-halt"),
+      payload: { instruction: "must not enter" },
+      expectedOperationalState: {
+        queueRevision: queue.revision,
+        classHealthRevision: health.revision,
+      },
+    });
+    assert(
+      staleEnqueue.kind === "operational_state_conflict",
+      "enqueue must not cross the halt revision",
+    );
+  },
+};
+
+export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
+  Object.freeze([
+    classLifecycleAndEpoch,
+    workerRegistrationCase,
+    classHealthCase,
+    routingTransitionCase,
+    claimRaceCase,
+    identityCollisionCase,
+    losingClaimIdentityCase,
+    workerStateCase,
+    workerStateFenceCase,
+    emergencyCase,
+  ]);
+
+export async function runTask1StoreConformance(
+  factory: StoreFactory,
+): Promise<readonly string[]> {
+  const passed: string[] = [];
+  for (const testCase of TASK1_STORE_CONFORMANCE_CASES) {
+    try {
+      await testCase.run(factory);
+      passed.push(testCase.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${testCase.id}: ${detail}`, { cause: error });
+    }
+  }
+  return Object.freeze(passed);
+}
