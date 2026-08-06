@@ -84,6 +84,17 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
       ["unknown command", { ...wellFormed, steps: [
         { command: "teleport", args: {} },
       ] }],
+      ["missing revision-14 required arg", { ...wellFormed, steps: [
+        { command: "compareAndClaimLease", args: {
+          leaseId: "l1", candidateRevision: "cr1",
+        } },
+      ] }],
+      ["unknown revision-14 arg", { ...wellFormed, steps: [
+        { command: "compareAndClaimLease", args: {
+          leaseId: "l1", candidateRevision: "cr1", workerRevision: "wr1",
+          candidateRevison: "typo",
+        } },
+      ] }],
       ["non-finite charge", {
         ...wellFormed, expectFinal: { charges: { urgent: NaN } },
       }],

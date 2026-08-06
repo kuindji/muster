@@ -1,5 +1,8 @@
 # Muster contract-freeze-3 M2-entry amendment plan
 
+**Status:** Complete in coordinator revision 14 and the local
+`contract-freeze-3` tag. No runtime mechanics were added.
+
 **Goal:** Amend the revision-13 core boundary into revision 14 so Milestone 2 is
 implementable without moving routing, lease, operational-state, identity, or
 reserve policy into Store adapters.

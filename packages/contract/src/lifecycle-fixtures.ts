@@ -17,6 +17,12 @@ export const LIFECYCLE_FIXTURE_AREAS = deepFreeze([
   "worker_state",
   "adjudication_health",
   "reputation",
+  "identity",
+  "routing",
+  "operational_state",
+  "lease_bounds",
+  "reserve_policy",
+  "fixture_coverage",
 ] as const);
 
 export type LifecycleFixtureArea =
@@ -45,9 +51,50 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "transitionWorkerState",
   "refreshClassHealth",
   "recordReputationEvidence",
+  "listLeaseCandidates",
+  "compareAndClaimLease",
+  "transitionQueueMode",
+  "transitionClassHealth",
 ] as const);
 
 export type LifecycleCommand = (typeof LIFECYCLE_COMMANDS)[number];
+
+/** Closed argument shapes for revision-14 commands added by freeze 3. */
+export const REVISION_14_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  listLeaseCandidates: {
+    required: ["classIds"],
+    allowed: ["classIds"],
+  },
+  compareAndClaimLease: {
+    required: ["leaseId", "candidateRevision", "workerRevision"],
+    allowed: [
+      "leaseId",
+      "candidateRevision",
+      "workerRevision",
+      "queueRevision",
+      "classHealthRevision",
+      "contributionWindowId",
+      "contributionOrdinal",
+      "assignedSlotOccurrence",
+      "attemptNumber",
+      "queueSequence",
+      "assignment",
+    ],
+  },
+  transitionQueueMode: {
+    required: ["expectedRevision", "mode"],
+    allowed: ["expectedRevision", "mode"],
+  },
+  transitionClassHealth: {
+    required: ["classId", "expectedRevision", "operating"],
+    allowed: [
+      "classId",
+      "expectedRevision",
+      "operating",
+      "source",
+    ],
+  },
+} as const);
 
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
@@ -101,6 +148,19 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "class-version-schema-digest-conflict",
   "pending-backlog-preserves-opened-at",
   "reputation-evidence-idempotent-under-race",
+  "candidate-compare-and-claim-single-winner",
+  "claim-worker-exclusion-snapshot-race",
+  "claim-cycle-change-stale-snapshot",
+  "claim-operational-state-stale",
+  "contribution-cap-claim-race",
+  "slot-occurrence-claim-race",
+  "core-id-collision-refused",
+  "losing-claim-id-leaves-no-state",
+  "halt-versus-enqueue-atomic",
+  "halt-versus-claim-atomic",
+  "stale-health-refresh-cannot-replace-operator-halt",
+  "queue-class-precedence-atomic",
+  "reserve-policy-change-race-fails-closed",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -162,6 +222,22 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "class-version-schema-conflicts",
   "adjudication-backlog-age-is-observable",
   "reputation-evidence-replays-and-conflicts",
+  "routing-core-selects-store-compares",
+  "routing-facts-persist-on-lease",
+  "canary-assignment-durable-hash-only",
+  "idsource-collision-preserves-existing",
+  "losing-claim-id-is-skipped",
+  "enqueue-refuses-stale-operational-revision",
+  "claim-refuses-stale-operational-revision",
+  "emergency-halt-publishes-invalidation-atomically",
+  "stale-health-refresh-preserves-operator-halt",
+  "lease-ttl-bound-at-enqueue",
+  "lease-registration-quantized-strict-bound",
+  "extension-deadline-strict",
+  "reserve-policy-version-conflict",
+  "reserve-window-rollover-isolated",
+  "agreement-fixture-families-required",
+  "oracle-negative-fixture-families-bound",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -255,6 +331,16 @@ export function isLifecycleFixture(
       )
     ) return false;
     if (!isRecord(step.args)) return false;
+    const args = step.args;
+    const revision14Shape = REVISION_14_COMMAND_ARGUMENT_KEYS[
+      step.command as keyof typeof REVISION_14_COMMAND_ARGUMENT_KEYS
+    ];
+    if (revision14Shape !== undefined) {
+      if (!hasOnlyKeys(args, revision14Shape.allowed)) return false;
+      if (!revision14Shape.required.every((key) =>
+        Object.hasOwn(args, key),
+      )) return false;
+    }
     if (step.expect !== undefined && !isRecord(step.expect)) return false;
     if (step.barrier !== undefined) {
       if (typeof step.barrier !== "string") return false;

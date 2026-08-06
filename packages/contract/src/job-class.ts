@@ -193,6 +193,8 @@ export interface JobClass<Payload, Result> {
   privacy: PrivacyClass;
   cost: {
     expectedTurns: number;
+    /** Positive declared ceiling for every leaseTtl(payload) result. */
+    maxLeaseTtl: Seconds;
     leaseTtl(payload: Payload): Seconds;
     maxInFlightLifetime: Seconds;
   };

@@ -506,5 +506,168 @@
       { "command": "recordReputationEvidence", "args": { "evidenceId": "rep-70", "workerId": "w70", "source": "held_out_canary", "impact": "negative", "detailHash": "dh2" }, "expect": { "kind": "conflict" } }
     ],
     "expectFinal": { "states": { "reputation-evidence:rep-70": "recorded" } }
+  },
+  {
+    "id": "routing-core-selects-store-compares",
+    "version": 1,
+    "area": "routing",
+    "description": "Core lists immutable candidates, selects one by policy, and gives Store a prepared lease plus the exact candidate and worker revisions.",
+    "setup": { "candidate:j80:1": { "revision": 1 }, "worker:w80": { "routingRevision": 1 } },
+    "conditions": [],
+    "steps": [
+      { "command": "listLeaseCandidates", "args": { "classIds": ["c1"] }, "expect": { "candidateRevisions": [1] } },
+      { "command": "compareAndClaimLease", "args": { "leaseId": "l80", "candidateRevision": 1, "workerRevision": 1, "queueRevision": 1, "classHealthRevision": 1 }, "expect": { "kind": "claimed" } }
+    ],
+    "expectFinal": { "states": { "lease:l80": "open" } }
+  },
+  {
+    "id": "routing-facts-persist-on-lease",
+    "version": 1,
+    "area": "routing",
+    "description": "The winning lease durably records priority, contribution window, slot occurrence, and accepted-worker diversity revisions.",
+    "setup": { "candidate:j81:1": { "revision": 2, "acceptedWorkerIds": ["w70"] } },
+    "conditions": [],
+    "steps": [{ "command": "compareAndClaimLease", "args": { "leaseId": "l81", "candidateRevision": 2, "workerRevision": 2, "contributionWindowId": "2026-W32", "contributionOrdinal": 4, "assignedSlotOccurrence": "2026-W32-slot-2", "attemptNumber": 2, "queueSequence": "enqueue-81" }, "expect": { "kind": "claimed" } }],
+    "expectFinal": { "states": { "lease:l81": "routing_snapshot_persisted" } }
+  },
+  {
+    "id": "canary-assignment-durable-hash-only",
+    "version": 1,
+    "area": "routing",
+    "description": "A canary lease binds the source contract and expected-result hash without raw OAuth identity or expected-result body.",
+    "setup": { "canary:canary-1": { "sourceJobId": "resolved-1", "sourceContractVersion": "v1", "expectedResultHash": "erh1" } },
+    "conditions": [],
+    "steps": [{ "command": "compareAndClaimLease", "args": { "leaseId": "l82", "candidateRevision": 3, "workerRevision": 3, "assignment": { "kind": "canary", "canaryKind": "probation", "canaryId": "canary-1", "sourceJobId": "resolved-1", "sourceContractVersion": "v1", "expectedResultHash": "erh1" } }, "expect": { "kind": "claimed" } }],
+    "expectFinal": { "states": { "lease:l82": "canary_hash_bound" } }
+  },
+  {
+    "id": "idsource-collision-preserves-existing",
+    "version": 1,
+    "area": "identity",
+    "description": "A core-prepared lease identity collision conflicts and leaves the existing durable identity unchanged.",
+    "setup": { "lease:allocated-1": { "jobId": "existing" } },
+    "conditions": [],
+    "steps": [{ "command": "compareAndClaimLease", "args": { "leaseId": "allocated-1", "candidateRevision": 4, "workerRevision": 4 }, "expect": { "kind": "conflict", "reason": "identity_collision" } }],
+    "expectFinal": { "states": { "lease:allocated-1": "existing" } }
+  },
+  {
+    "id": "losing-claim-id-is-skipped",
+    "version": 1,
+    "area": "identity",
+    "description": "A lease ID consumed before a stale candidate loses is not reused and creates no durable state.",
+    "setup": { "candidate:j83:1": { "revision": 4 } },
+    "conditions": [],
+    "steps": [{ "command": "compareAndClaimLease", "args": { "leaseId": "allocated-skipped", "candidateRevision": 4, "workerRevision": 5 }, "expect": { "kind": "conflict", "reason": "candidate_stale" } }],
+    "expectFinal": { "states": { "lease:allocated-skipped": "absent" } }
+  },
+  {
+    "id": "enqueue-refuses-stale-operational-revision",
+    "version": 1,
+    "area": "operational_state",
+    "description": "Prepared enqueue compares queue and class-health revisions and fails after either changes.",
+    "setup": { "queue": { "revision": 2, "mode": "admission_halted" }, "class-health:c1": { "revision": 2, "operating": "admission_halted" } },
+    "conditions": ["admission_halted"],
+    "steps": [{ "command": "enqueue", "args": { "jobId": "j84", "queueRevision": 1, "classHealthRevision": 1 }, "expect": { "kind": "operational_state_conflict" } }],
+    "expectFinal": { "states": { "job:j84": "absent" } }
+  },
+  {
+    "id": "claim-refuses-stale-operational-revision",
+    "version": 1,
+    "area": "operational_state",
+    "description": "Prepared compare-and-claim refuses a lease after queue or class-health revision changes.",
+    "setup": { "candidate:j85:1": { "revision": 5 }, "queue": { "revision": 2, "mode": "degraded" } },
+    "conditions": [],
+    "steps": [{ "command": "compareAndClaimLease", "args": { "leaseId": "l85", "candidateRevision": 5, "workerRevision": 5, "queueRevision": 1, "classHealthRevision": 1 }, "expect": { "kind": "conflict", "reason": "operational_state_stale" } }],
+    "expectFinal": { "states": { "lease:l85": "absent" } }
+  },
+  {
+    "id": "emergency-halt-publishes-invalidation-atomically",
+    "version": 1,
+    "area": "operational_state",
+    "description": "Emergency queue and class state, result transitions, and authorization invalidation become visible together.",
+    "setup": { "queue": { "revision": 1, "mode": "normal" }, "result:c1:j86:1": { "state": "verified" }, "authorization:a86": { "validity": "valid" } },
+    "conditions": ["emergency_halted"],
+    "steps": [{ "command": "emergencyHalt", "args": { "classId": "c1", "expectedQueueRevision": 1, "expectedClassHealthRevision": 1, "expectedTargets": ["c1:j86:1"] }, "expect": { "kind": "applied", "queueRevision": 2, "classHealthRevision": 2 } }],
+    "expectFinal": { "states": { "queue": "emergency_halted", "class-health:c1": "emergency_halted", "result:c1:j86:1": "cancelled", "authorization:a86": "invalid" } }
+  },
+  {
+    "id": "stale-health-refresh-preserves-operator-halt",
+    "version": 1,
+    "area": "operational_state",
+    "description": "An automatic health refresh using an older revision cannot overwrite an operator halt.",
+    "setup": { "class-health:c1": { "revision": 2, "operating": "emergency_halted", "source": "operator" } },
+    "conditions": ["emergency_halted"],
+    "steps": [{ "command": "transitionClassHealth", "args": { "classId": "c1", "expectedRevision": 1, "operating": "ready", "source": "automatic" }, "expect": { "kind": "conflict", "currentRevision": 2 } }],
+    "expectFinal": { "states": { "class-health:c1": "emergency_halted" } }
+  },
+  {
+    "id": "lease-ttl-bound-at-enqueue",
+    "version": 1,
+    "area": "lease_bounds",
+    "description": "Enqueue rejects a non-finite, non-positive, or above-declared lease TTL before a candidate can be listed.",
+    "setup": { "class:c1": { "maxLeaseTtl": 900 } },
+    "conditions": [],
+    "steps": [{ "command": "enqueue", "args": { "jobId": "j87", "leaseTtl": 901, "maxLeaseTtl": 900 }, "expect": { "kind": "refused", "reason": "lease_ttl_out_of_range" } }],
+    "expectFinal": { "states": { "job:j87": "absent" } }
+  },
+  {
+    "id": "extension-deadline-strict",
+    "version": 1,
+    "area": "lease_bounds",
+    "description": "Every extension is capped by the snapshotted count and remains strictly before the absolute in-flight deadline.",
+    "setup": { "lease:l88": { "extensionsUsed": 1, "maxExtensionsPerLease": 2, "expiresAt": "2026-08-06T12:55:00.000Z", "absoluteInFlightDeadline": "2026-08-06T13:00:00.000Z" } },
+    "conditions": [],
+    "steps": [{ "command": "extendLease", "args": { "workerId": "w88", "leaseId": "l88", "expectedExtensionsUsed": 1, "newExtensionsUsed": 2, "newExpiry": "2026-08-06T13:00:00.000Z" }, "expect": { "kind": "refused" } }],
+    "expectFinal": { "states": { "lease:l88": "open" } }
+  },
+  {
+    "id": "lease-registration-quantized-strict-bound",
+    "version": 1,
+    "area": "lease_bounds",
+    "description": "Registration uses the quantized maximum initial TTL and requires its extension envelope to stay strictly below maxInFlightLifetime.",
+    "setup": { "deployment-policy": { "extensionTtl": 300, "maxExtensionsPerLease": 1 }, "class:c1": { "maxLeaseTtl": 601, "maxInFlightLifetime": 1200 } },
+    "conditions": [],
+    "steps": [{ "command": "registerClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "maxLeaseTtl": 601, "quantizedMaxLeaseTtl": 900, "extensionTtl": 300, "maxExtensionsPerLease": 1, "maxInFlightLifetime": 1200 }, "expect": { "kind": "refused", "reason": "in_flight_bound_not_strict" } }],
+    "expectFinal": { "states": { "class-version:c1:v1": "absent" } }
+  },
+  {
+    "id": "reserve-policy-version-conflict",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "A charge with a stale class policy version fails closed without consuming capacity.",
+    "setup": { "reserve:c1:urgent:2026-W32": { "policyVersion": "rp2", "used": 4, "limit": 5 } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "i89", "reservePolicyVersion": "rp1", "reserveWindowId": "2026-W32", "laneLimit": 5, "perWorkerLimit": 1 }, "expect": { "kind": "policy_conflict" } }],
+    "expectFinal": { "charges": { "urgent": 4 } }
+  },
+  {
+    "id": "reserve-window-rollover-isolated",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "A charge compares the explicit rollover identity and cannot debit a prior or future reserve window.",
+    "setup": { "reserve:c1:urgent:2026-W33": { "policyVersion": "rp2", "used": 0, "limit": 5 } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "i90", "reservePolicyVersion": "rp2", "reserveWindowId": "2026-W32", "laneLimit": 5, "perWorkerLimit": 1 }, "expect": { "kind": "policy_conflict" } }],
+    "expectFinal": { "charges": { "urgent": 0 } }
+  },
+  {
+    "id": "agreement-fixture-families-required",
+    "version": 1,
+    "area": "fixture_coverage",
+    "description": "Registration requires both a split case and a JCS-distinct equivalent case that resolves and revalidates.",
+    "setup": { "class:c1": { "replicationTarget": 2, "agreementFixtureKinds": ["split"] } },
+    "conditions": [],
+    "steps": [{ "command": "registerClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "agreementFixtureKinds": ["split"] }, "expect": { "kind": "refused", "reason": "missing_equivalent_fixture" } }],
+    "expectFinal": { "states": { "class-version:c1:v1": "absent" } }
+  },
+  {
+    "id": "oracle-negative-fixture-families-bound",
+    "version": 1,
+    "area": "fixture_coverage",
+    "description": "Every oracle predicate has out-of-domain plus support or omission failure cases, each explicitly bound to that predicate.",
+    "setup": { "oracle:o1": { "predicates": ["claims-grounded"], "negativeCategories": ["out_of_domain"] } },
+    "conditions": [],
+    "steps": [{ "command": "registerClassVersion", "args": { "classId": "c2", "contractVersion": "v1", "oracleId": "o1" }, "expect": { "kind": "refused", "reason": "missing_predicate_negative_family" } }],
+    "expectFinal": { "states": { "class-version:c2:v1": "absent" } }
   }
 ]

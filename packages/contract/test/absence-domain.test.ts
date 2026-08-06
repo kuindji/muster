@@ -4,6 +4,8 @@ import {
   absenceDomainCovers,
   absenceDomainEquals,
   canonicalAbsenceDomainKey,
+  isOracleNegativeFixtureShape,
+  ORACLE_NEGATIVE_FIXTURE_CATEGORIES,
 } from "../src/oracle.js";
 
 const domain = (id: string, paths: [string, ...string[]]) => ({
@@ -94,5 +96,44 @@ describe("AbsenceDomain containment (refusal)", () => {
         domain("r", ["$.items", "$.meta"]),
       ),
     ).toBe(false);
+  });
+});
+
+describe("Oracle negative fixture metadata (revision 14)", () => {
+  it("freezes the failure families and binds each case to a predicate", () => {
+    expect(ORACLE_NEGATIVE_FIXTURE_CATEGORIES).toEqual([
+      "out_of_domain",
+      "unsupported_material",
+      "omitted_material",
+    ]);
+    expect(isOracleNegativeFixtureShape({
+      name: "unsupported-claim",
+      predicate: "claims-grounded",
+      category: "unsupported_material",
+      payload: { items: [] },
+      result: { claims: [{ text: "invented" }] },
+    })).toBe(true);
+  });
+
+  it("rejects missing, unknown, and typo'd metadata", () => {
+    const valid = {
+      name: "omission",
+      predicate: "all-material-items-present",
+      category: "omitted_material",
+      payload: { items: [1] },
+      result: { items: [] },
+    };
+    expect(isOracleNegativeFixtureShape({
+      ...valid,
+      category: "negative",
+    })).toBe(false);
+    const { predicate: _predicate, ...missingPredicate } = valid;
+    expect(isOracleNegativeFixtureShape(missingPredicate)).toBe(false);
+    expect(isOracleNegativeFixtureShape({ ...valid, predciate: "typo" }))
+      .toBe(false);
+    expect(isOracleNegativeFixtureShape({
+      ...valid,
+      result: { items: [undefined] },
+    })).toBe(false);
   });
 });

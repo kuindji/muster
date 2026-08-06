@@ -21,12 +21,12 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-3
+## Entry gate: contract-freeze-3 (satisfied)
 
-Planning against the executable revision-13 ports found that M2 cannot yet
+Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
-semantics. Before Task 1, complete the separate
-`2026-08-06-muster-contract-freeze-3-m2-entry.md` amendment. In particular:
+semantics. Revision 14 and the local `contract-freeze-3` tag completed the
+separate `2026-08-06-muster-contract-freeze-3-m2-entry.md` amendment. It fixed:
 
 - `Store.claimLease({ workerId, classIds, now })` both selects and constructs a
   lease but receives no prepared lease ID, expiry, class snapshot, candidate
@@ -50,8 +50,9 @@ semantics. Before Task 1, complete the separate
   that are not represented in fixture metadata and therefore cannot be checked
   mechanically as written.
 
-No runtime source task below begins until the amended port and fixtures make
-these choices explicit and the new freeze tag is clean.
+The amended port and fixtures now make these choices explicit. Task 1 may begin
+only from the clean `contract-freeze-3` boundary; later contract changes still
+require a new normative revision and freeze amendment.
 
 ## Global constraints
 

@@ -1,5 +1,6 @@
 import type { Action } from "./actions.js";
 import { canonicalize } from "./canonical/jcs.js";
+import { deepFreeze } from "./deep-freeze.js";
 import { pathsCover } from "./jsonpath.js";
 import type { JsonPath } from "./jsonpath.js";
 import type {
@@ -16,6 +17,54 @@ export interface Fixture {
   name: string;
   payload: CanonicalJsonValue;
   result: CanonicalJsonValue;
+}
+
+export const ORACLE_NEGATIVE_FIXTURE_CATEGORIES = deepFreeze([
+  "out_of_domain",
+  "unsupported_material",
+  "omitted_material",
+] as const);
+
+export type OracleNegativeFixtureCategory =
+  (typeof ORACLE_NEGATIVE_FIXTURE_CATEGORIES)[number];
+
+/** A failure case bound to one declared predicate and failure family. */
+export interface OracleNegativeFixture extends Fixture {
+  predicate: string;
+  category: OracleNegativeFixtureCategory;
+}
+
+/** Closed shape check; semantic predicate coverage is checked at registration. */
+export function isOracleNegativeFixtureShape(
+  value: unknown,
+): value is OracleNegativeFixture {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const fixture = value as Record<string, unknown>;
+  if (!Object.keys(fixture).every((key) =>
+    ["name", "payload", "result", "predicate", "category"].includes(key),
+  )) return false;
+  let canonicalValues = false;
+  if (Object.hasOwn(fixture, "payload") && Object.hasOwn(fixture, "result")) {
+    try {
+      canonicalize(fixture.payload);
+      canonicalize(fixture.result);
+      canonicalValues = true;
+    } catch {
+      canonicalValues = false;
+    }
+  }
+  return canonicalValues && (
+    typeof fixture.name === "string" &&
+    typeof fixture.predicate === "string" &&
+    fixture.predicate.length > 0 &&
+    (ORACLE_NEGATIVE_FIXTURE_CATEGORIES as readonly unknown[]).includes(
+      fixture.category,
+    ) &&
+    Object.hasOwn(fixture, "payload") &&
+    Object.hasOwn(fixture, "result")
+  );
 }
 
 /** Spec 6.7: the universe a completeness oracle can detect omissions over. */
@@ -52,6 +101,8 @@ export function absenceDomainCovers(
 export interface OracleSpec<Payload, Result> {
   id: string;
   kind: "support" | "completeness";
+  /** Evidence predicates this oracle implements. */
+  predicates: NonEmptyArray<string>;
   /** Deterministic, no I/O. */
   run(payload: Payload, result: Result): OracleVerdict;
   /** Payload fields it actually examines. */
@@ -61,7 +112,7 @@ export interface OracleSpec<Payload, Result> {
   /** Completeness only. */
   absenceDomain?: AbsenceDomain;
   /** Cases the oracle must fail. */
-  negativeFixtures: NonEmptyArray<Fixture>;
+  negativeFixtures: NonEmptyArray<OracleNegativeFixture>;
 }
 
 export interface EvidenceRequirement {

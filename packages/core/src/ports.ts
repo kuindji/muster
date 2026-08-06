@@ -1,4 +1,6 @@
+import { deepFreeze } from "@kuindji/muster-contract";
 import type {
+  DiversityAxis,
   ActionAdjudicationRequest,
   ActionAdjudicationVerdict,
   ActionAuthorization,
@@ -16,6 +18,8 @@ import type {
   ResultAdjudicationRequest,
   ResultAdjudicationVerdict,
   ResultState,
+  QueueMode,
+  Seconds,
   SubmissionEvidence,
   SubmissionReceipt,
   Timestamp,
@@ -26,6 +30,51 @@ import type { MusterEvent } from "./events.js";
 
 export interface Clock {
   now(): Timestamp;
+}
+
+export const CORE_IDENTITY_KINDS = deepFreeze([
+  "lease",
+  "result_adjudication_request",
+  "authorization_request",
+  "reputation_evidence",
+] as const);
+
+export type CoreIdentityKind = (typeof CORE_IDENTITY_KINDS)[number];
+
+/** Deterministic core input; production adapters may allocate opaque IDs. */
+export interface IdSource {
+  next(kind: CoreIdentityKind): string;
+}
+
+/** Exhaustive ownership map for identities created or consumed by core. */
+export const CORE_IDENTITY_OWNERSHIP = deepFreeze({
+  callerSupplied: [
+    "worker_id",
+    "job_id",
+    "class_id",
+    "contract_version",
+    "permit_epoch",
+    "effect_intent_id",
+    "adjudicator_id",
+  ],
+  contentDerived: [
+    "payload_schema_hash",
+    "output_schema_hash",
+    "input_hash",
+    "result_hash",
+    "decision_result_hash",
+    "effect_intent_hash",
+    "verdict_hash",
+    "expected_result_hash",
+  ],
+  idSourceAllocated: CORE_IDENTITY_KINDS,
+} as const);
+
+/** Deployment-owned bounded extension policy, snapshotted into every lease. */
+export interface CoreDeploymentPolicy {
+  readonly version: string;
+  readonly extensionTtl: Seconds;
+  readonly maxExtensionsPerLease: number;
 }
 
 export interface EventSink {
@@ -100,6 +149,15 @@ export interface WorkerRecord {
   contractAcceptance: { contractVersion: string; acceptedAt: Timestamp };
 }
 
+export interface QueuePriority {
+  readonly lane: "normal" | "urgent";
+  /** Finite integer; higher values are selected first within a lane. */
+  readonly value: number;
+  readonly enqueuedAt: Timestamp;
+  /** Stable bytewise tiebreaker allocated by the enqueue caller. */
+  readonly sequence: string;
+}
+
 export interface JobRecord {
   jobId: string;
   classId: string;
@@ -113,6 +171,7 @@ export interface JobRecord {
   firstEnqueuedAt: Timestamp;
   cycleStartedAt: Timestamp;
   rejectedDisputeRequeues: number;
+  queuePriority: QueuePriority;
 }
 
 export interface DecisionResultRecord {
@@ -129,12 +188,65 @@ export interface DecisionResultRecord {
   verifiedAt: Timestamp;
 }
 
+interface ReservePolicySnapshotBase {
+  readonly classId: string;
+  readonly contractVersion: string;
+  readonly policyVersion: string;
+  /** Opaque durable rollover identity; never inferred by a Store adapter. */
+  readonly windowId: string;
+  readonly windowStartsAt: Timestamp;
+  readonly windowEndsAt: Timestamp;
+  readonly laneLimit: number;
+}
+
+export type ReservePolicySnapshot =
+  | (ReservePolicySnapshotBase & {
+      readonly lane: "lowCost" | "urgent";
+      readonly perWorkerLimit: number;
+    })
+  | (ReservePolicySnapshotBase & {
+      readonly lane: "splitAndAdjudication" | "audit";
+      readonly perWorkerLimit?: never;
+    });
+
 export interface ReserveCharge {
-  classId: string;
-  lane: "lowCost" | "urgent" | "splitAndAdjudication" | "audit";
-  week: string;
   chargeKey: string;
   workerIds: WorkerId[];
+  policy: ReservePolicySnapshot;
+}
+
+export type ReserveChargeOutcome =
+  | { kind: "charged" }
+  | { kind: "replayed" }
+  | { kind: "exhausted" }
+  | {
+      kind: "policy_conflict";
+      currentPolicyVersion: string;
+      currentWindowId: string;
+    };
+
+export interface LeaseCanaryAssignment {
+  readonly kind: "canary";
+  readonly canaryKind: "probation" | "production" | "audit";
+  readonly canaryId: string;
+  readonly sourceJobId: string;
+  readonly sourceContractVersion: string;
+  readonly expectedResultHash: string;
+}
+
+export type LeaseAssignment =
+  | { readonly kind: "ordinary" }
+  | LeaseCanaryAssignment;
+
+export interface LeaseRoutingSnapshot {
+  readonly candidateRevision: number;
+  readonly workerRevision: number;
+  readonly operational: OperationalStateExpectation;
+  readonly contributionWindowId: string;
+  readonly contributionOrdinal: number;
+  readonly assignedSlotOccurrence: string;
+  readonly attemptNumber: number;
+  readonly queuePriority: QueuePriority;
 }
 
 export interface LeaseRecord {
@@ -149,10 +261,94 @@ export interface LeaseRecord {
   permitEpoch: string;
   issuedAt: Timestamp;
   expiresAt: Timestamp;
+  absoluteInFlightDeadline: Timestamp;
   extensionsUsed: number;
+  extensionPolicy: CoreDeploymentPolicy;
   snapshot: { maxResultBytes: number; maxPayloadBytes: number };
+  assignment: LeaseAssignment;
+  routing: LeaseRoutingSnapshot;
   open: boolean;
 }
+
+export interface AcceptedDiversityFact {
+  readonly workerId: WorkerId;
+  readonly axes: Readonly<Partial<Record<DiversityAxis, string>>>;
+}
+
+export interface JobCycleAttemptSnapshot {
+  readonly attemptCount: number;
+  readonly openLeaseIds: readonly string[];
+  readonly acceptedWorkerIds: readonly WorkerId[];
+  readonly acceptedDiversity: readonly AcceptedDiversityFact[];
+}
+
+/** Immutable Store read. Core ranks these records; Store does not. */
+export interface LeaseCandidateSnapshot {
+  readonly revision: number;
+  readonly job: Readonly<JobRecord>;
+  readonly attempts: JobCycleAttemptSnapshot;
+  readonly operational: OperationalStateExpectation;
+}
+
+/** Durable facts core uses for contribution, slot, and concurrency checks. */
+export interface WorkerRoutingSnapshot {
+  readonly revision: number;
+  readonly workerId: WorkerId;
+  readonly contributionWindowId: string;
+  readonly contributionUsed: number;
+  readonly assignedSlotOccurrence: string;
+  readonly openLeaseIds: readonly string[];
+}
+
+export interface QueueModeSnapshot {
+  /** Store-owned monotonically increasing comparison token. */
+  readonly revision: number;
+  readonly mode: QueueMode;
+  readonly updatedAt: Timestamp;
+}
+
+export type FrozenClassHealth = Readonly<Omit<ClassHealth, "reserves">> & {
+  readonly reserves: Readonly<ClassHealth["reserves"]>;
+};
+
+export interface ClassHealthSnapshot {
+  /** Store-owned monotonically increasing comparison token. */
+  readonly revision: number;
+  readonly classId: string;
+  readonly health: FrozenClassHealth;
+  readonly updatedAt: Timestamp;
+  readonly source: "automatic" | "operator";
+}
+
+export interface OperationalStateExpectation {
+  readonly queueRevision: number;
+  readonly classHealthRevision: number;
+}
+
+export type OperationalTransitionOutcome<T> =
+  | { kind: "applied" | "replayed"; current: T }
+  | { kind: "conflict"; current: T };
+
+export type EnqueueOutcome =
+  | { kind: "enqueued" | "replayed" }
+  | { kind: "conflict" }
+  | {
+      kind: "operational_state_conflict";
+      current: OperationalStateExpectation;
+    }
+  | { kind: "refused"; queue: QueueMode; health: ClassHealth };
+
+export type ClaimLeaseOutcome =
+  | { kind: "claimed"; lease: LeaseRecord; job: JobRecord }
+  | {
+      kind: "conflict";
+      reason:
+        | "candidate_stale"
+        | "worker_snapshot_stale"
+        | "operational_state_stale"
+        | "identity_collision"
+        | "unclaimable";
+    };
 
 export interface ClassVersionRecord {
   classId: string;
@@ -278,6 +474,11 @@ export type InvalidationOutcome =
       epochTransition?: PermitEpochTransition;
     };
 
+export type AppliedInvalidationOutcome = Extract<
+  InvalidationOutcome,
+  { kind: "applied" }
+>;
+
 export interface PendingAdjudication<Request> {
   request: Request;
   openedAt: Timestamp;
@@ -369,19 +570,29 @@ export interface Store {
   enqueueJob(input: {
     job: JobRecord;
     payload: CanonicalJsonValue;
-  }): Promise<void>;
+    expectedOperationalState: OperationalStateExpectation;
+  }): Promise<EnqueueOutcome>;
   getJob(jobId: string): Promise<JobRecord | null>;
   getPayload(payloadRef: string): Promise<CanonicalJsonValue | null>;
-  claimLease(input: {
-    workerId: WorkerId;
+  listLeaseCandidates(input: {
     classIds: string[];
-    now: Timestamp;
-  }): Promise<{ lease: LeaseRecord; job: JobRecord } | null>;
+  }): Promise<readonly LeaseCandidateSnapshot[]>;
+  getWorkerRoutingSnapshot(
+    workerId: WorkerId,
+  ): Promise<WorkerRoutingSnapshot>;
+  compareAndClaimLease(input: {
+    expectedCandidate: LeaseCandidateSnapshot;
+    expectedWorker: WorkerRoutingSnapshot;
+    preparedLease: LeaseRecord;
+  }): Promise<ClaimLeaseOutcome>;
   getLease(leaseId: string): Promise<LeaseRecord | null>;
   extendLease(input: {
     workerId: WorkerId;
     leaseId: string;
+    expectedExpiry: Timestamp;
+    expectedExtensionsUsed: number;
     newExpiry: Timestamp;
+    newExtensionsUsed: number;
   }): Promise<
     { kind: "extended"; newExpiry: Timestamp } | { kind: "refused" }
   >;
@@ -543,12 +754,53 @@ export interface Store {
     | { decision: "reject" }
   )): Promise<VerdictOutcome>;
 
-  getClassHealth(classId: string): Promise<ClassHealth>;
-  setClassHealth(classId: string, health: ClassHealth): Promise<void>;
-  chargeReserve(charge: ReserveCharge): Promise<{
-    ok: boolean;
-    alreadyCharged: boolean;
-  }>;
+  getQueueMode(): Promise<QueueModeSnapshot>;
+  transitionQueueMode(input: {
+    expected: QueueModeSnapshot;
+    next: Pick<QueueModeSnapshot, "mode" | "updatedAt">;
+  }): Promise<OperationalTransitionOutcome<QueueModeSnapshot>>;
+  getClassHealth(classId: string): Promise<ClassHealthSnapshot>;
+  transitionClassHealth(input: {
+    expected: ClassHealthSnapshot;
+    next: Pick<
+      ClassHealthSnapshot,
+      "health" | "updatedAt" | "source"
+    >;
+  }): Promise<OperationalTransitionOutcome<ClassHealthSnapshot>>;
+  enterEmergencyHalt(input: {
+    expectedQueue: QueueModeSnapshot;
+    nextQueue: Omit<QueueModeSnapshot, "revision" | "mode"> & {
+      mode: "emergency_halted";
+    };
+    expectedClassHealth: ClassHealthSnapshot[];
+    nextClassHealth: Array<
+      Omit<ClassHealthSnapshot, "revision" | "health"> & {
+        health: FrozenClassHealth & {
+          readonly operating: "emergency_halted";
+        };
+      }
+    >;
+    invalidation: {
+      scope: InvalidationScope;
+      expectedTargets: InvalidationTarget[];
+      requeuePlans: CycleRequeuePlan[];
+    };
+    at: Timestamp;
+  }): Promise<
+    | {
+        kind: "applied";
+        queue: QueueModeSnapshot;
+        classHealth: ClassHealthSnapshot[];
+        invalidation: AppliedInvalidationOutcome;
+      }
+    | {
+        kind: "conflict";
+        queue: QueueModeSnapshot;
+        classHealth: ClassHealthSnapshot[];
+        invalidation: InvalidationSnapshot;
+      }
+  >;
+  chargeReserve(charge: ReserveCharge): Promise<ReserveChargeOutcome>;
   appendLedger(entry: {
     at: Timestamp;
     kind: string;

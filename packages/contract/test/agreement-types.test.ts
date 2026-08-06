@@ -4,7 +4,10 @@ import type {
   AgreementOutcome,
   AgreementPolicy,
 } from "../src/agreement.js";
-import { unanimousEquivalence } from "../src/agreement.js";
+import {
+  isAgreementFixtureShape,
+  unanimousEquivalence,
+} from "../src/agreement.js";
 import { canonicalize } from "../src/canonical/jcs.js";
 
 describe("unanimousEquivalence (spec 6.2)", () => {
@@ -33,6 +36,7 @@ describe("AgreementPolicy shape compiles as specified", () => {
       resolveEquivalent: (results) => results[0],
       agreementFixtures: [
         {
+          kind: "equivalent",
           results: [
             { value: 1, note: "x" },
             { value: 1, note: "y" },
@@ -40,6 +44,7 @@ describe("AgreementPolicy shape compiles as specified", () => {
           expected: "equivalent",
         },
         {
+          kind: "split",
           results: [
             { value: 1, note: "x" },
             { value: 2, note: "x" },
@@ -60,5 +65,39 @@ describe("AgreementPolicy shape compiles as specified", () => {
       result: { value: 1, note: "x" },
     };
     expect(outcome.kind).toBe("agreed");
+  });
+
+  it("rejects malformed or under-specified fixture metadata", () => {
+    expect(isAgreementFixtureShape({
+      kind: "equivalent",
+      results: [{ value: 1 }, { value: 1, note: "distinct" }],
+      expected: "equivalent",
+    })).toBe(true);
+    expect(isAgreementFixtureShape({
+      kind: "equivalent",
+      results: [{ value: 1 }],
+      expected: "equivalent",
+    })).toBe(false);
+    expect(isAgreementFixtureShape({
+      kind: "equivalent",
+      results: [{ value: 1 }, { value: 1 }],
+      expected: "equivalent",
+    })).toBe(false);
+    expect(isAgreementFixtureShape({
+      kind: "equivalent",
+      results: [{ value: 1 }, { value: 2 }],
+      expected: "split",
+    })).toBe(false);
+    expect(isAgreementFixtureShape({
+      kind: "split",
+      results: [{ value: 1 }, { value: 2 }],
+      expected: "split",
+      typo: true,
+    })).toBe(false);
+    expect(isAgreementFixtureShape({
+      kind: "split",
+      results: [{ value: 1 }, { value: undefined }],
+      expected: "split",
+    })).toBe(false);
   });
 });

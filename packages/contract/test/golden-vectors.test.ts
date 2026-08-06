@@ -19,7 +19,7 @@ const vectors = JSON.parse(
 );
 
 describe("frozen golden vectors (spec 8.2)", () => {
-  it("pins the revision-13 wire contract version", () => {
+  it("keeps the revision-14 wire contract at 1.1.0", () => {
     expect(MUSTER_WIRE_CONTRACT_VERSION).toBe("1.1.0");
   });
   it("input_hash", async () => {

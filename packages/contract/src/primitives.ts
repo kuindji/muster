@@ -1,6 +1,7 @@
 import { deepFreeze } from "./deep-freeze.js";
 
 export type NonEmptyArray<T> = [T, ...T[]];
+export type AtLeastTwo<T> = [T, T, ...T[]];
 
 export function isNonEmptyArray<T>(
   value: readonly T[],

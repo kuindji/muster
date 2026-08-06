@@ -1,10 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 13)
+**Date:** 2026-08-04 (revision 14)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 2 must be
-complete before Milestone 2 runtime mechanics begin.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 3 completes
+the final M2-entry boundary; Milestone 2 runtime mechanics begin only from its
+reviewed local tag.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -132,6 +133,21 @@ revocation atomically closes that worker's open leases, class-version schema
 identity and lifecycle are durable, adjudication backlog age is observable,
 and reputation evidence is durable without freezing a universal scoring
 formula. These are freeze corrections, not coordinator runtime mechanics.
+
+Revision 14 closes the M2-entry ownership review. Core now reads immutable
+candidate and worker-routing snapshots, applies policy itself, and submits a
+complete prepared lease to a compare-and-claim Store command; Store adapters
+own comparison, uniqueness, and atomicity but never ranking or policy. A closed
+`IdSource` port owns every coordinator-created opaque identity. Queue mode and
+class health are durable versioned snapshots, prepared enqueue/claim commands
+compare both revisions, and an emergency halt publishes operational refusal
+and its complete invalidation transition atomically. Lease TTL functions have
+a declared maximum and leases snapshot a bounded extension policy plus an
+absolute deadline. Reserve charges carry class-qualified limits, policy
+version, rollover identity, and applicable per-worker limits. Finally,
+agreement and oracle fixtures carry the metadata registration needs to check
+equivalent/split and out-of-domain/support/omission families mechanically.
+These remain contract corrections; revision 14 implements no runtime engine.
 
 ## 1. What Muster is
 
@@ -353,6 +369,7 @@ interface JobClass<Payload, Result> {
   privacy: PrivacyClass
   cost: {
     expectedTurns: number
+    maxLeaseTtl: Seconds                 // positive declared upper bound
     leaseTtl(p: Payload): Seconds
     maxInFlightLifetime: Seconds
   }
@@ -372,10 +389,17 @@ interface AgreementPolicy<Result> {
   agreementFixtures: NonEmptyArray<AgreementFixture<Result>>
 }
 
-interface AgreementFixture<Result> {
-  results: NonEmptyArray<Result>
-  expected: 'equivalent' | 'split'
-}
+type AgreementFixture<Result> =
+  | {
+      kind: 'equivalent'
+      results: AtLeastTwo<Result>       // JCS-distinct representations
+      expected: 'equivalent'
+    }
+  | {
+      kind: 'split'
+      results: AtLeastTwo<Result>
+      expected: 'split'
+    }
 
 type ActionPermit =
   | {
@@ -472,8 +496,24 @@ contractVersion)` whose schema digests differ. Registration rejects
 non-positive payload or result byte ceilings, a
 non-positive replication target, a negative split-evidence limit, `target > 1`
 without `agreement`, a split-evidence allowance when `target === 1`, or a
-diversity rule that cannot cover the target in principle. The maximum in-flight
-lifetime must exceed every possible lease plus extension. A class declaring a
+diversity rule that cannot cover the target in principle. `maxLeaseTtl` must be
+finite and positive. At enqueue, `leaseTtl(payload)` must also be finite and
+positive and must not exceed that declared maximum. Registration quantizes
+`maxLeaseTtl` upward through the frozen TTL table and refuses it if no bucket
+exists. Core deployment policy declares a positive `extensionTtl`, a
+non-negative integer `maxExtensionsPerLease`, and a version. Registration
+requires
+`quantizedMaxLeaseTtl + extensionTtl * maxExtensionsPerLease <
+maxInFlightLifetime`; the inequality is intentionally strict. The policy is
+snapshotted into each lease and does not enter `input_hash`.
+
+When replication declares agreement, registration requires at least one
+`split` fixture and at least one `equivalent` fixture containing at least two
+JCS-distinct result representations. It computes every equivalence key, runs
+`resolveEquivalent` for the equivalent case, and passes the resolved output
+through the frozen output schema, validators, applicable oracles, and
+equivalence-key check. This is consumer-supplied evidence, not proof of
+real-world semantics. A class declaring a
 `deterministic_oracle` result floor must declare a matching
 `resultEvidenceRequirement`. Each `automatic` permit whose gate requires
 deterministic evidence must have exactly one matching entry in
@@ -813,15 +853,57 @@ declines one batch a month. Section 1.4 records the consequence.
 
 ### 6.1 Lease
 
-Authentication, worker state, contribution cap, then candidate selection — job
-classes the worker's contract version supports, capability match against the
-*enrolled* record, diversity constraints, exclusion of workers already on this
-job, priority, `not_before` — then canary injection at rate `q`, then an
-**atomic claim**, then a lease whose TTL is a quantized bucket from
-`cost.leaseTtl`, floored so it cannot expire immediately after pickup.
-`extend_lease` is bounded. Every lease stamps the logical job's positive-integer
-`collectionCycle`. Lease expiry or abandonment may issue a replacement lease
-inside the same cycle; it does not discard already accepted replicas.
+Authentication precedes the core boundary. Core reads the worker record, a
+versioned durable worker-routing snapshot, versioned queue/class operational
+snapshots, and immutable lease-candidate snapshots. Candidate snapshots carry
+the complete job/cycle identity, stable queue priority, open-attempt facts,
+accepted pseudonymous workers and diversity facts, plus the revisions Store
+will compare. The worker snapshot carries contribution-window usage, the
+assigned-slot occurrence, and open leases. Store may apply the caller's exact
+class-ID query and return structurally queued candidates; it never applies
+worker eligibility or consumer policy, ranks candidates, chooses a canary, computes TTL,
+or runs a consumer function.
+Candidate and worker-routing revisions are Store-owned monotonically increasing
+integers for their durable record; they are comparison tokens, not identities,
+and core never allocates them.
+
+Core checks worker state and contribution cap, then selects among candidates —
+job classes the worker's contract version supports, capability match against
+the *enrolled* record, diversity constraints, exclusion of workers already on
+this job, stable priority, `not_before` — then chooses any canary injection at
+rate `q`. Core allocates a lease ID, quantizes a validated
+`cost.leaseTtl(payload)`, computes the expiry and strict absolute in-flight
+deadline, snapshots contract/policy/permit/byte/extension bounds and routing
+facts, and submits the complete prepared lease with the exact candidate,
+worker, queue, and class-health revisions to **atomic compare-and-claim**.
+Store either persists that lease unchanged or reports a stale/unclaimable
+conflict. It also rejects an ID collision. A lease ID consumed by a losing
+comparison may be skipped but leaves no durable record.
+
+Every lease stamps the logical job's positive-integer `collectionCycle`. Its
+routing snapshot durably records queue priority, contribution window and
+ordinal, assigned-slot occurrence, cycle-scoped attempt number, candidate and
+worker revisions, and operational revisions. An ordinary assignment is distinguished from a canary
+assignment. A canary record binds `canaryId`, source job, source contract
+version, canary kind, and expected-result hash; it stores neither raw OAuth
+identity nor the known-answer body. Lease expiry or abandonment may issue a
+replacement lease inside the same cycle; it does not discard already accepted
+replicas.
+
+`extend_lease` compares the current expiry and extension count and may advance
+them by exactly the snapshotted deployment policy. The count cannot exceed
+`maxExtensionsPerLease`, and every new expiry must remain strictly before the
+lease's absolute in-flight deadline. Store enforces these prepared bounds
+without loading `JobClass` functions.
+
+Every opaque identity created by core comes from the injected deterministic
+`IdSource` with the closed kinds `lease`, `result_adjudication_request`,
+`authorization_request`, and `reputation_evidence`. Job, class, contract,
+permit-epoch, worker, effect-intent, and adjudicator identities are supplied by
+their owning boundary; schema/input/result/decision/intent/verdict/expected
+result identities are content-derived. No runtime service or Store adapter may
+invent a fourth ownership model. Exact replay returns the persisted identity;
+collision conflicts without replacement.
 
 ### 6.2 Replication diversity, typed by confidence
 
@@ -975,6 +1057,17 @@ Registration rejects negative reserves, an adjudication requirement below the
 sum of `lowCostPerWeek`, `urgentPerWeek`, and
 `splitAndAdjudicationPerWeek`, or an audit reserve below the class's configured
 retrospective audit projection.
+
+Every charge-bearing Store command carries one immutable
+`ReservePolicySnapshot`: class and contract version, reserve-policy version,
+lane, finite non-negative lane limit, explicit rollover `windowId` and start/end
+timestamps, plus the per-worker limit for the low-cost and urgent lanes. The
+Store compares that snapshot to the durable accounting window inside the same
+transaction that records the charge and any authorization/adjudication state.
+It returns `policy_conflict` on a changed version or window and changes nothing.
+Adapters never load `JobClass` or independently derive weekly boundaries.
+Exact `chargeKey` replay returns the persisted outcome; two distinct charges
+racing for the final unit produce one charge and one exhausted outcome.
 
 A worker exceeding either quota has further escalations in that lane denied and
 its suspicion raised — flooding costs the flooder first. Low-cost work never
@@ -1287,7 +1380,27 @@ withdrawal, halt, or cancellation may later move the parent result to
 decision hash or the historical state of an authorization already issued from
 it.
 
-`getClassHealth(classId)` returns `ClassHealth`. A capacity snapshot older than
+`getQueueMode()` and `getClassHealth(classId)` return durable snapshots with a
+revision, update timestamp, and value; class health also records whether the
+transition was automatic or operator-owned. A revision is a Store-owned
+monotonically increasing integer for that record; core compares it but never
+allocates it. Prepared enqueue and claim
+commands carry the queue and class-health revisions they evaluated. A revision
+change or a currently refusing value fails closed. Ordinary queue and automatic
+health refreshes are compare-and-transition operations, never blind writes, so
+a stale refresh cannot overwrite a newer operator halt.
+
+An emergency halt is one Store domain command. It compares the expected queue
+and affected class-health snapshots, publishes `emergency_halted` replacements,
+and applies the complete inspected invalidation target/requeue snapshot and
+authorization-validity changes in the same transaction. A conflict changes
+nothing and returns the current operational and invalidation snapshots. Thus
+refusal of new work is never observable before or after the cancellation policy
+it requires. Queue mode owns queue-wide intake/in-flight behavior; per-class
+health owns class admission, adjudication, and reserve dimensions. The frozen
+precedence table resolves their combined effect.
+
+A capacity snapshot older than
 `adjudication.capacityMaxAge` counts as zero capacity and fails closed.
 Core combines that supply snapshot with its own rolling adjudication demand and
 backlog age. The operating dimension becomes `adjudication_starved` when supply
@@ -1573,15 +1686,27 @@ interface PendingAdjudication<Request> {
 }
 ```
 
-The Store amendment exposes `registerClassVersion`, `getClassVersion`,
-`transitionClassVersion`, `getCurrentPermitEpoch`, `transitionPermitEpoch`,
-`transitionWorkerState`, `inspectInvalidationScope`, and the amended
-`invalidateResultScope`. Emergency-withdrawal input requires
+The revision-13 Store amendment exposes `registerClassVersion`,
+`getClassVersion`, `transitionClassVersion`, `getCurrentPermitEpoch`,
+`transitionPermitEpoch`, `transitionWorkerState`, `inspectInvalidationScope`,
+and the amended `invalidateResultScope`. Emergency-withdrawal input requires
 `epochTransition`; every other invalidation reason forbids it. Applied
 invalidation returns result transitions, authorization-request state
 transitions, issued-authorization validity transitions with their job/cycle
 scope and typed reason, the exact new-cycle plans, and the epoch transition.
 Conflict returns the current complete snapshot and changes nothing.
+
+Revision 14 replaces policy-owning `claimLease({ workerId, classIds, now })`
+with `listLeaseCandidates`, `getWorkerRoutingSnapshot`, and
+`compareAndClaimLease({ expectedCandidate, expectedWorker, preparedLease })`.
+It adds `QueueModeSnapshot`, `ClassHealthSnapshot`,
+`OperationalStateExpectation`, compare-and-transition queue/health commands,
+and `enterEmergencyHalt`. `enqueueJob` compares the expected operational
+revisions. `LeaseRecord` now carries the absolute deadline, extension-policy,
+assignment, and routing snapshots. `ReserveCharge` contains a closed policy
+snapshot and returns a typed charged/replayed/exhausted/policy-conflict outcome.
+These are atomic domain commands rather than row CRUD; a conforming Store can
+implement them without importing consumer functions or duplicating policy.
 
 ### 6.7 `OracleSpec`
 
@@ -1597,11 +1722,17 @@ grammar without changing any existing path.
 interface OracleSpec<Payload, Result> {
   id: string
   kind: 'support' | 'completeness'
+  predicates: NonEmptyArray<string>       // evidence predicates implemented
   run(payload: Payload, result: Result): OracleVerdict   // deterministic, no I/O
   coversPayloadPaths: JsonPath[]    // payload fields it actually examines
   coversResultPaths: JsonPath[]     // result fields whose claims it checks
   absenceDomain?: AbsenceDomain     // completeness only: the universe it can detect omissions over
-  negativeFixtures: NonEmptyArray<Fixture> // cases the oracle MUST fail
+  negativeFixtures: NonEmptyArray<OracleNegativeFixture> // cases the oracle MUST fail
+}
+
+interface OracleNegativeFixture extends Fixture {
+  predicate: string
+  category: 'out_of_domain' | 'unsupported_material' | 'omitted_material'
 }
 
 interface AbsenceDomain {
@@ -1624,6 +1755,14 @@ interface AbsenceRequirement extends EvidenceRequirement {
   requiredDomain: AbsenceDomain
 }
 ```
+
+Every predicate named by a support oracle has at least one `out_of_domain` and
+one `unsupported_material` case. Every predicate named by a completeness oracle
+has at least one `out_of_domain` and one `omitted_material` case. Each fixture's
+predicate must be declared by that oracle and required by the class; unknown,
+duplicate, extraneous, or cross-bound predicate bindings are registration
+errors. Shape validation is closed and rejects missing or unknown metadata
+before any consumer function runs.
 
 A **support** oracle confirms that what a result asserts is grounded in the
 payload. A **completeness** oracle answers whether anything material in the
@@ -1902,7 +2041,9 @@ consumer's.
 ### 8.1 Store conformance
 
 Lease atomicity under concurrency, pseudonymous worker-ID binding, idempotent submit, expiry
-requeue, absence of double-leasing. `claimLease` must be atomic and submit
+requeue, absence of double-leasing. `compareAndClaimLease` must atomically
+compare the complete candidate, worker-routing, and operational revisions and
+persist the prepared lease unchanged; submit
 idempotency must match `(lease_id, input_hash, result_hash)` exactly, with a
 unique accepted submission per lease. A conflicting retry returns
 `submission_conflict` without replacing the accepted row. The exact-retry path
@@ -1932,6 +2073,17 @@ identical-schema replay versus schema-digest conflict. Pending adjudication
 reads preserve `openedAt`, and reputation evidence IDs are idempotent and
 ordered without exposing raw bodies.
 
+Revision-14 conformance also races worker exclusion, collection-cycle change,
+contribution caps, slot occurrences, and queue/class revisions against a
+prepared claim; every stale snapshot refuses without durable state. It proves a
+losing IdSource value creates no alias, a reused ID never replaces a record,
+and canary identity/routing facts survive replay. Emergency halt races enqueue,
+claim, and stale automatic health refresh and exposes either the complete old
+state or the complete halt plus invalidation state. Reserve tests cover a
+changed policy version, rollover-window identity, exact charge replay, and the
+last-unit race. A Store adapter passes without loading JobClass functions or
+reimplementing routing, diversity, TTL, canary, health, or reserve policy.
+
 ### 8.2 Protocol conformance
 
 Golden `input_hash` over the exact canonical sanitized payload and both frozen
@@ -1942,7 +2094,8 @@ canonical action-set, effect-intent,
 and every exact-retry/conflicting-retry case, immutable authorization receipts
 versus live validity, authorization validity and both
 adjudication lifecycles including every invalidation transition, unanimous
-agreement and absorbing-split cases, oracle coverage and negative fixtures,
+agreement and absorbing-split cases including JCS-distinct equivalent
+representations, predicate-bound oracle coverage and classified negative fixtures,
 halt distinctions, automatic effect-derivation fixtures, human effect-path and
 absence-domain review coverage, absence-domain containment acceptance and
 refusal cases, verified-result retirement from future intents,
@@ -1954,6 +2107,12 @@ submission receipts, and contract-lifecycle transitions ship as fixtures.
 Muster Schema 1 ships its own accepted/rejected schema, value-validation, path,
 Unicode-length, and JCS-identity fixtures; every package uses the same
 zero-dependency implementation.
+Revision-14 protocol fixtures additionally pin candidate/worker/operational
+snapshot conflicts, core identity collision and losing-race behavior, durable
+canary/routing records, bounded initial/extended lease lifetimes, atomic
+emergency operational transitions, and reserve policy/window conflicts. The
+worker wire remains version `1.1.0`: no MCP input/output schema or hash envelope
+changed in revision 14; only the internal core/Store package contract changed.
 
 ### 8.3 The invariant
 
@@ -2000,6 +2159,7 @@ minimum:
 `ActionEvidenceRequirement`, `AbsenceDomain`, `AbsenceRequirement`, `Fixture`,
 `Validator`,
 `AgreementPolicy`, `AgreementFixture`, `AgreementOutcome`, `NonEmptyArray`,
+`AtLeastTwo`,
 `CanonicalJsonValue`, `CanarySource`, `CapabilityRequirement`, `DiversityRule`,
 `AxisConfidence`, `PrivacyClass`, `ReplicationPolicy`, `EscalationReserves`,
 `AdjudicationPolicy`,
@@ -2012,7 +2172,12 @@ minimum:
 `AuthorizationDenialReason`, `AuthorizationValidity`, `AuthorizationStatus`,
 `SubmissionReceipt`, `ClassHealth`,
 `AuthenticatedWorkerSubject`, `WorkerId`, `Store`, `EventSink`, `AdmissionHook`,
-`AdjudicationSource`, `ReputationPolicy`.
+`AdjudicationSource`, `ReputationPolicy`, `IdSource`, `CoreIdentityKind`,
+`CoreDeploymentPolicy`, `QueuePriority`, `LeaseCandidateSnapshot`,
+`WorkerRoutingSnapshot`, `LeaseAssignment`, `LeaseRoutingSnapshot`,
+`QueueModeSnapshot`, `ClassHealthSnapshot`, `OperationalStateExpectation`,
+`ReservePolicySnapshot`, `ReserveChargeOutcome`, `OracleNegativeFixture`,
+`OracleNegativeFixtureCategory`.
 
 **Tables and state machines.** The worker state machine (3.1); the action gate
 table (6.3); the precedence table (6.6); the fair-attempt classification table
@@ -2044,9 +2209,10 @@ automatic effect-derivation fixtures; human effect-path and absence-domain
 coverage; verified-result retirement before a second intent; the store
 concurrency suite; the prompt-injection corpus.
 
-Milestone one completed as `contract-freeze-1` on 2026-08-06. Revision 13 does
-not reopen runtime feature scope; it corrects the frozen boundary before any
-runtime mechanics depend on it.
+Milestone one completed as `contract-freeze-1` on 2026-08-06 and its second
+amendment as `contract-freeze-2`. Revisions 13 and 14 do not reopen runtime
+feature scope; they correct the frozen boundary before runtime mechanics depend
+on it.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2059,7 +2225,28 @@ evidence and the pure `ReputationPolicy` boundary. Add the corresponding schema,
 lifecycle, and concurrency fixtures. No routing, verification pipeline, action
 gate, Postgres, or MCP runtime behavior belongs in this amendment.
 
-### 11.3 Open
+### 11.3 Contract-freeze amendment 3: M2-entry coverage map
+
+Revision 14 is complete only when each planning finding has normative prose,
+one portable frozen boundary, executable fixture identity, and compile-time or
+shape-validation coverage:
+
+| Finding | Normative owner | Frozen boundary | Required executable coverage |
+|---|---|---|---|
+| Candidate selection versus claim | Core selects; Store compares and persists | `LeaseCandidateSnapshot`, `WorkerRoutingSnapshot`, `compareAndClaimLease` | single winner, exclusion, cycle, contribution, slot, and operational races |
+| Core-created identifiers | `IdSource`; Store uniqueness | `CoreIdentityKind`, ownership map, prepared domain IDs | collision, exact replay, losing race leaves no state |
+| Routing and canary durability | Lease/job operational records | priority, attempt/diversity and assignment snapshots | persisted routing facts and hash-only canary identity |
+| Queue/class atomic state | Core computes; Store compare-and-transitions | queue/health snapshots, enqueue/claim expectations, `enterEmergencyHalt` | halt versus enqueue/claim, stale refresh, precedence atomicity |
+| Lease bounds | Job class plus deployment policy | `maxLeaseTtl`, extension snapshot, absolute deadline | bad TTL refusal, quantized strict bound, extension cap/deadline |
+| Reserve limits | Core snapshots; Store atomically accounts | `ReservePolicySnapshot`, typed charge outcome | changed policy/window and last-unit races |
+| Fixture completeness | Registration | fixture kinds, predicate/category binding, closed shape checks | both agreement families and both negative families per predicate |
+
+The amendment updates the internal package boundary only. Wire version `1.1.0`,
+all worker MCP schemas, and every frozen hash envelope remain unchanged. The
+reviewed commit is tagged `contract-freeze-3`; no runtime coordinator behavior,
+Postgres adapter, or MCP adapter belongs before that tag.
+
+### 11.4 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

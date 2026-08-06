@@ -82,5 +82,57 @@
   {
     "id": "reputation-evidence-idempotent-under-race",
     "description": "Concurrent reputation records with one evidence ID persist one canonical record; exact records replay and changed records conflict."
+  },
+  {
+    "id": "candidate-compare-and-claim-single-winner",
+    "description": "Two prepared leases comparing against one candidate revision produce one winner; Store never selects or ranks the candidate."
+  },
+  {
+    "id": "claim-worker-exclusion-snapshot-race",
+    "description": "A newly accepted replica or open lease makes the expected worker-exclusion snapshot stale and refuses claim."
+  },
+  {
+    "id": "claim-cycle-change-stale-snapshot",
+    "description": "A result requeue that advances collectionCycle invalidates every candidate snapshot from the old cycle."
+  },
+  {
+    "id": "claim-operational-state-stale",
+    "description": "A queue-mode or class-health revision change between candidate read and compare-and-claim refuses the prepared lease."
+  },
+  {
+    "id": "contribution-cap-claim-race",
+    "description": "Concurrent prepared claims from one worker compare the same contribution revision and cannot exceed the declared cap."
+  },
+  {
+    "id": "slot-occurrence-claim-race",
+    "description": "A prepared claim bound to an earlier assigned-slot occurrence conflicts after the durable occurrence advances."
+  },
+  {
+    "id": "core-id-collision-refused",
+    "description": "A prepared domain command using an already-durable IdSource identity conflicts and never replaces the existing record."
+  },
+  {
+    "id": "losing-claim-id-leaves-no-state",
+    "description": "An IdSource lease ID consumed by a losing stale-snapshot claim may be skipped but leaves no durable lease or alias."
+  },
+  {
+    "id": "halt-versus-enqueue-atomic",
+    "description": "Emergency halt racing enqueue makes either the enqueue visible before the complete halt snapshot or refuses it; no work enters through a half-visible halt."
+  },
+  {
+    "id": "halt-versus-claim-atomic",
+    "description": "Emergency halt racing compare-and-claim makes either the lease visible before the complete halt snapshot or refuses it; no lease crosses the halt revision."
+  },
+  {
+    "id": "stale-health-refresh-cannot-replace-operator-halt",
+    "description": "An automatic class-health refresh comparing an old revision conflicts after an operator emergency halt."
+  },
+  {
+    "id": "queue-class-precedence-atomic",
+    "description": "Queue mode, affected class-health revisions, invalidations, and authorization validity changes become visible in one precedence-consistent transaction."
+  },
+  {
+    "id": "reserve-policy-change-race-fails-closed",
+    "description": "A charge carrying an old reserve policy version or rollover identity conflicts without consuming either old or current capacity."
   }
 ]

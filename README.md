@@ -14,17 +14,17 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Contract freeze 2 complete.** The real-provider unattended platform gate
-passed. Revision 13 freezes the one-shot wire contract, Muster Schema 1,
-executable tables and state machines, conformance fixtures, and the corrected
-types-only atomic core port boundary. Runtime coordinator behavior remains
-Milestone 2 work.
+**Contract freeze 3 complete.** The real-provider unattended platform gate
+passed. Revision 14 freezes the one-shot wire contract, Muster Schema 1,
+executable tables and state machines, conformance fixtures, and the portable
+M2-entry core/Store boundary. Runtime coordinator behavior remains Milestone 2
+work.
 
 ## Specs
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 13) | `oneshot` scope; contract-freeze-2 amendment | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, unanimous replication agreement with absorbing splits, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, durable reputation evidence, separate result and action adjudication contracts, replay-stable authorization receipts, effect-intent idempotency, live validity and typed denial reasons, action-specific oracle coverage, multidimensional escalation health, permit epochs, confidence-typed diversity, side channels, trust model as tests, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 14) | `oneshot` scope; contract-freeze-3 amendment | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, core-owned routing with atomic Store comparison, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement with absorbing splits, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -46,10 +46,11 @@ Milestone 2 work.
 ## Contract freeze
 
 The current contract is frozen at wire version `1.1.0` and tagged locally as
-`contract-freeze-2`; `contract-freeze-1` remains the historical revision-12
-boundary. The binding scope is defined by [spec §11.1–11.2](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+`contract-freeze-3`; `contract-freeze-1` and `contract-freeze-2` remain the
+historical revision-12 and revision-13 boundaries. The binding scope is defined by [spec §11.1–11.3](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
-and the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md).
+the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
+and the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md).
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

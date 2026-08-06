@@ -72,18 +72,28 @@ describe("JobClass shape (spec 4.2)", () => {
         {
           id: "o1",
           kind: "support",
+          predicates: ["claims-grounded"],
           run: () => ({ kind: "pass" }),
           coversPayloadPaths: ["$.items"],
           coversResultPaths: ["$.claims"],
           negativeFixtures: [
             {
               name: "n1",
+              predicate: "claims-grounded",
+              category: "unsupported_material",
               payload: { items: [] },
               result: {
                 claims: [
                   { itemId: "x", claim: "ungrounded" },
                 ],
               },
+            },
+            {
+              name: "n2",
+              predicate: "claims-grounded",
+              category: "out_of_domain",
+              payload: { items: [] },
+              result: { claims: [] },
             },
           ],
         },
@@ -93,6 +103,15 @@ describe("JobClass shape (spec 4.2)", () => {
         resolveEquivalent: (results) => results[0],
         agreementFixtures: [
           {
+            kind: "equivalent",
+            results: [
+              { claims: [{ itemId: "a", claim: "first" }] },
+              { claims: [{ itemId: "b", claim: "second" }] },
+            ],
+            expected: "equivalent",
+          },
+          {
+            kind: "split",
             results: [
               { claims: [] },
               { claims: [{ itemId: "a", claim: "b" }] },
@@ -112,6 +131,7 @@ describe("JobClass shape (spec 4.2)", () => {
       privacy: "internal",
       cost: {
         expectedTurns: 1,
+        maxLeaseTtl: 900,
         leaseTtl: () => 900,
         maxInFlightLifetime: 86_400,
       },
