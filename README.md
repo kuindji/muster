@@ -16,8 +16,10 @@ the consumer to obey those authorizations.
 
 **Contract freeze 5 complete.** The real-provider unattended platform gate
 passed. Revision 16 freezes the registration inputs found missing by the first
-M2 Task-2 implementation trace. Runtime coordinator behavior remains Milestone
-2 work.
+M2 Task-2 implementation trace. M2 now includes the reference in-memory Store
+foundation plus the runtime class registry and registration validator; class
+lifecycle, worker enrollment, routing, verification, authorization, and the
+remaining coordinator behavior are still Milestone 2 work.
 
 ## Specs
 
