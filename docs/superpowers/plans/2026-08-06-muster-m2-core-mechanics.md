@@ -110,6 +110,16 @@ outcomes, forward-only rollover, retirement recomputation, and adjudication-ID
 collision handling. The amendment is independently reviewed, corrected,
 implemented, and tagged locally as `contract-freeze-10`; Task 6 may resume.
 
+The first Task-7 runtime trace then found that authorization persistence did
+not atomically compare the decision result's live state, composite intents
+could require several non-borrowable reserve lanes while the Store accepted
+only one charge, and exact verdict replay was reachable only after mutable
+runtime and freshness checks. The separate
+`2026-08-07-muster-contract-freeze-11-action-authorization.md` amendment plan
+defines the required boundary. Task 7 is paused until that amendment is
+independently reviewed, corrected, implemented, and tagged locally as
+`contract-freeze-11`.
+
 ## Global constraints
 
 - Revision 21 is the active reviewed normative boundary, tagged locally as
@@ -238,7 +248,7 @@ cover each rejection family and durable replay/conflict behavior.
   invalidate issued authorization validity, retain retrievable initial
   receipts, and emit every returned audit transition.
 
-## Task 7: Action gates and replay-stable authorization
+## Task 7: Action gates and replay-stable authorization (blocked on contract-freeze-11)
 
 - Verify descriptor-bound `EffectIntent` hashes, action composition, exact
   `deriveEffect` byte identity, decision-result freshness, class/version/epoch,

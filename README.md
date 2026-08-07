@@ -23,7 +23,9 @@ verification pipeline. It also implements authoritative reserve lifecycle and
 atomic health publication, fail-closed escalation charging, authenticated
 result and human-only action adjudication with exact verdict replay, bounded
 dispute requeues, and class-qualified invalidation with live authorization
-validity. Action-gate evaluation and replay-stable authorization are next.
+validity. The first Task 7 trace found frozen authorization-atomicity,
+composite-reserve, and verdict-replay gaps; action-gate implementation is paused
+on the proposed `contract-freeze-11` amendment and its independent review.
 
 ## Specs
 
@@ -69,6 +71,9 @@ that boundary.
 The [freeze-10 reserve-accounting amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-10-reserve-accounting.md)
 is independently reviewed, corrected, and tagged; M2 Task 6 is complete against
 that boundary.
+The proposed [freeze-11 action-authorization amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-11-action-authorization.md)
+records the first Task-7 trace findings. It authorizes no runtime work until it
+is independently reviewed, implemented, and tagged.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 
