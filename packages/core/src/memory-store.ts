@@ -633,13 +633,6 @@ export class InMemoryStore implements Store {
       if (classVersion?.state !== "active") {
         return { kind: "conflict", reason: "unclaimable" };
       }
-      if (
-        this.permitEpochs.get(currentCandidate.job.classId) !==
-        currentCandidate.job.permitEpoch
-      ) {
-        return { kind: "conflict", reason: "unclaimable" };
-      }
-
       const lease = input.preparedLease;
       const storedJobPayload = this.payloads.get(currentCandidate.job.payloadRef);
       const expectedAttempt = currentCandidate.attempts.attemptCount + 1;

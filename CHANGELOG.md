@@ -1,6 +1,6 @@
 # Changelog
 
-## contract-freeze-9 — review pending 2026-08-07
+## contract-freeze-9 — reviewed, tag pending 2026-08-07
 
 Proposed revision 20 amendment discovered by the first Milestone 2 Task-5
 runtime trace. Submission acceptance now commits optional checked reputation
@@ -10,8 +10,10 @@ accounting instead of masquerading as abandonment. Same-cycle settlement uses
 the lease-stamped epoch. Job-cycle snapshots durably mark the first exact
 absorbing split, and automatic decisions compare the complete current evidence
 set and refuse split-marked cycles. Wire contract version remains `1.1.0`.
-Independent review and the `contract-freeze-9` tag are still required before
-Task 5 runtime work.
+Independent review additionally removed a current-epoch claim fence that
+stranded replacement leases stamped under an earlier ordinary epoch, and added
+abandonment, expiry, and rejected-submission reclaim coverage. The
+`contract-freeze-9` tag is still required before Task 5 runtime work.
 
 ## Milestone 2 Task 4 — 2026-08-07
 

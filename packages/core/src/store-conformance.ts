@@ -930,6 +930,30 @@ const stickyEpochRequeueCase: StoreConformanceCase = {
       routing?.contributionUsed === 1,
       "provider failure must retain its fair-attempt contribution",
     );
+    const replacementWorker = await initializeWorker(store, "worker-2", 3);
+    const replacementCandidate = (
+      await store.listLeaseCandidates({ classIds: ["class-1"] })
+    )[0];
+    assert(
+      replacementCandidate !== undefined,
+      "abandoned work must remain claimable",
+    );
+    const replacementLease = preparedLease(
+      replacementCandidate,
+      replacementWorker,
+      "lease-old-epoch-replacement",
+    );
+    const replacementClaim = await store.compareAndClaimLease({
+      expectedCandidate: replacementCandidate,
+      expectedWorker: replacementWorker,
+      preparedLease: replacementLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(
+      replacementClaim.kind === "claimed" &&
+        replacementClaim.lease.permitEpoch === "epoch-1",
+      "ordinary epoch advance must not strand an abandoned stamped-cycle lease",
+    );
 
     const expiryStore = await factory();
     await initializeClass(expiryStore);
@@ -958,6 +982,34 @@ const stickyEpochRequeueCase: StoreConformanceCase = {
     assert(
       (await expiryStore.getLease(expiryLease.leaseId))?.open === false,
       "expiry must settle under the lease-stamped epoch after current epoch advances",
+    );
+    const expiryReplacementWorker = await initializeWorker(
+      expiryStore,
+      "worker-2",
+      3,
+    );
+    const expiryReplacementCandidate = (
+      await expiryStore.listLeaseCandidates({ classIds: ["class-1"] })
+    )[0];
+    assert(
+      expiryReplacementCandidate !== undefined,
+      "expired work must remain claimable",
+    );
+    const expiryReplacementLease = preparedLease(
+      expiryReplacementCandidate,
+      expiryReplacementWorker,
+      "lease-old-epoch-expiry-replacement",
+    );
+    const expiryReplacementClaim = await expiryStore.compareAndClaimLease({
+      expectedCandidate: expiryReplacementCandidate,
+      expectedWorker: expiryReplacementWorker,
+      preparedLease: expiryReplacementLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(
+      expiryReplacementClaim.kind === "claimed" &&
+        expiryReplacementClaim.lease.permitEpoch === "epoch-1",
+      "ordinary epoch advance must not strand an expired stamped-cycle lease",
     );
   },
 };
@@ -1072,6 +1124,13 @@ const invalidSubmissionSettlementCase: StoreConformanceCase = {
       preparedLease: lease,
       preparedPayload: { instruction: "process job-1" },
     });
+    const advancedEpoch = await store.transitionPermitEpoch({
+      classId: "class-1",
+      fromEpoch: "epoch-1",
+      toEpoch: "epoch-2",
+      at: LATER,
+    });
+    assert(advancedEpoch.kind === "applied", "current epoch must advance");
     const rejection = {
       workerId: worker.workerId,
       leaseId: lease.leaseId,
@@ -1109,6 +1168,30 @@ const invalidSubmissionSettlementCase: StoreConformanceCase = {
       (await store.acceptOrReplaySubmission(submissionInput(lease))).kind ===
         "refused",
       "settled invalid lease must not later accept",
+    );
+    const replacementWorker = await initializeWorker(store, "worker-2", 3);
+    const replacementCandidate = (
+      await store.listLeaseCandidates({ classIds: ["class-1"] })
+    )[0];
+    assert(
+      replacementCandidate !== undefined,
+      "rejected work must remain claimable",
+    );
+    const replacementLease = preparedLease(
+      replacementCandidate,
+      replacementWorker,
+      "lease-invalid-replacement",
+    );
+    const replacementClaim = await store.compareAndClaimLease({
+      expectedCandidate: replacementCandidate,
+      expectedWorker: replacementWorker,
+      preparedLease: replacementLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(
+      replacementClaim.kind === "claimed" &&
+        replacementClaim.lease.permitEpoch === "epoch-1",
+      "ordinary epoch advance must not strand a rejected stamped-cycle lease",
     );
   },
 };

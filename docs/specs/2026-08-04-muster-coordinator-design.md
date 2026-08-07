@@ -2401,9 +2401,9 @@ correct the frozen boundary before runtime mechanics depend on it.
 Revision 19 has been independently reviewed and corrected but does not reopen
 Task 4 until the reviewed commit is tagged `contract-freeze-8`.
 
-Revision 20 implements the proposed Task-5 boundary correction but does not
-reopen Task 5 until an independent review corrects the commit and the result is
-tagged `contract-freeze-9`.
+Revision 20 implements the Task-5 boundary correction and has been
+independently reviewed and corrected, but does not reopen Task 5 until the
+result is tagged `contract-freeze-9`.
 
 ### 11.2 Contract-freeze amendment 2
 

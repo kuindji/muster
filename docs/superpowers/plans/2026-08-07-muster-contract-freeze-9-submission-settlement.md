@@ -1,7 +1,7 @@
 # Muster contract-freeze-9 submission-settlement amendment plan
 
-**Status:** Implemented as coordinator revision 20 and awaiting independent
-review. It is not tagged; M2 Task 5 remains blocked.
+**Status:** Implemented as coordinator revision 20, independently reviewed,
+and corrected. It is not tagged; M2 Task 5 remains blocked.
 
 **Goal:** Amend revision 19 into revision 20 so submission rejection,
 contract-cutoff settlement, checked reputation evidence, and absorbing-split
