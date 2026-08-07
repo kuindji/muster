@@ -21,12 +21,12 @@ operation installs the deployment-provided initial queue snapshot. Domain
 commands use one checked-out client for one short PostgreSQL transaction,
 execute at `SERIALIZABLE`, acquire affected rows in canonical key order, and
 retry bounded SQLSTATE `40001` serialization failures and `40P01` deadlocks
-from the beginning. Unique constraints and compared revisions produce the
-frozen typed replay/conflict outcomes; retries never reinterpret a durable
-identity collision as success. Relational keys, states, revisions, foreign
-keys, and query columns enforce identity and lifecycle integrity, while JSONB
-retains complete frozen records and canonical JSON payloads without inventing
-adapter policy.
+from the beginning over an immutable pre-await input snapshot. Unique
+constraints and compared revisions produce the frozen typed replay/conflict
+outcomes; retries never reinterpret a durable identity collision as success.
+Relational keys, states, revisions, foreign keys, and query columns enforce
+identity and lifecycle integrity, while JSONB retains complete frozen records,
+command receipts, and canonical JSON payloads without inventing adapter policy.
 
 Primary implementation references are the PostgreSQL documentation for
 [serializable isolation](https://www.postgresql.org/docs/current/transaction-iso.html)
@@ -62,11 +62,17 @@ documentation for the
   `migrateMusterPostgres`, and `bootstrapMusterPostgres`; do not read connection
   strings or credentials from `process.env` inside the package.
 - Default to a dedicated `muster` schema and allow a caller-supplied schema only
-  after strict SQL-identifier validation. Qualify every object explicitly; do
-  not depend on mutable `search_path`.
+  when it matches `^[a-z_][a-z0-9_]{0,62}$`, a closed lowercase-ASCII grammar
+  within PostgreSQL's 63-byte identifier limit. Quote the validated identifier
+  in one helper and qualify every object explicitly; do not depend on mutable
+  `search_path`.
+- Require a UTF-8 database and reject any other `server_encoding` before schema
+  creation or bootstrap. The frozen canonical-JSON domain includes Unicode that
+  a narrower database encoding cannot represent.
 - Keep migrations as ordered, checksum-verified `.sql` assets packaged with the
-  library. Migration execution takes one transaction-level advisory lock and
-  refuses an unknown applied migration or checksum mismatch.
+  library. Migration execution takes one schema-qualified transaction-level
+  advisory lock before reading or creating migration state and refuses an
+  unknown applied migration or checksum mismatch.
 - The Store constructor never migrates or bootstraps. Migration and initial
   queue installation are explicit deployment steps. Bootstrap is
   create/replay/conflict, and no domain timestamp, revision, ID, queue cause,
@@ -77,17 +83,47 @@ documentation for the
   timestamps remain byte-preserved in the stored record; typed timestamp
   columns used for comparison are projections, not replacement values returned
   to callers.
-- Use parameterized queries only. Validate affected-row counts and persisted
-  discriminants before returning a `Store` outcome; a malformed or future
-  schema fails loudly instead of being cast into a frozen type.
-- Keep transactions free of network calls, clocks, entropy, callbacks, and
-  sleeps. Lock all multi-row sets in stable bytewise identity order. Retried
-  commands reuse the exact prepared input and never allocate a replacement
-  identity.
+- Parameterize every dynamic value. PostgreSQL cannot parameterize identifiers,
+  so the single exception is interpolation of the already validated and quoted
+  schema identifier into static package-owned SQL. Validate affected-row counts
+  and persisted discriminants before returning a `Store` outcome; a malformed
+  or future schema fails loudly instead of being cast into a frozen type.
+- Before the first await, validate, detach, and freeze every Store command input.
+  Keep transactions free of network calls, clocks, entropy, application
+  callbacks, and sleeps; `withSerializableTransaction` accepts only an internal
+  adapter closure over that snapshot. Lock all multi-row sets in stable bytewise
+  identity order. Retried commands reuse the exact snapshot and never allocate a
+  replacement identity.
+- Retry only `40001` and `40P01` in the generic runner. Expected unique-key races
+  use named constraints and conflict-aware statements to produce frozen typed
+  replay/conflict outcomes; an unexpected `23505` or `23P01` is an infrastructure
+  or schema error, never a blind retry or a guessed domain conflict.
 - Give identity/order columns a deterministic database collation for lock
   ordering, but reproduce contract-visible array ordering with the same
   TypeScript comparators as the reference adapter. Database locale must never
   change a receipt, evidence order, target set, or policy decision.
+
+## Independent plan review (complete 2026-08-07)
+
+The pre-implementation review traced all 64 `Store` methods, the reference
+adapter's replay maps, the staged conformance arrays, and every required frozen
+concurrency ID. It corrected five adapter-plan gaps without changing the frozen
+contract:
+
+- dynamic schema names now have a closed, non-truncating quoting boundary rather
+  than an impossible all-values-parameterized promise;
+- the database encoding is explicitly UTF-8;
+- retry attempts operate on a detached pre-await snapshot and cannot re-run an
+  application callback or observe caller mutation;
+- migration state includes durable command replay receipts and fingerprints, so
+  exact old-command replay survives later state transitions and process restart;
+  and
+- expected identity collisions are handled by named constraints as typed domain
+  outcomes, while the generic runner retries only serialization/deadlock errors.
+
+No missing frozen fact was found. Task 1 may begin against revision 26 and
+`contract-freeze-15`; implementation must still stop if its first SQL trace
+finds an unrepresentable atomic fact.
 
 ## Store coverage map
 
@@ -113,8 +149,8 @@ Create the package skeleton before domain tables or commands:
   `tsup.config.ts`, `src/index.ts`, `src/postgres-store.ts`,
   `src/transactions.ts`, `src/migrations.ts`, and `src/codecs.ts` for Node 20+
   ESM/CJS/type output;
-- add the runtime dependencies `@kuindji/muster-core` and `pg`, with types and
-  Testcontainers PostgreSQL support as development dependencies;
+- add the runtime dependencies `@kuindji/muster-core` and `pg`, with `@types/pg`
+  and `@testcontainers/postgresql` as development dependencies;
 - extend `scripts/assert-invariants.mjs` so the adapter's runtime dependency
   set is exactly core plus `pg`, raw OAuth identity remains absent, and no
   direct `@kuindji/muster-contract` dependency bypasses the declared package
@@ -131,7 +167,8 @@ Create the package skeleton before domain tables or commands:
   PostgreSQL in test code only, while Testcontainers remains the zero-setup
   default; and
 - add focused tests for schema-name rejection, caller-owned pool lifetime,
-  client release after success/failure, and package ESM/CJS exports.
+  the 63-byte anti-truncation boundary, caller-owned pool lifetime, client
+  release after success/failure, and package ESM/CJS exports.
 
 Checkpoint: package build/typecheck and harness smoke tests pass against
 PostgreSQL 16; no `Store` method is implemented yet.
@@ -141,15 +178,17 @@ PostgreSQL 16; no `Store` method is implemented yet.
 Add the persistence foundation:
 
 - create `migrations/0001_initial.sql` plus a checksum manifest and a migrator
-  that holds one transaction-level advisory lock, applies each pending
-  migration once, and records version/checksum only in the same transaction as
-  its DDL;
+  that verifies UTF-8, takes the schema-qualified transaction advisory lock,
+  applies each pending migration once, and records version/checksum only in the
+  same transaction as its DDL;
 - create explicit tables for the migration ledger and singleton queue state;
   class versions and permit epochs; class health; workers and worker routing;
   global core identities; payloads, jobs, cycle state, attempt state, leases,
   accepted submissions, and decisions; reserve policies and charges; result
   and action adjudications, verdict history, effect intents, authorizations,
-  and live authorization status; ledger entries; and reputation evidence;
+  and live authorization status; ledger entries; reputation evidence; reserve
+  window history; and durable command replay fingerprints plus original typed
+  outcomes for every command for which `InMemoryStore` retains history;
 - enforce primary/unique keys for every frozen identity and composite scope,
   including `(class_id, contract_version)`, `(job_id, collection_cycle)`, one
   accepted submission per lease, one effect-intent owner, one canonical verdict
@@ -161,20 +200,26 @@ Add the persistence foundation:
   and filtered ledger reads;
 - implement record/payload codecs that reject non-finite JSON, unexpected nulls,
   invalid revisions, unsafe integers, and unknown stored discriminants. Keep
-  returned objects detached from driver-owned values;
+  returned objects detached from driver-owned values. Implement the reference
+  adapter's structural command fingerprint semantics, including optional-field
+  presence, without relying on JSONB textual formatting;
 - implement `withSerializableTransaction`: acquire one pool client, begin at
-  `SERIALIZABLE`, apply configured timeouts with `SET LOCAL`, run the whole
-  callback on that client, commit, roll back on failure, always release, and
-  retry bounded `40001`/`40P01` failures with the exact original input. Never
-  use `pool.query` inside a transaction; and
-- implement explicit queue bootstrap with initial revision `1`, exact replay,
+  `SERIALIZABLE`, apply configured timeouts through parameterized
+  `set_config(..., true)`, run the internal adapter closure on that client,
+  commit, roll back on failure, always release, and retry bounded
+  `40001`/`40P01` failures with the exact original snapshot. Never use
+  `pool.query` inside a transaction; and
+- implement explicit queue bootstrap with the same input shape and default
+  `cause: "bootstrap"` as `InMemoryStore`, initial revision `1`, exact replay,
   changed-input conflict, and no database-owned domain time.
 
-Migration tests cover fresh install, idempotent rerun, two migrators racing,
-checksum drift, an unknown future migration, rollback after failed DDL,
-qualified-schema isolation, and packaged SQL presence. Transaction tests force
-serialization abort, deadlock retry, retry exhaustion, callback failure, and
-pool-client cleanup.
+Migration tests cover fresh install, idempotent rerun, two same-schema migrators
+racing, independent-schema lock isolation, checksum drift, an unknown future
+migration, non-UTF-8 rejection, rollback after failed DDL, qualified-schema
+isolation, identifier truncation rejection, and packaged SQL presence.
+Transaction tests force serialization abort, deadlock retry, retry exhaustion,
+internal-callback failure, caller mutation between attempts, unexpected unique
+violation, and pool-client cleanup.
 
 Checkpoint: schema/migration/transaction tests pass on PostgreSQL 16 and a
 freshly packed tarball contains every required migration asset.
@@ -206,8 +251,9 @@ the frozen conflict outcome rather than creating a partial view.
 Tests select the control-state cases by frozen ID from
 `TASK1_STORE_CONFORMANCE_CASES` against independent real schemas and add direct
 two-client checks for atomic registration/bootstrap, state and revision races,
-and canonical multi-row lock ordering. Open-lease worker suspension and the
-remaining Task-1 cases join Task 4 after lease persistence exists.
+canonical multi-row lock ordering, and exact replay after a later transition and
+adapter restart. Open-lease worker suspension and the remaining Task-1 cases
+join Task 4 after lease persistence exists.
 
 Checkpoint: every control-state case selected for Task 3 passes through
 PostgreSQL and the in-memory suite remains green.
@@ -336,6 +382,9 @@ Prove the adapter through public core operations rather than Store calls alone:
 - run Store plus protocol suites after destroying and recreating the
   `PostgresStore` instance to prove state survives process-level adapter
   restart;
+- replay earlier class, epoch, worker, routing, queue, health, enqueue, claim,
+  rejection, split, invalidation, emergency, and reserve commands after later
+  transitions and adapter restart, and require the original typed outcomes;
 - add an exact coverage manifest keyed by
   `REQUIRED_CONCURRENCY_CASE_IDS`: every frozen ID must be owned either by an
   exported Store conformance case or a named PostgreSQL multi-client test, with
@@ -369,10 +418,12 @@ from source and the packed package.
   lifecycle and concurrency fixture IDs, exact-replay ordering, transaction
   boundaries, query predicates, indexes, and returned typed outcomes; and
 - search specifically for SQL interpolation, unqualified schema access,
-  `pool.query` inside transactions, leaked clients, database-generated domain
-  IDs/time, partial multi-row writes, inconsistent lock order, unbounded retry,
-  swallowed serialization failure, raw OAuth identity, old-cycle leakage,
-  mutable initial receipts, reserve partial debit, and invalidation subsets.
+  identifier truncation, non-UTF-8 databases, `pool.query` inside transactions,
+  leaked clients, mutable retry inputs, missing durable replay history,
+  database-generated domain IDs/time, partial multi-row writes, inconsistent
+  lock order, unbounded retry, swallowed serialization failure, misclassified
+  unique violations, raw OAuth identity, old-cycle leakage, mutable initial
+  receipts, reserve partial debit, and invalidation subsets.
 
 An independent review is a separate checkpoint. Correct every adapter or plan
 defect it finds, rerun PostgreSQL 16 and 18 gates, and stop before MCP work,
