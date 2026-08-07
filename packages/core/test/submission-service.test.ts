@@ -134,7 +134,7 @@ const workerPolicy: WorkerControlPolicy = {
 };
 
 const reputationPolicy: ReputationPolicy = {
-  assess: () => ({ eligible: true, priority: 0 }),
+  assess: () => ({ eligible: true }),
 };
 
 const setup = async (

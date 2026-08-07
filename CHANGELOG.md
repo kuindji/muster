@@ -1,5 +1,19 @@
 # Changelog
 
+## contract-freeze-15 — reviewed and tagged 2026-08-07
+
+Revision 26 amendment discovered by the Milestone 2 Task-10 semantic review.
+The pull-based reputation policy now returns eligibility only instead of an
+unused cross-worker priority. Degraded mode is specified as a truthful
+backpressure signal with full valid intake and invariant urgent-first routing;
+unowned throttling and early-expiry promises were removed. Emergency permit
+withdrawal now conflicts when its epoch transition names a different class than
+its invalidation scope, and result adjudication refuses a diversity shortfall
+without current-cycle evidence. Port-shape, queue-table, reusable Store
+conformance, and adjudication regression coverage accompany the corrections.
+The worker wire remains `1.1.0`; final independent Task-10 review remains
+separate.
+
 ## Milestone 2 Task 9 — 2026-08-07
 
 Exported a Store-parametric protocol conformance kit that exercises real core
@@ -24,7 +38,7 @@ capacity or backlog age, and restores only through the explicit higher
 threshold. Queue-wide emergency halt publishes all class health and
 class-qualified invalidations in one transaction. Operations append correlated
 hash-only ledger records, reusable privacy helpers enforce public/internal/
-sensitive body and descriptor visibility, and non-finite reputation priority
+sensitive body and descriptor visibility, and reputation-policy failure
 continues to fail routing closed. Focused operations and privacy coverage joins
 the Task-8 Store conformance suite.
 

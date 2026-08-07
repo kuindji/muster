@@ -177,12 +177,12 @@ export type ReputationEvidenceRecord = ReputationEvidenceRecordBase &
       }
   );
 
-/** Consumer-owned routing policy; deterministic and I/O-free. */
+/** Consumer-owned worker-eligibility policy; deterministic and I/O-free. */
 export interface ReputationPolicy {
   assess(input: {
     worker: WorkerRecord;
     evidence: readonly ReputationEvidenceRecord[];
-  }): { eligible: boolean; /** Finite routing tiebreaker. */ priority: number };
+  }): { eligible: boolean };
 }
 
 export interface WorkerRecord {

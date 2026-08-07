@@ -433,8 +433,7 @@ export class LeaseService {
         return { outcome: "no_work" };
       }
 
-      const assessment = await this.assessWorker(worker);
-      if (!assessment.eligible) {
+      if (!await this.workerEligible(worker)) {
         const noWork = await this.recordNoWork(worker, routing, at);
         if (noWork !== null) return noWork;
         continue;
@@ -646,20 +645,14 @@ export class LeaseService {
     return true;
   }
 
-  private async assessWorker(worker: WorkerRecord): Promise<{
-    eligible: boolean;
-    priority: number;
-  }> {
+  private async workerEligible(worker: WorkerRecord): Promise<boolean> {
     try {
-      const result = this.options.reputationPolicy.assess({
+      return this.options.reputationPolicy.assess({
         worker,
         evidence: await this.options.store.listReputationEvidence(worker.workerId),
-      });
-      return Number.isFinite(result.priority)
-        ? result
-        : { eligible: false, priority: 0 };
+      }).eligible === true;
     } catch {
-      return { eligible: false, priority: 0 };
+      return false;
     }
   }
 

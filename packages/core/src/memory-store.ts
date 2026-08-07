@@ -978,8 +978,11 @@ export class InMemoryStore implements Store {
       }
       if (
         input.reason === "emergency_permit_withdrawal" &&
-        (this.permitEpochs.get(input.epochTransition.classId) ?? null) !==
-          input.epochTransition.fromEpoch
+        (
+          input.epochTransition.classId !== input.scope.classId ||
+          (this.permitEpochs.get(input.epochTransition.classId) ?? null) !==
+            input.epochTransition.fromEpoch
+        )
       ) {
         return clone({ kind: "conflict", current });
       }

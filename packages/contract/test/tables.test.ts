@@ -277,11 +277,12 @@ describe("queue modes (spec 6.12)", () => {
     expect(QUEUE_MODE_TABLE.emergency_halted.intake).toBe("refused");
   });
 
-  it("degraded mode throttles and prioritizes exactly as specified", () => {
+  it("degraded mode signals backpressure without inventing intake policy", () => {
+    expect(QUEUE_MODE_TABLE.normal.urgent).toBe("prioritized");
     expect(QUEUE_MODE_TABLE.degraded).toEqual({
-      intake: "throttled",
+      intake: "full",
       inFlight: "completes",
-      lowPriority: "expire_early",
+      lowPriority: "normal",
       urgent: "prioritized",
       entryEvent: "backpressure",
     });

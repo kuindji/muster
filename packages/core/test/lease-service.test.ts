@@ -98,7 +98,7 @@ const workerPolicy = (): WorkerControlPolicy => ({
 });
 
 const reputationPolicy: ReputationPolicy = {
-  assess: () => ({ eligible: true, priority: 0 }),
+  assess: () => ({ eligible: true }),
 };
 
 const setup = async (options: {
@@ -290,11 +290,17 @@ describe("M2 Task 4 enqueue", () => {
 });
 
 describe("M2 Task 4 routing and claim", () => {
-  it("accounts for no-work, honors priority, and snapshots a quantized lease", async () => {
+  it("keeps degraded intake open, honors priority, and quantizes leases", async () => {
     const { events, service, store } = await setup();
     await expect(service.leaseJob("worker-1")).resolves.toEqual({ outcome: "no_work" });
     expect(await store.getWorkerRoutingSnapshot("worker-1"))
       .toMatchObject({ contributionUsed: 1 });
+
+    const queue = await store.getQueueMode();
+    await expect(store.transitionQueueMode({
+      expected: queue,
+      next: { mode: "degraded", cause: "capacity", updatedAt: NOW },
+    })).resolves.toMatchObject({ kind: "applied" });
 
     await enqueue(service, "normal", {
       priority: { lane: "normal", value: 100, sequence: "sequence-normal" },
@@ -390,18 +396,18 @@ describe("M2 Task 4 routing and claim", () => {
       .toMatchObject({ contributionUsed: 0 });
 
     const reputation = await setup({
-      reputation: { assess: () => ({ eligible: false, priority: 1 }) },
+      reputation: { assess: () => ({ eligible: false }) },
     });
     await enqueue(reputation.service);
     await reputation.service.leaseJob("worker-1");
     expect(await reputation.store.getWorkerRoutingSnapshot("worker-1"))
       .toMatchObject({ contributionUsed: 1 });
 
-    const nonFinite = await setup({
-      reputation: { assess: () => ({ eligible: true, priority: Number.NaN }) },
+    const failedPolicy = await setup({
+      reputation: { assess: () => { throw new Error("policy failed"); } },
     });
-    await enqueue(nonFinite.service);
-    await expect(nonFinite.service.leaseJob("worker-1"))
+    await enqueue(failedPolicy.service);
+    await expect(failedPolicy.service.leaseJob("worker-1"))
       .resolves.toEqual({ outcome: "no_work" });
   });
 

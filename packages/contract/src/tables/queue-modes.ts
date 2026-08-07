@@ -7,9 +7,9 @@ export type QueueMode =
   | "emergency_halted";
 
 export interface QueueModeRow {
-  intake: "full" | "throttled" | "refused";
+  intake: "full" | "refused";
   inFlight: "completes" | "operator_policy";
-  lowPriority: "normal" | "expire_early";
+  lowPriority: "normal";
   urgent: "normal" | "prioritized";
   entryEvent: "backpressure" | "pool_offline" | null;
 }
@@ -24,13 +24,13 @@ export const QUEUE_MODE_TABLE: Record<QueueMode, QueueModeRow> =
       intake: "full",
       inFlight: "completes",
       lowPriority: "normal",
-      urgent: "normal",
+      urgent: "prioritized",
       entryEvent: null,
     },
     degraded: {
-      intake: "throttled",
+      intake: "full",
       inFlight: "completes",
-      lowPriority: "expire_early",
+      lowPriority: "normal",
       urgent: "prioritized",
       entryEvent: "backpressure",
     },

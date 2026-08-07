@@ -1,8 +1,8 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 25 and the reviewed, tagged
-`contract-freeze-14` boundary, including an in-memory Store and reusable
+`@kuindji/muster-core` against revision 26 and the reviewed, tagged
+`contract-freeze-15` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -144,10 +144,16 @@ set or safe aggregation rule. Revision 25 and the separate
 that comparison and conservative aggregation. Task 8 resumes only after
 independent review and the local `contract-freeze-14` tag.
 
+The Task-10 semantic review then found an unusable reputation-priority promise,
+unowned degraded-mode throttle/expiry behavior, a cross-class emergency epoch
+hole, and an unproven diversity-adjudication path. Revision 26 and the separate
+`2026-08-07-muster-contract-freeze-15-task10-review.md` amendment remove the
+unrepresentable policy promises and add the two fail-closed runtime fences.
+
 ## Global constraints
 
-- Revision 25 is the active reviewed normative boundary, tagged locally as
-  `contract-freeze-14`. The
+- Revision 26 is the active reviewed normative boundary, tagged locally as
+  `contract-freeze-15`. The
   worker wire version is unchanged. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only after review.
 - `muster-core` keeps exactly one runtime dependency and references no network,
@@ -236,7 +242,8 @@ cover each rejection family and durable replay/conflict behavior.
   revisions.
 - Select eligible workers by hard capabilities, contract acceptance,
   contribution cap, slot, exclusions, `notBefore`, class health, deterministic
-  reputation eligibility/priority, and declared diversity axes.
+  reputation eligibility, and declared diversity axes; urgent jobs sort first
+  whenever leasing is allowed.
 - Compare-and-transition complete worker routing periods before claim whenever
   the deterministic contribution window or assigned-slot occurrence advances;
   never ask Store to derive either calendar.
@@ -297,8 +304,8 @@ cover each rejection family and durable replay/conflict behavior.
   operation and atomic Store outcome.
 - Apply `PrivacyClass` body/descriptor retention rules to ledger and consumer
   notifications while audit events remain hash-only.
-- Keep reputation evidence idempotent and ordered; validate policy priority is
-  finite and use it only as a routing tiebreaker.
+- Keep reputation evidence idempotent and ordered; apply the deployment-owned
+  eligibility gate before selecting a job for the requesting worker.
 
 ## Task 9: Protocol conformance kit (complete 2026-08-07)
 
@@ -324,7 +331,7 @@ Store calls, events, fixture IDs, and conformance tests. Search specifically for
 raw OAuth identity, direct I/O/entropy, unowned identifiers, unqualified
 epochs/versions, non-quantized TTL bounds, mutable aliases, stale operational or
 invalidation snapshots, partial target application, cross-cycle evidence,
-non-finite reputation priority, model inference, and authorization paths that
+unused policy outputs, model inference, and authorization paths that
 bypass live validity.
 
 ## Delivery checkpoints

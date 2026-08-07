@@ -1,12 +1,12 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 25)
+**Date:** 2026-08-04 (revision 26)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 14 defines
-the class-health live-version policy-set boundary and is independently reviewed
-and corrected. The reviewed boundary is tagged locally as `contract-freeze-14`;
-Milestone 2 Task 8 is implemented against it.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 15 corrects
+the four gaps found by the Milestone 2 Task-10 semantic review. The reviewed
+boundary is tagged locally as `contract-freeze-15`; Milestone 2 is implemented
+against it pending final independent review.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -272,6 +272,18 @@ refresh. Core sums live-version demand and restoration rates and uses the
 strictest dwell and freshness bounds. This is a contract correction only;
 revision 25 implements no Task-8 health service and does not change the worker
 wire.
+
+Revision 26 closes four Task-10 review gaps. The pull-based `lease_job(workerId)`
+operation never compares a set of workers, so a per-worker reputation priority
+could not be an honest routing tiebreaker; `ReputationPolicy` now owns worker
+eligibility only. Degraded mode remains a truthful backpressure signal while
+intake throttling and early expiry remain deployment policies outside the
+frozen M2 API; urgent-first job ordering is invariant whenever leasing is
+allowed. Emergency permit withdrawal now requires the epoch transition and
+invalidation scope to name the same class. Result adjudication also refuses a
+claimed diversity shortfall unless the current collecting-cycle snapshot has
+no open lease, has reached the replica target, and remains below a declared
+diversity minimum. The worker wire remains unchanged.
 
 ## 1. What Muster is
 
@@ -2245,11 +2257,11 @@ the same canonical record replay; a different record under the same ID
 conflicts. Raw bodies and OAuth subjects never enter this ledger.
 
 A consumer supplies a deterministic, I/O-free `ReputationPolicy` that maps a
-worker record plus its ordered evidence to `{ eligible, priority }`, where
-priority is finite. Core uses
-eligibility before candidate selection and priority only as a routing
-tiebreaker after hard capability, contribution-cap, diversity, exclusion,
-contract, and `not_before` constraints. This keeps policy and local risk
+worker record plus its ordered evidence to `{ eligible }`. Core applies that
+eligibility gate before candidate selection. The pull-based
+`lease_job(workerId)` protocol observes only the requesting worker, so it has no
+cross-worker candidate set on which a reputation score could truthfully act as
+a tiebreaker. This keeps policy and local risk
 tolerance consumer-owned while making the evidence paths and replay behavior
 portable and testable. No policy may turn reputation into verification
 strength or satisfy an action gate.
@@ -2283,7 +2295,7 @@ interface ReputationPolicy {
   assess(input: {
     worker: WorkerRecord
     evidence: readonly ReputationEvidenceRecord[]
-  }): { eligible: boolean; priority: number }
+  }): { eligible: boolean }
 }
 ```
 
@@ -2353,14 +2365,21 @@ recovery from an admission halt is explicit.
 
 | Mode | Condition | Behaviour |
 |---|---|---|
-| `normal` | within SLA against projected capacity | full intake |
-| `degraded` | aging beyond SLA, or capacity below threshold | intake throttled, low-priority jobs expire early, urgent prioritized, `onBackpressure` |
+| `normal` | within SLA against projected capacity | full intake; urgent-first ordering |
+| `degraded` | aging beyond SLA, or capacity below threshold | full core intake; urgent-first ordering; `onBackpressure` |
 | `admission_halted` | pool offline or operator pauses admission | `enqueue` refuses; `lease_job` returns coarse `no_work`; valid in-flight work may complete; `onPoolOffline` when applicable |
 | `emergency_halted` | explicit operator kill switch | refuse new work and apply the recorded cancellation policy to in-flight and pending work |
 
 Per-class health (section 6.6) is orthogonal and can apply while the queue is
 `normal`. Pool-offline detection is by absence of expected slot arrivals, not a
 heartbeat workers pay for.
+
+Degraded is an observable core state, not an unowned rate or expiry policy.
+Deployments may throttle callers after `onBackpressure`, but revision 26 does
+not invent a throttle ratio, a low-priority deadline, or a Store mutation that
+could discard existing work. Such behavior requires a later frozen policy and
+atomic command. Core continues to accept valid intake and never shortens a
+durable job or lease lifetime solely because the queue is degraded.
 
 ## 7. Observability, privacy, retention
 
@@ -2689,6 +2708,9 @@ independently reviewed, corrected, and tagged `contract-freeze-13`.
 Revision 25 implements the class-health policy-set correction and is
 independently reviewed, corrected, and tagged `contract-freeze-14`.
 
+Revision 26 implements the Task-10 review corrections and is reviewed,
+corrected, and tagged `contract-freeze-15`.
+
 ### 11.2 Contract-freeze amendment 2
 
 Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
@@ -2931,7 +2953,19 @@ conflicts without publishing stale health. The amendment changes only internal
 Store/core contracts, leaves the worker wire at `1.1.0`, and is reviewed before
 the local `contract-freeze-14` tag.
 
-### 11.15 Open
+### 11.15 Contract-freeze amendment 15: Task-10 review corrections
+
+Revision 26 is complete only when reputation policy exposes eligibility without
+an unusable worker-priority value; the queue-mode table makes degraded behavior
+match the implemented core boundary; every emergency epoch transition matches
+its invalidation scope's class; and a diversity-shortfall adjudication is
+rejected unless the current cycle deterministically demonstrates the shortfall.
+Executable coverage must include the public port shape, queue table, cross-class
+epoch refusal, and premature adjudication refusal. The amendment leaves the
+worker wire at `1.1.0` and is reviewed before the local `contract-freeze-15`
+tag.
+
+### 11.16 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

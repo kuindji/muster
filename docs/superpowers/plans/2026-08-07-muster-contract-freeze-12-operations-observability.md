@@ -76,8 +76,9 @@ remain adapter/operator policy outside this amendment.
 - starvation restoration is explicit and uses the higher threshold;
 - sensitive ledger entries reject bodies/descriptors, and audit events expose
   hashes only;
-- reputation policy priority remains finite and is only a final routing
-  tiebreaker.
+- at the revision-23 boundary, reputation policy priority remains finite and is
+  only a final routing tiebreaker. Revision 26 and `contract-freeze-15` later
+  supersede that unrepresentable pull-routing shape with eligibility only.
 
 The reviewed amendment is tagged locally as `contract-freeze-12`. M2 Task 8
 runtime work resumes only after that review boundary.

@@ -273,19 +273,37 @@ export class AdjudicationService {
     const candidateResultHashes = [...new Set(
       evidence.map((item) => item.resultHash),
     )].sort(compare);
+    const candidate = (await this.options.store.listLeaseCandidates({
+      classIds: [job.classId],
+    })).find((entry) =>
+      entry.job.jobId === job.jobId &&
+      entry.job.collectionCycle === job.collectionCycle
+    );
     if (input.reason === "split_exhausted") {
-      const candidate = (await this.options.store.listLeaseCandidates({
-        classIds: [job.classId],
-      })).find((entry) =>
-        entry.job.jobId === job.jobId &&
-        entry.job.collectionCycle === job.collectionCycle
-      );
       const requiredEvidence = compatibility.entry.jobClass.replication.target +
         compatibility.entry.jobClass.replication.maxSplitEvidenceReroutes;
       if (
         candidate === undefined ||
         !candidate.attempts.splitObserved ||
         evidence.length < requiredEvidence
+      ) return { kind: "invalid_request" };
+    } else {
+      const diversity = compatibility.entry.jobClass.diversity;
+      if (
+        candidate === undefined ||
+        diversity === undefined ||
+        candidate.attempts.openLeaseIds.length > 0 ||
+        candidate.attempts.acceptedWorkerIds.length <
+          compatibility.entry.jobClass.replication.target ||
+        candidate.attempts.acceptedDiversity.length <
+          compatibility.entry.jobClass.replication.target ||
+        evidence.length < compatibility.entry.jobClass.replication.target ||
+        diversity.axes.every((axis) =>
+          new Set(candidate.attempts.acceptedDiversity.flatMap((fact) => {
+            const value = fact.axes[axis];
+            return value === undefined ? [] : [value];
+          })).size >= diversity.minDistinct
+        )
       ) return { kind: "invalid_request" };
     }
     const request = {

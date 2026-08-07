@@ -1491,6 +1491,36 @@ const emergencyCase: StoreConformanceCase = {
   run: async (factory) => {
     const store = await factory();
     const health = await initializeClass(store);
+    await store.transitionPermitEpoch({
+      classId: "class-2",
+      fromEpoch: null,
+      toEpoch: "epoch-other",
+      at: NOW,
+    });
+    const emptyClassScope = await store.inspectInvalidationScope({
+      kind: "class",
+      classId: "class-1",
+    });
+    const crossClassEpoch = await store.invalidateResultScope({
+      scope: emptyClassScope.scope,
+      expectedTargets: emptyClassScope.targets,
+      requeuePlans: [],
+      reason: "emergency_permit_withdrawal",
+      epochTransition: {
+        classId: "class-2",
+        fromEpoch: "epoch-other",
+        toEpoch: "epoch-other-next",
+      },
+      at: LATER,
+    });
+    assert(
+      crossClassEpoch.kind === "conflict",
+      "permit-epoch transition must be qualified by the invalidation class",
+    );
+    assert(
+      await store.getCurrentPermitEpoch("class-2") === "epoch-other",
+      "cross-class invalidation must preserve the unrelated permit epoch",
+    );
     await enqueue(store, "job-before-halt");
     const queue = await store.getQueueMode();
     const invalidation = await store.inspectInvalidationScope({

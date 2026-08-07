@@ -147,7 +147,7 @@ const workerPolicy: WorkerControlPolicy = {
 };
 
 const reputationPolicy: ReputationPolicy = {
-  assess: () => ({ eligible: true, priority: 0 }),
+  assess: () => ({ eligible: true }),
 };
 
 const adjudicationSource: AdjudicationSource = {
@@ -287,6 +287,36 @@ const createSplit = async (
 };
 
 describe("M2 Task 6 adjudication service", () => {
+  it("refuses an unproven diversity shortfall", async () => {
+    const state = await setup();
+    await state.store.initializeReservePolicy({
+      policy: {
+        classId: "class-1",
+        contractVersion: "1.0.0",
+        policyVersion: "reserves-1",
+        windowId: "2026-W32",
+        windowStartsAt: "2026-08-03T00:00:00.000Z",
+        windowEndsAt: "2026-08-10T00:00:00.000Z",
+        lane: "splitAndAdjudication",
+        laneLimit: 1,
+      },
+      at: NOW,
+    });
+    const service = new AdjudicationService({
+      ...state,
+      source: adjudicationSource,
+    });
+
+    await expect(service.openResult({
+      jobId: "job-1",
+      collectionCycle: 1,
+      reason: "diversity_shortfall",
+    })).resolves.toEqual({ kind: "invalid_request" });
+    expect(await state.store.getResultState("job-1", 1)).toBe("collecting");
+    expect(await state.store.listPendingResultAdjudications("class-1"))
+      .toEqual([]);
+  });
+
   it("opens a reserve-bound result dispute and replays an authenticated rejection", async () => {
     const { clock, events, ids, leases, registry, store, submissions } = await setup();
     await createSplit(leases, submissions);
