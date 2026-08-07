@@ -14,9 +14,9 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Milestone 2 Task 9 is complete; Task 10 corrections are implemented.** The
-real-provider unattended platform gate passed. Revision 26 is reviewed,
-corrected, and tagged locally as `contract-freeze-15`. M2 now
+**Milestone 2 is complete.** The real-provider unattended platform gate passed.
+Revision 26 is reviewed, corrected, and tagged locally as
+`contract-freeze-15`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
 registry and registration validator, class/permit/worker control plane,
 enqueue/routing/lease lifecycle, and the submission plus cycle-scoped automatic
@@ -44,8 +44,9 @@ conformance kit that drives public operations through frozen lifecycle,
 registration-fixture, lease-disclosure, adjudication, invalidation,
 cross-cycle, deterministic-event, and prompt-injection expectations against the
 reference in-memory Store. The Task-10 semantic-review corrections also fence
-cross-class emergency epoch changes and unproven diversity adjudication. Final
-independent review is the next bounded unit.
+cross-class emergency epoch changes and unproven diversity adjudication. The
+final independent review passed; separate PostgreSQL and MCP plans are the next
+planning boundary.
 
 ## Specs
 

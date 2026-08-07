@@ -1,5 +1,16 @@
 # Changelog
 
+## Milestone 2 Task 10 — 2026-08-07
+
+Completed the final independent review from revision 26 prose through public
+operations, Store commands, events, frozen fixture IDs, and the reusable
+conformance suites. The review found no remaining runtime or frozen-contract
+defect after the `contract-freeze-15` corrections. Frozen install, invariants,
+all package typechecks, fixture cross-check, 304 tests, builds, package-content
+inspection, Markdown fence/local-link validation, and whitespace checks pass.
+Milestone 2 is ready for separate PostgreSQL and MCP planning; neither follow-up
+is authorized by this checkpoint.
+
 ## contract-freeze-15 — reviewed and tagged 2026-08-07
 
 Revision 26 amendment discovered by the Milestone 2 Task-10 semantic review.

@@ -322,17 +322,21 @@ Export a reusable suite that drives the public core operations through:
 Run the suite against the reference in-memory Store. The future MCP plan will
 reuse the protocol-level expectations at its adapter boundary.
 
-## Task 10: Full validation and independent review
+## Task 10: Full validation and independent review (complete 2026-08-07)
 
 Run frozen install, invariants, package typechecks, fixtures check, all tests,
 builds, package-content inspection, Markdown fence/local-link checks, and
-`git diff --check`. Review from revision-15 prose through public operations,
+`git diff --check`. Review from revision 26 prose through public operations,
 Store calls, events, fixture IDs, and conformance tests. Search specifically for
 raw OAuth identity, direct I/O/entropy, unowned identifiers, unqualified
 epochs/versions, non-quantized TTL bounds, mutable aliases, stale operational or
 invalidation snapshots, partial target application, cross-cycle evidence,
 unused policy outputs, model inference, and authorization paths that
 bypass live validity.
+
+The final independent review found no remaining runtime or frozen-contract
+defect after the `contract-freeze-15` corrections. The full gate passed with 304
+tests; Milestone 2 is ready for separate PostgreSQL and MCP planning.
 
 ## Delivery checkpoints
 
