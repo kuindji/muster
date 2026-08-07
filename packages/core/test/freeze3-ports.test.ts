@@ -71,6 +71,7 @@ const lease: LeaseRecord = {
   contractVersion: "1.0.0",
   policyVersion: "policy-1",
   permitEpoch: "epoch-1",
+  payloadRef: "payload-1",
   issuedAt: now,
   expiresAt: "2026-08-06T12:15:00.000Z",
   absoluteInFlightDeadline: "2026-08-06T13:00:00.000Z",
@@ -118,6 +119,7 @@ describe("revision-14 M2-entry port freeze", () => {
       expectedCandidate: candidate,
       expectedWorker: worker,
       preparedLease: lease,
+      preparedPayload: { instruction: "work" },
     };
     expect(input.preparedLease.routing.candidateRevision).toBe(
       input.expectedCandidate.revision,

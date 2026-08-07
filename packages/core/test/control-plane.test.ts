@@ -155,6 +155,7 @@ const prepareLease = (
   contractVersion: candidate.job.contractVersion,
   policyVersion: candidate.job.policyVersion,
   permitEpoch: candidate.job.permitEpoch,
+  payloadRef: candidate.job.payloadRef,
   issuedAt: NOW,
   expiresAt: "2026-08-06T18:15:00.000Z",
   absoluteInFlightDeadline: "2026-08-06T19:00:00.000Z",
@@ -201,6 +202,7 @@ const claimLease = async (
     expectedCandidate: candidate!,
     expectedWorker: worker,
     preparedLease: prepareLease(candidate!, worker),
+    preparedPayload: { instruction: "process job-1" },
   })).resolves.toMatchObject({ kind: "claimed" });
 };
 

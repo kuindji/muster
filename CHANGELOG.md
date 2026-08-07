@@ -1,5 +1,18 @@
 # Changelog
 
+## contract-freeze-8 — reviewed 2026-08-07; tag pending
+
+Revision 19 amendment discovered by the first Milestone 2 Task-4
+runtime trace. Every lease now retains the exact operational payload reference,
+prepared claims carry that payload, ordinary claims compare it with the queued
+job, and canary claims atomically persist a distinct payload without changing
+the queued job. A new atomic no-work command advances contribution usage under
+the compared worker-routing revision. Lifecycle, concurrency, compile-time, and
+reference-Store coverage accompany the change. The review additionally fixes
+canary payload-reference ownership, collision preservation, complete no-work
+routing comparisons, and transition fencing. Wire contract version remains
+`1.1.0`; the local `contract-freeze-8` tag is pending.
+
 ## contract-freeze-5 — 2026-08-06
 
 Revision 16 amendment discovered by the first Milestone 2 Task-2 registration

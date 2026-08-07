@@ -1,8 +1,9 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 18 and `contract-freeze-7`, including an
-in-memory Store and reusable Store/protocol conformance suites.
+`@kuindji/muster-core` against revision 19 and `contract-freeze-8` once that
+reviewed boundary is tagged, including an in-memory Store and reusable
+Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
 JWKS, rate limiting, MCP transport, provider scheduling, a worker runtime,
@@ -21,7 +22,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-7 (satisfied)
+## Entry gate: contract-freeze-8 (independent review complete; tag pending)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -82,9 +83,18 @@ separate `2026-08-06-muster-contract-freeze-7-worker-control-policy.md`
 amendment add that closed deployment-owned policy. Task 3 may resume only after
 independent review and the local `contract-freeze-7` tag.
 
+The first Task-4 runtime trace found that canary claims could neither persist
+nor later retrieve the exact payload they send, and that the contribution rule
+for coarse `no_work` had no atomic Store command. Revision 19 and the separate
+`2026-08-07-muster-contract-freeze-8-lease-payload-accounting.md` amendment add
+those minimal boundaries. Task 4 may resume only after independent review and
+the local `contract-freeze-8` tag.
+
 ## Global constraints
 
-- Revision 18 and `contract-freeze-7` are normative. The worker wire version is
+- Revision 19 becomes the active normative boundary at the local
+  `contract-freeze-8` tag. Its independent review is complete; until the tag,
+  Task 4 remains paused. The worker wire version is
   unchanged. Frozen exported types, tables, state machines, schemas, and
   fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,

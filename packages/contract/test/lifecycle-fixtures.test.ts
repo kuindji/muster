@@ -87,11 +87,13 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
       ["missing revision-14 required arg", { ...wellFormed, steps: [
         { command: "compareAndClaimLease", args: {
           leaseId: "l1", candidateRevision: "cr1",
+          preparedPayload: { instruction: "work" },
         } },
       ] }],
       ["unknown revision-14 arg", { ...wellFormed, steps: [
         { command: "compareAndClaimLease", args: {
           leaseId: "l1", candidateRevision: "cr1", workerRevision: "wr1",
+          preparedPayload: { instruction: "work" },
           candidateRevison: "typo",
         } },
       ] }],
@@ -105,6 +107,26 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
         { command: "initializeClassHealth", args: {
           classId: "c1", operating: "ready", source: "automatic",
           initialRevision: 1,
+        } },
+      ] }],
+      ["missing revision-19 prepared payload", { ...wellFormed, steps: [
+        { command: "compareAndClaimLease", args: {
+          leaseId: "l1", candidateRevision: "cr1", workerRevision: "wr1",
+        } },
+      ] }],
+      ["missing revision-19 required arg", { ...wellFormed, steps: [
+        { command: "recordNoWorkAttempt", args: {
+          workerId: "w1", expectedRevision: 1,
+          contributionWindowId: "2026-W32", contributionUsed: 0,
+          assignedSlotOccurrence: "2026-W32-slot-1", openLeaseIds: [],
+        } },
+      ] }],
+      ["unknown revision-19 arg", { ...wellFormed, steps: [
+        { command: "recordNoWorkAttempt", args: {
+          workerId: "w1", expectedRevision: 1,
+          contributionWindowId: "2026-W32", contributionUsed: 0,
+          assignedSlotOccurrence: "2026-W32-slot-1", openLeaseIds: [],
+          at: "2026-08-07T00:00:00.000Z", reason: "empty",
         } },
       ] }],
       ["non-finite charge", {

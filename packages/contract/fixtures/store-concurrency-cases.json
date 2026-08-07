@@ -146,5 +146,13 @@
   {
     "id": "class-health-initialization-replay-conflict",
     "description": "Concurrent class-health initialization creates one snapshot; identical input replays and a different initial value conflicts without replacement."
+  },
+  {
+    "id": "no-work-contribution-single-winner",
+    "description": "Two no-work attempts comparing one worker-routing revision record one contribution occurrence and one conflict."
+  },
+  {
+    "id": "canary-payload-claim-atomic",
+    "description": "A canary claim reuses its lease identity as the payload reference and persists both records together; stale claims and payload-reference collisions leave no new record or alias."
   }
 ]

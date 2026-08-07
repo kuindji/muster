@@ -104,6 +104,7 @@ const preparedLease = (
   contractVersion: candidate.job.contractVersion,
   policyVersion: candidate.job.policyVersion,
   permitEpoch: candidate.job.permitEpoch,
+  payloadRef: candidate.job.payloadRef,
   issuedAt: NOW,
   expiresAt: "2026-08-06T16:15:00.000Z",
   absoluteInFlightDeadline: "2026-08-06T17:00:00.000Z",
@@ -332,6 +333,7 @@ const routingTransitionCase: StoreConformanceCase = {
       expectedCandidate: candidate,
       expectedWorker: initialWorker,
       preparedLease: preparedLease(candidate, initialWorker, "lease-routing"),
+      preparedPayload: { instruction: "process job-1" },
     });
     assert(claimed.kind === "claimed", "routing fixture lease must claim");
     const expected = await store.getWorkerRoutingSnapshot("worker-1");
@@ -375,11 +377,13 @@ const claimRaceCase: StoreConformanceCase = {
         expectedCandidate: candidate,
         expectedWorker: worker,
         preparedLease: firstLease,
+        preparedPayload: { instruction: "process job-1" },
       }),
       store.compareAndClaimLease({
         expectedCandidate: candidate,
         expectedWorker: worker,
         preparedLease: losingLease,
+        preparedPayload: { instruction: "process job-1" },
       }),
     ]);
     assert(first.kind === "claimed", "one prepared lease must win");
@@ -389,6 +393,7 @@ const claimRaceCase: StoreConformanceCase = {
       expectedCandidate: candidate,
       expectedWorker: worker,
       preparedLease: firstLease,
+      preparedPayload: { instruction: "process job-1" },
     });
     assert(replay.kind === "claimed", "exact claim must replay the persisted identity");
   },
@@ -405,6 +410,7 @@ const identityCollisionCase: StoreConformanceCase = {
       expectedCandidate: firstCandidate,
       expectedWorker: firstWorker,
       preparedLease: preparedLease(firstCandidate, firstWorker, "lease-shared"),
+      preparedPayload: { instruction: "process job-1" },
     });
     assert(first.kind === "claimed", "first identity use must claim");
 
@@ -414,6 +420,7 @@ const identityCollisionCase: StoreConformanceCase = {
       expectedCandidate: secondCandidate,
       expectedWorker: secondWorker,
       preparedLease: preparedLease(secondCandidate, secondWorker, "lease-shared"),
+      preparedPayload: { instruction: "process job-2" },
     });
     assert(
       collision.kind === "conflict" && collision.reason === "identity_collision",
@@ -441,6 +448,7 @@ const losingClaimIdentityCase: StoreConformanceCase = {
       expectedCandidate: candidate,
       expectedWorker: worker,
       preparedLease: preparedLease(candidate, worker, "lease-skipped"),
+      preparedPayload: { instruction: "process job-1" },
     });
     assert(
       claim.kind === "conflict" && claim.reason === "operational_state_stale",
@@ -465,6 +473,7 @@ const workerStateCase: StoreConformanceCase = {
       expectedCandidate: candidate,
       expectedWorker: worker,
       preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
     });
     assert(claimed.kind === "claimed", "lease must exist before suspension");
     const suspended = await store.transitionWorkerState({
@@ -505,10 +514,253 @@ const workerStateFenceCase: StoreConformanceCase = {
       expectedCandidate: candidate,
       expectedWorker: worker,
       preparedLease: preparedLease(candidate, worker, "lease-stale-worker"),
+      preparedPayload: { instruction: "process job-1" },
     });
     assert(
       claim.kind === "conflict" && claim.reason === "worker_snapshot_stale",
       "worker-state transition must fence prepared claim",
+    );
+  },
+};
+
+const noWorkContributionCase: StoreConformanceCase = {
+  id: "no-work-contribution-single-winner",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const leaseId = "lease-no-work-open";
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: preparedLease(candidate, worker, leaseId),
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(claimed.kind === "claimed", "no-work fixture lease must claim");
+    const expected = await store.getWorkerRoutingSnapshot(worker.workerId);
+    assert(expected !== null, "claimed worker routing must exist");
+
+    const incompleteComparison = await store.recordNoWorkAttempt({
+      expectedWorker: {
+        ...expected,
+        contributionUsed: expected.contributionUsed + 1,
+      },
+      at: NOW,
+    });
+    assert(
+      incompleteComparison.kind === "conflict",
+      "no-work must compare the complete routing snapshot, not only its revision",
+    );
+
+    const [first, second] = await Promise.all([
+      store.recordNoWorkAttempt({ expectedWorker: expected, at: NOW }),
+      store.recordNoWorkAttempt({ expectedWorker: expected, at: NOW }),
+    ]);
+    assert(
+      [first, second].filter((outcome) => outcome.kind === "recorded").length === 1,
+      "one no-work occurrence must record",
+    );
+    assert(
+      [first, second].filter((outcome) => outcome.kind === "conflict").length === 1,
+      "one stale no-work occurrence must conflict",
+    );
+    const current = await store.getWorkerRoutingSnapshot(worker.workerId);
+    assert(
+      current?.contributionUsed === expected.contributionUsed + 1,
+      "no-work must consume one contribution",
+    );
+    assert(
+      current.openLeaseIds.length === 1 && current.openLeaseIds[0] === leaseId,
+      "no-work must preserve the Store-owned open-lease set",
+    );
+
+    const routingStore = await factory();
+    const routingWorker = await initializeWorker(routingStore);
+    const routed = await routingStore.transitionWorkerRouting({
+      expected: routingWorker,
+      next: {
+        contributionWindowId: "2026-W33",
+        contributionUsed: 0,
+        assignedSlotOccurrence: "2026-W33-slot-2",
+      },
+    });
+    assert(routed.kind === "applied", "routing transition must apply");
+    const afterRouting = await routingStore.recordNoWorkAttempt({
+      expectedWorker: routingWorker,
+      at: NOW,
+    });
+    assert(
+      afterRouting.kind === "conflict",
+      "routing transition must fence a stale no-work occurrence",
+    );
+
+    const stateStore = await factory();
+    const stateWorker = await initializeWorker(stateStore);
+    const transitioned = await stateStore.transitionWorkerState({
+      workerId: stateWorker.workerId,
+      from: "active",
+      to: "maintenance",
+      at: LATER,
+    });
+    assert(transitioned.kind === "applied", "worker-state transition must apply");
+    const afterState = await stateStore.recordNoWorkAttempt({
+      expectedWorker: stateWorker,
+      at: NOW,
+    });
+    assert(
+      afterState.kind === "conflict",
+      "worker-state transition must fence a stale no-work occurrence",
+    );
+  },
+};
+
+const canaryPayloadCase: StoreConformanceCase = {
+  id: "canary-payload-claim-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const mismatched = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: preparedLease(candidate, worker, "lease-mismatch"),
+      preparedPayload: { instruction: "different payload" },
+    });
+    assert(
+      mismatched.kind === "conflict" && mismatched.reason === "unclaimable",
+      "ordinary claim must compare the exact durable payload",
+    );
+    assert(
+      await store.getLease("lease-mismatch") === null,
+      "payload mismatch must leave no lease",
+    );
+    const canaryPayload = { instruction: "known canary" } as const;
+    const unownedPayloadRef = "payload-unowned-canary";
+    const unowned = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: {
+        ...preparedLease(candidate, worker, "lease-unowned-canary"),
+        inputHash: "input-unowned-canary",
+        payloadRef: unownedPayloadRef,
+        assignment: {
+          kind: "canary",
+          canaryKind: "production",
+          canaryId: "canary-1",
+          sourceJobId: "resolved-1",
+          sourceContractVersion: "1.0.0",
+          expectedResultHash: "expected-result-1",
+        },
+      },
+      preparedPayload: canaryPayload,
+    });
+    assert(
+      unowned.kind === "conflict" && unowned.reason === "unclaimable",
+      "canary payload reference must reuse the prepared lease identity",
+    );
+    assert(
+      await store.getPayload(unownedPayloadRef) === null,
+      "unowned canary payload reference must leave no alias",
+    );
+    const canaryLease: LeaseRecord = {
+      ...preparedLease(candidate, worker, "lease-canary"),
+      inputHash: "input-canary",
+      payloadRef: "lease-canary",
+      assignment: {
+        kind: "canary",
+        canaryKind: "production",
+        canaryId: "canary-1",
+        sourceJobId: "resolved-1",
+        sourceContractVersion: "1.0.0",
+        expectedResultHash: "expected-result-1",
+      },
+    };
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: canaryLease,
+      preparedPayload: canaryPayload,
+    });
+    assert(claimed.kind === "claimed", "canary payload claim must succeed");
+    assert(
+      canaryLease.payloadRef === canaryLease.leaseId,
+      "canary payload reference must reuse its IdSource lease identity",
+    );
+    assert(
+      JSON.stringify(await store.getPayload(canaryLease.payloadRef)) ===
+        JSON.stringify(canaryPayload),
+      "canary payload must persist under the lease reference",
+    );
+    assert(
+      JSON.stringify(await store.getPayload(candidate.job.payloadRef)) ===
+        JSON.stringify({ instruction: "process job-1" }),
+      "canary claim must preserve the displaced job payload",
+    );
+
+    const losingStore = await factory();
+    await initializeClass(losingStore);
+    const losingWorker = await initializeWorker(losingStore);
+    const losingCandidate = await enqueue(losingStore);
+    const queue = await losingStore.getQueueMode();
+    const advanced = await losingStore.transitionQueueMode({
+      expected: queue,
+      next: { mode: "degraded", updatedAt: LATER },
+    });
+    assert(advanced.kind === "applied", "losing canary setup must advance queue");
+    const losingPayloadRef = "lease-losing-canary";
+    const losing = await losingStore.compareAndClaimLease({
+      expectedCandidate: losingCandidate,
+      expectedWorker: losingWorker,
+      preparedLease: {
+        ...preparedLease(losingCandidate, losingWorker, "lease-losing-canary"),
+        inputHash: "input-losing-canary",
+        payloadRef: losingPayloadRef,
+        assignment: canaryLease.assignment,
+      },
+      preparedPayload: canaryPayload,
+    });
+    assert(losing.kind === "conflict", "stale canary claim must lose");
+    assert(
+      await losingStore.getPayload(losingPayloadRef) === null,
+      "losing canary claim must leave no payload alias",
+    );
+
+    const collisionStore = await factory();
+    await initializeClass(collisionStore);
+    const collisionWorker = await initializeWorker(collisionStore);
+    const collisionCandidate = await enqueue(collisionStore);
+    const collisionLeaseId = "payload-job-collision";
+    await enqueue(collisionStore, "job-collision");
+    const existingPayload = await collisionStore.getPayload(collisionLeaseId);
+    const collision = await collisionStore.compareAndClaimLease({
+      expectedCandidate: collisionCandidate,
+      expectedWorker: collisionWorker,
+      preparedLease: {
+        ...preparedLease(
+          collisionCandidate,
+          collisionWorker,
+          collisionLeaseId,
+        ),
+        inputHash: "input-colliding-canary",
+        payloadRef: collisionLeaseId,
+        assignment: canaryLease.assignment,
+      },
+      preparedPayload: canaryPayload,
+    });
+    assert(
+      collision.kind === "conflict" && collision.reason === "unclaimable",
+      "canary payload-reference collision must refuse the claim",
+    );
+    assert(
+      await collisionStore.getLease(collisionLeaseId) === null,
+      "payload-reference collision must leave no lease",
+    );
+    assert(
+      JSON.stringify(await collisionStore.getPayload(collisionLeaseId)) ===
+        JSON.stringify(existingPayload),
+      "payload-reference collision must preserve the existing payload",
     );
   },
 };
@@ -579,6 +831,8 @@ export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     losingClaimIdentityCase,
     workerStateCase,
     workerStateFenceCase,
+    noWorkContributionCase,
+    canaryPayloadCase,
     emergencyCase,
   ]);
 

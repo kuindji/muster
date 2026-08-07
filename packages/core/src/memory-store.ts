@@ -25,6 +25,7 @@ import type {
   JobRecord,
   LeaseCandidateSnapshot,
   LeaseRecord,
+  NoWorkAttemptOutcome,
   OperationalStateExpectation,
   OperationalTransitionOutcome,
   PermitEpochTransition,
@@ -601,14 +602,22 @@ export class InMemoryStore implements Store {
       }
 
       const lease = input.preparedLease;
+      const storedJobPayload = this.payloads.get(currentCandidate.job.payloadRef);
       const expectedAttempt = currentCandidate.attempts.attemptCount + 1;
+      const payloadBindingMatches = lease.assignment.kind === "ordinary"
+        ? lease.payloadRef === currentCandidate.job.payloadRef &&
+          lease.inputHash === currentCandidate.job.inputHash &&
+          storedJobPayload !== undefined &&
+          equal(input.preparedPayload, storedJobPayload)
+        : lease.payloadRef === lease.leaseId &&
+          lease.payloadRef !== currentCandidate.job.payloadRef &&
+          !this.payloads.has(lease.payloadRef);
       const preparedMatches =
         lease.open &&
         lease.jobId === currentCandidate.job.jobId &&
         lease.collectionCycle === currentCandidate.job.collectionCycle &&
         lease.classId === currentCandidate.job.classId &&
         lease.holder === currentWorker.workerId &&
-        lease.inputHash === currentCandidate.job.inputHash &&
         lease.contractVersion === currentCandidate.job.contractVersion &&
         lease.policyVersion === currentCandidate.job.policyVersion &&
         lease.permitEpoch === currentCandidate.job.permitEpoch &&
@@ -619,7 +628,8 @@ export class InMemoryStore implements Store {
         lease.routing.contributionOrdinal === currentWorker.contributionUsed + 1 &&
         lease.routing.assignedSlotOccurrence === currentWorker.assignedSlotOccurrence &&
         lease.routing.attemptNumber === expectedAttempt &&
-        equal(lease.routing.queuePriority, currentCandidate.job.queuePriority);
+        equal(lease.routing.queuePriority, currentCandidate.job.queuePriority) &&
+        payloadBindingMatches;
       if (
         !preparedMatches ||
         currentCandidate.attempts.openLeaseIds.length > 0 ||
@@ -630,6 +640,9 @@ export class InMemoryStore implements Store {
 
       const persistedLease = clone(lease);
       this.leases.set(persistedLease.leaseId, persistedLease);
+      if (persistedLease.assignment.kind === "canary") {
+        this.payloads.set(persistedLease.payloadRef, clone(input.preparedPayload));
+      }
       this.coreIdentities.set(persistedLease.leaseId, "lease");
       const key = cycleKey(persistedLease.jobId, persistedLease.collectionCycle);
       this.attempts.set(key, {
@@ -656,6 +669,30 @@ export class InMemoryStore implements Store {
 
   getLease(leaseId: string): Promise<LeaseRecord | null> {
     return this.atomic(() => clone(this.leases.get(leaseId) ?? null));
+  }
+
+  recordNoWorkAttempt(
+    input: Parameters<Store["recordNoWorkAttempt"]>[0],
+  ): Promise<NoWorkAttemptOutcome> {
+    return this.atomicInput(input, (input) => {
+      const current = this.workerRouting.get(input.expectedWorker.workerId);
+      if (current === undefined) {
+        throw new Error(
+          `worker ${input.expectedWorker.workerId} has no routing snapshot`,
+        );
+      }
+      if (!equal(current, input.expectedWorker)) {
+        return clone({ kind: "conflict", current });
+      }
+      const next: WorkerRoutingSnapshot = {
+        ...current,
+        revision: current.revision + 1,
+        contributionUsed: current.contributionUsed + 1,
+        openLeaseIds: [...current.openLeaseIds],
+      };
+      this.workerRouting.set(current.workerId, next);
+      return clone({ kind: "recorded", current: next });
+    });
   }
 
   getResultState(

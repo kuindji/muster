@@ -284,6 +284,12 @@ export interface LeaseRecord {
   contractVersion: string;
   policyVersion: string;
   permitEpoch: string;
+  /**
+   * Exact operational payload sent under this lease. Ordinary leases retain
+   * the job payload reference; canary leases reuse their IdSource leaseId so
+   * core does not create a second unowned opaque identity.
+   */
+  payloadRef: string;
   issuedAt: Timestamp;
   expiresAt: Timestamp;
   absoluteInFlightDeadline: Timestamp;
@@ -402,6 +408,10 @@ export type ClaimLeaseOutcome =
         | "identity_collision"
         | "unclaimable";
     };
+
+export type NoWorkAttemptOutcome =
+  | { kind: "recorded"; current: WorkerRoutingSnapshot }
+  | { kind: "conflict"; current: WorkerRoutingSnapshot };
 
 export interface ClassVersionRecord {
   classId: string;
@@ -650,7 +660,14 @@ export interface Store {
     expectedCandidate: LeaseCandidateSnapshot;
     expectedWorker: WorkerRoutingSnapshot;
     preparedLease: LeaseRecord;
+    /** Exact payload bound by preparedLease.inputHash and payloadRef. */
+    preparedPayload: CanonicalJsonValue;
   }): Promise<ClaimLeaseOutcome>;
+  /** Atomically account for a coarse no-work result against one routing period. */
+  recordNoWorkAttempt(input: {
+    expectedWorker: WorkerRoutingSnapshot;
+    at: Timestamp;
+  }): Promise<NoWorkAttemptOutcome>;
   getLease(leaseId: string): Promise<LeaseRecord | null>;
   extendLease(input: {
     workerId: WorkerId;

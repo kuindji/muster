@@ -51,6 +51,7 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "registerClassVersion",
   "transitionWorkerState",
   "transitionWorkerRouting",
+  "recordNoWorkAttempt",
   "initializeClassHealth",
   "refreshClassHealth",
   "recordReputationEvidence",
@@ -137,6 +138,54 @@ export const REVISION_15_COMMAND_ARGUMENT_KEYS = deepFreeze({
   },
 } as const);
 
+/** Closed argument shapes for revision-19 commands added by freeze 8. */
+export const REVISION_19_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  compareAndClaimLease: {
+    required: [
+      "leaseId",
+      "candidateRevision",
+      "workerRevision",
+      "preparedPayload",
+    ],
+    allowed: [
+      "leaseId",
+      "candidateRevision",
+      "workerRevision",
+      "queueRevision",
+      "classHealthRevision",
+      "contributionWindowId",
+      "contributionOrdinal",
+      "assignedSlotOccurrence",
+      "attemptNumber",
+      "queueSequence",
+      "assignment",
+      "payloadRef",
+      "inputHash",
+      "preparedPayload",
+    ],
+  },
+  recordNoWorkAttempt: {
+    required: [
+      "workerId",
+      "expectedRevision",
+      "contributionWindowId",
+      "contributionUsed",
+      "assignedSlotOccurrence",
+      "openLeaseIds",
+      "at",
+    ],
+    allowed: [
+      "workerId",
+      "expectedRevision",
+      "contributionWindowId",
+      "contributionUsed",
+      "assignedSlotOccurrence",
+      "openLeaseIds",
+      "at",
+    ],
+  },
+} as const);
+
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
 );
@@ -205,6 +254,8 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "worker-registration-routing-atomic",
   "worker-routing-period-transition-race",
   "class-health-initialization-replay-conflict",
+  "no-work-contribution-single-winner",
+  "canary-payload-claim-atomic",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -286,6 +337,9 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "worker-routing-transition-preserves-open-leases",
   "worker-state-transition-fences-prepared-claim",
   "class-health-initialization-replay-conflict",
+  "ordinary-claim-payload-mismatch-refused",
+  "canary-claim-binds-operational-payload",
+  "no-work-attempt-advances-contribution-once",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -381,12 +435,17 @@ export function isLifecycleFixture(
     if (!isRecord(step.args)) return false;
     const args = step.args;
     const closedShape = (
-      REVISION_14_COMMAND_ARGUMENT_KEYS as Record<string, {
+      REVISION_19_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];
       }>
     )[step.command as string] ?? (
       REVISION_15_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
+      REVISION_14_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];
       }>

@@ -189,6 +189,19 @@ functions through closed inputs that expose no job or payload content. This is
 a contract correction only; revision 18 implements no worker-control runtime
 and does not change durable records or the worker wire.
 
+Revision 19 closes two lease-boundary gaps found by the first Task-4 runtime
+trace. Every prepared claim now carries the exact payload it intends to send,
+and every durable lease retains a reference to that operational payload.
+Ordinary claims compare it with the queued job payload; canary claims atomically
+persist a distinct payload under the already allocated lease ID, reused as its
+payload reference, whose own input hash binds what the worker actually receives.
+Core creates no second opaque identity. A losing claim leaves neither a lease
+nor a payload alias. A separate
+atomic no-work command compares the complete worker-routing snapshot and
+advances contribution usage, matching the frozen fair-attempt table without
+fabricating a lease. This is a contract correction only; revision 19 implements
+no lease service and does not change the worker wire.
+
 ## 1. What Muster is
 
 A coordinator library for distributing bounded, sanitized, schema-bound
@@ -951,21 +964,37 @@ this job, stable priority, `not_before` — then chooses any canary injection at
 rate `q`. Core allocates a lease ID, quantizes a validated
 `cost.leaseTtl(payload)`, computes the expiry and strict absolute in-flight
 deadline, snapshots contract/policy/permit/byte/extension bounds and routing
-facts, and submits the complete prepared lease with the exact candidate,
-worker, queue, and class-health revisions to **atomic compare-and-claim**.
+facts, and submits the complete prepared lease, its exact operational payload,
+and the exact candidate, worker, queue, and class-health revisions to **atomic
+compare-and-claim**.
 Store either persists that lease unchanged or reports a stale/unclaimable
 conflict. It also rejects an ID collision. A lease ID consumed by a losing
-comparison may be skipped but leaves no durable record.
+comparison may be skipped but leaves no durable lease or payload alias.
 
 Every lease stamps the logical job's positive-integer `collectionCycle`. Its
 routing snapshot durably records queue priority, contribution window and
 ordinal, assigned-slot occurrence, cycle-scoped attempt number, candidate and
 worker revisions, and operational revisions. An ordinary assignment is distinguished from a canary
-assignment. A canary record binds `canaryId`, source job, source contract
+assignment. Every lease retains `payloadRef` for the exact operational payload
+sent to its holder. An ordinary lease references the queued job payload and
+retains the job input hash. A canary claim atomically persists its distinct
+payload under `payloadRef === leaseId`, reusing the already IdSource-allocated
+identity, and binds a separately computed input hash over that payload and the
+same class/version, schemas, policy version, and permit epoch. A canary record
+binds `canaryId`, source job, source contract
 version, canary kind, and expected-result hash; it stores neither raw OAuth
 identity nor the known-answer body. Lease expiry or abandonment may issue a
 replacement lease inside the same cycle; it does not discard already accepted
 replicas.
+
+When no eligible candidate exists, core returns only the frozen coarse
+`no_work` shape. Before returning it, core calls
+`recordNoWorkAttempt({ expectedWorker, at })`; Store compares the complete
+worker-routing snapshot and atomically increments contribution usage and its
+revision while retaining open leases. A conflict causes core to re-read routing
+state before deciding whether another occurrence may be counted. This is the
+non-lease path required by section 6.9's rule that `no_work` counts for
+contribution.
 
 `extend_lease` compares the current expiry and extension count and may advance
 them by exactly the snapshotted deployment policy. The count cannot exceed
@@ -981,6 +1010,11 @@ their owning boundary; schema/input/result/decision/intent/verdict/expected
 result identities are content-derived. No runtime service or Store adapter may
 invent a fourth ownership model. Exact replay returns the persisted identity;
 collision conflicts without replacement.
+
+A canary payload reference is not another opaque identity: it is exactly the
+canary lease's IdSource-allocated `leaseId`. Store rejects any other canary
+payload reference and any collision with an existing payload without replacing
+that payload or persisting the lease.
 
 ### 6.2 Replication diversity, typed by confidence
 
@@ -2194,6 +2228,14 @@ leases preserved, worker-state fencing of prepared claims, and class-health
 initialization replay/conflict. A Store adapter passes without deriving a
 contribution window, assigned-slot occurrence, or initial class-health value.
 
+Revision-19 conformance additionally proves exact ordinary-payload comparison;
+lease-owned canary payload references; atomic canary lease/payload persistence;
+payload-reference collision preservation; losing-claim cleanup; complete
+worker-routing comparison; no-work single-winner accounting with existing open
+leases preserved; and routing-period and worker-state fencing of stale no-work
+snapshots. A Store adapter passes without allocating payload identities or
+deriving routing calendars.
+
 ### 8.2 Protocol conformance
 
 Golden `input_hash` over the exact canonical sanitized payload and both frozen
@@ -2290,6 +2332,7 @@ minimum:
 `QueuePriority`, `LeaseCandidateSnapshot`,
 `WorkerRegistration`, `RegisterWorkerOutcome`, `WorkerRoutingSnapshot`,
 `WorkerRoutingTransitionOutcome`, `LeaseAssignment`, `LeaseRoutingSnapshot`,
+`LeaseRecord`, `ClaimLeaseOutcome`, `NoWorkAttemptOutcome`,
 `QueueModeSnapshot`, `ClassHealthSnapshot`, `OperationalStateExpectation`,
 `InitializeClassHealthOutcome`,
 `ReservePolicySnapshot`, `ReserveChargeOutcome`, `OracleNegativeFixture`,
@@ -2330,6 +2373,9 @@ amendments tagged `contract-freeze-2`, `contract-freeze-3`,
 `contract-freeze-4`, `contract-freeze-5`, `contract-freeze-6`, and
 `contract-freeze-7`. Revisions 13-18 do not reopen runtime feature scope; they
 correct the frozen boundary before runtime mechanics depend on it.
+
+Revision 19 has been independently reviewed and corrected but does not reopen
+Task 4 until the reviewed commit is tagged `contract-freeze-8`.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2426,7 +2472,25 @@ durable worker/routing records, wire version `1.1.0`, events, hashes, and frozen
 fixtures remain unchanged. M2 Task 3 resumes only from an independently
 reviewed commit tagged `contract-freeze-7`.
 
-### 11.8 Open
+### 11.8 Contract-freeze amendment 8: lease payload and no-work accounting
+
+Revision 19 is complete only when every `LeaseRecord` retains `payloadRef`,
+every compare-and-claim receives the exact prepared payload, ordinary claims
+compare that payload with the queued job, canary claims atomically persist a
+distinct payload under `payloadRef === leaseId`, bound by the lease input hash,
+and losing or payload-reference-collision claims leave no payload alias.
+`recordNoWorkAttempt` must compare a complete worker-routing
+snapshot and atomically advance contribution usage and the Store-owned revision
+while preserving open leases. The lifecycle and concurrency fixtures must
+cover ordinary mismatch, canary binding, losing-claim cleanup, and no-work
+single-winner accounting.
+
+The amendment changes only internal core/Store records and commands. Wire
+version `1.1.0`, MCP schemas, hash envelopes, events, job/class/worker records,
+and worker-visible outcomes remain unchanged. M2 Task 4 resumes only from an
+independently reviewed commit tagged `contract-freeze-8`.
+
+### 11.9 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.
