@@ -667,7 +667,7 @@
     "description": "A charge with a stale class policy version fails closed without consuming capacity.",
     "setup": { "reserve:c1:urgent:2026-W32": { "policyVersion": "rp2", "used": 4, "limit": 5 } },
     "conditions": [],
-    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "i89", "reservePolicyVersion": "rp1", "reserveWindowId": "2026-W32", "laneLimit": 5, "perWorkerLimit": 1 }, "expect": { "kind": "policy_conflict" } }],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "i89", "reservePolicyVersion": "rp1", "reserveWindowId": "2026-W32", "laneLimit": 5, "perWorkerLimit": 1 }, "expect": { "kind": "reserve_policy_conflict" } }],
     "expectFinal": { "charges": { "urgent": 4 } }
   },
   {
@@ -677,7 +677,7 @@
     "description": "A charge compares the explicit rollover identity and cannot debit a prior or future reserve window.",
     "setup": { "reserve:c1:urgent:2026-W33": { "policyVersion": "rp2", "used": 0, "limit": 5 } },
     "conditions": [],
-    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "i90", "reservePolicyVersion": "rp2", "reserveWindowId": "2026-W32", "laneLimit": 5, "perWorkerLimit": 1 }, "expect": { "kind": "policy_conflict" } }],
+    "steps": [{ "command": "authorizeActions", "args": { "effectIntentId": "i90", "reservePolicyVersion": "rp2", "reserveWindowId": "2026-W32", "laneLimit": 5, "perWorkerLimit": 1 }, "expect": { "kind": "reserve_policy_conflict" } }],
     "expectFinal": { "charges": { "urgent": 0 } }
   },
   {
@@ -788,5 +788,119 @@
       { "command": "recordNoWorkAttempt", "args": { "workerId": "w97", "expectedRevision": 3, "contributionWindowId": "2026-W32", "contributionUsed": 1, "assignedSlotOccurrence": "2026-W32-slot-2", "openLeaseIds": [], "at": "2026-08-07T00:00:00.000Z" }, "expect": { "kind": "recorded", "routingRevision": 4, "contributionUsed": 2 } }
     ],
     "expectFinal": { "states": { "worker-routing:w97": "usage-2", "lease:w97": "absent" } }
+  },
+  {
+    "id": "reserve-policy-initialization-replay-conflict",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "Reserve policy installation is authoritative: identical input replays and changed input conflicts without replacing usage or health.",
+    "setup": { "class-version:c1:v1": { "state": "active" }, "class-health:c1": { "revision": 1, "urgent": "available" } },
+    "conditions": [],
+    "steps": [
+      { "command": "initializeReservePolicy", "args": { "classId": "c1", "contractVersion": "v1", "lane": "urgent", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 5, "perWorkerLimit": 1, "at": "2026-08-07T08:00:00.000Z" }, "expect": { "kind": "initialized", "revision": 1 } },
+      { "command": "initializeReservePolicy", "args": { "classId": "c1", "contractVersion": "v1", "lane": "urgent", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 5, "perWorkerLimit": 1, "at": "2026-08-07T08:00:01.000Z" }, "expect": { "kind": "replayed", "revision": 1 } },
+      { "command": "initializeReservePolicy", "args": { "classId": "c1", "contractVersion": "v1", "lane": "urgent", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 6, "perWorkerLimit": 1, "at": "2026-08-07T08:00:02.000Z" }, "expect": { "kind": "conflict", "revision": 1 } }
+    ],
+    "expectFinal": { "states": { "reserve:c1:v1:urgent": "rp1:2026-W32:unused" } }
+  },
+  {
+    "id": "reserve-zero-limit-saturates-on-install",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "Installing a zero-capacity policy publishes saturation before any charge can race new intake.",
+    "setup": { "class-version:c2:v1": { "state": "active" }, "class-health:c2": { "revision": 4, "audit": "available" } },
+    "conditions": [],
+    "steps": [
+      { "command": "initializeReservePolicy", "args": { "classId": "c2", "contractVersion": "v1", "lane": "audit", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 0, "at": "2026-08-07T08:00:00.000Z" }, "expect": { "kind": "initialized", "policyRevision": 1, "classHealthRevision": 5, "audit": "saturated" } }
+    ],
+    "expectFinal": { "states": { "class-health:c2:audit": "saturated" } }
+  },
+  {
+    "id": "reserve-policy-same-window-retains-usage",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "A same-window limit change retains class and worker usage while atomically recomputing only the affected health lane.",
+    "setup": { "reserve:c3:v1:urgent": { "revision": 3, "policyVersion": "rp1", "windowId": "2026-W32", "used": 5, "laneLimit": 5 }, "class-health:c3": { "revision": 9, "urgent": "saturated", "audit": "saturated" } },
+    "conditions": [],
+    "steps": [
+      { "command": "transitionReservePolicy", "args": { "classId": "c3", "contractVersion": "v1", "lane": "urgent", "expectedRevision": 3, "policyVersion": "rp2", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 8, "perWorkerLimit": 2, "at": "2026-08-07T08:00:00.000Z" }, "expect": { "kind": "applied", "used": 5, "urgent": "available", "audit": "saturated" } }
+    ],
+    "expectFinal": { "charges": { "urgent": 5 }, "states": { "class-health:c3:audit": "saturated" } }
+  },
+  {
+    "id": "reserve-window-rollback-refused",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "A changed window must move forward; an older or overlapping interval cannot reset reserve usage.",
+    "setup": { "reserve:c4:v1:urgent": { "revision": 4, "policyVersion": "rp2", "windowId": "2026-W33", "used": 2, "laneLimit": 5 } },
+    "conditions": [],
+    "steps": [
+      { "command": "transitionReservePolicy", "args": { "classId": "c4", "contractVersion": "v1", "lane": "urgent", "expectedRevision": 4, "policyVersion": "rp3", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 5, "perWorkerLimit": 1, "at": "2026-08-10T00:00:01.000Z" }, "expect": { "kind": "refused", "reason": "window_not_forward" } }
+    ],
+    "expectFinal": { "charges": { "urgent": 2 }, "states": { "reserve:c4:v1:urgent": "rp2:2026-W33" } }
+  },
+  {
+    "id": "reserve-charge-key-input-conflict",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "An exact charge-key replay preserves its first charged or exhausted outcome; changed semantic input under that key conflicts.",
+    "setup": { "reserve:c5:v1:urgent": { "revision": 1, "policyVersion": "rp1", "windowId": "2026-W32", "used": 0, "laneLimit": 5 } },
+    "conditions": [],
+    "steps": [
+      { "command": "chargeReserve", "args": { "chargeKey": "charge-5", "workerIds": ["w1"], "classId": "c5", "contractVersion": "v1", "lane": "urgent", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 5, "perWorkerLimit": 1, "at": "2026-08-07T08:00:00.000Z" }, "expect": { "kind": "charged", "status": "applied" } },
+      { "command": "chargeReserve", "args": { "chargeKey": "charge-5", "workerIds": ["w1"], "classId": "c5", "contractVersion": "v1", "lane": "urgent", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 5, "perWorkerLimit": 1, "at": "2026-08-07T08:00:01.000Z" }, "expect": { "kind": "charged", "status": "replayed" } },
+      { "command": "chargeReserve", "args": { "chargeKey": "charge-5", "workerIds": ["w2"], "classId": "c5", "contractVersion": "v1", "lane": "urgent", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 5, "perWorkerLimit": 1, "at": "2026-08-07T08:00:02.000Z" }, "expect": { "kind": "reserve_charge_conflict" } }
+    ],
+    "expectFinal": { "charges": { "urgent": 1 } }
+  },
+  {
+    "id": "reserve-missing-policy-refuses-all-charge-paths",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "Standalone, result-adjudication, and authorization charges reject a missing authoritative policy without creating domain state.",
+    "setup": { "result:j6:1": { "state": "collecting" }, "decision:dh6": { "state": "verified" } },
+    "conditions": [],
+    "steps": [
+      { "command": "chargeReserve", "args": { "chargeKey": "charge-6", "workerIds": [], "classId": "c6", "contractVersion": "v1", "lane": "audit", "policyVersion": "rp1", "windowId": "2026-W32", "windowStartsAt": "2026-08-03T00:00:00.000Z", "windowEndsAt": "2026-08-10T00:00:00.000Z", "laneLimit": 1, "at": "2026-08-07T08:00:00.000Z" }, "expect": { "kind": "reserve_policy_conflict", "currentPolicy": null } },
+      { "command": "openResultAdjudication", "args": { "jobId": "j6", "collectionCycle": 1 }, "expect": { "kind": "reserve_policy_conflict", "currentPolicy": null } },
+      { "command": "authorizeActions", "args": { "effectIntentId": "i6", "decisionResultHash": "dh6", "actions": ["routeToHumanUrgent"] }, "expect": { "kind": "reserve_policy_conflict", "currentPolicy": null } }
+    ],
+    "expectFinal": { "states": { "result:j6:1": "collecting", "authorization:i6": "absent", "result-adjudication:j6:1": "absent" }, "charges": { "audit": 0, "urgent": 0 } }
+  },
+  {
+    "id": "reserve-retirement-clears-only-applicable-lane",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "Retiring a saturated class version atomically excludes its policies and clears a lane only when no other non-retired version remains saturated.",
+    "setup": { "class-version:c7:v1": { "state": "draining" }, "class-version:c7:v2": { "state": "active" }, "reserve:c7:v1:urgent": { "used": 5, "laneLimit": 5 }, "reserve:c7:v2:urgent": { "used": 1, "laneLimit": 5 }, "class-health:c7": { "revision": 8, "urgent": "saturated", "audit": "saturated" } },
+    "conditions": [],
+    "steps": [
+      { "command": "contractExpire", "args": { "classId": "c7", "contractVersion": "v1" }, "expect": { "kind": "applied", "classHealthRevision": 9, "urgent": "available", "audit": "saturated" } }
+    ],
+    "expectFinal": { "states": { "class-version:c7:v1": "retired", "class-health:c7:urgent": "available", "class-health:c7:audit": "saturated" } }
+  },
+  {
+    "id": "result-adjudication-id-collision-preserves-state",
+    "version": 1,
+    "area": "identity",
+    "description": "A prepared result-adjudication request ID collision changes neither the collecting cycle, reserve usage, identity map, nor pending backlog.",
+    "setup": { "identity:request-8": { "kind": "lease", "owner": "l8" }, "result:j8:1": { "state": "collecting" }, "reserve:c8:v1:splitAndAdjudication": { "used": 2, "laneLimit": 5 } },
+    "conditions": [],
+    "steps": [
+      { "command": "openResultAdjudication", "args": { "jobId": "j8", "collectionCycle": 1, "requestId": "request-8" }, "expect": { "kind": "identity_conflict" } }
+    ],
+    "expectFinal": { "states": { "result:j8:1": "collecting", "identity:request-8": "lease:l8", "result-adjudication:request-8": "absent" }, "charges": { "splitAndAdjudication": 2 } }
+  },
+  {
+    "id": "health-transition-preserves-accounting-lanes",
+    "version": 1,
+    "area": "operational_state",
+    "description": "Generic class-health transitions may change operating state but preserve accounting-owned reserve lanes.",
+    "setup": { "class-health:c9": { "revision": 2, "operating": "ready", "urgent": "saturated" } },
+    "conditions": [],
+    "steps": [
+      { "command": "transitionClassHealth", "args": { "classId": "c9", "expectedRevision": 2, "operating": "admission_halted", "source": "operator" }, "expect": { "kind": "applied", "revision": 3, "urgent": "saturated" } }
+    ],
+    "expectFinal": { "states": { "class-health:c9:operating": "admission_halted", "class-health:c9:urgent": "saturated" } }
   }
 ]

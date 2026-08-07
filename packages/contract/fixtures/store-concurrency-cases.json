@@ -69,7 +69,7 @@
   },
   {
     "id": "reserve-last-unit-race-fails-closed",
-    "description": "Two authorizations racing for a lane's final unit yield one authorized and charged result plus one escalation-budget denial, never overdraw or uncharged authorization."
+    "description": "Two authorizations racing for a lane's final unit yield one authorized and charged result plus one escalation-budget denial, with saturated class health visible atomically and never an overdraw or uncharged authorization."
   },
   {
     "id": "class-qualified-epoch-invalidation",
@@ -153,7 +153,7 @@
   },
   {
     "id": "reserve-policy-change-race-fails-closed",
-    "description": "A charge carrying an old reserve policy version or rollover identity conflicts without consuming either old or current capacity."
+    "description": "A policy transition racing a stale charge either admits that charge completely before the transition or rejects it afterward without debiting the new policy or window."
   },
   {
     "id": "worker-registration-routing-atomic",
@@ -174,5 +174,17 @@
   {
     "id": "canary-payload-claim-atomic",
     "description": "A canary claim reuses its lease identity as the payload reference and persists both records together; stale claims and payload-reference collisions leave no new record or alias."
+  },
+  {
+    "id": "reserve-health-last-unit-atomic",
+    "description": "The charge that consumes a lane's final unit and the resulting saturated class-health revision become visible in one transaction."
+  },
+  {
+    "id": "result-adjudication-id-collision-atomic",
+    "description": "A result-adjudication request ID collision preserves the parent cycle, reserve usage, global core-identity map, and pending backlog together."
+  },
+  {
+    "id": "reserve-retirement-health-recompute-atomic",
+    "description": "Retiring a class version excludes its policy records and recomputes only affected reserve-health lanes in the same class-version transition."
   }
 ]

@@ -284,7 +284,7 @@ describe("M2 Task 2 class registration", () => {
     await store.transitionClassHealth({
       expected: health!,
       next: {
-        health: { ...health!.health, operating: "admission_halted" },
+        health: { operating: "admission_halted" },
         updatedAt: "2026-08-06T20:01:00.000Z",
         source: "operator",
       },

@@ -1,9 +1,7 @@
 # Muster contract-freeze-10 reserve-accounting amendment plan
 
-**Status:** Proposed by the first M2 Task-6 runtime trace. Runtime escalation,
-adjudication, and invalidation remain paused until this amendment is
-independently reviewed, corrected, implemented, and tagged locally as
-`contract-freeze-10`.
+**Status:** Independently reviewed and corrected; implemented as coordinator
+revision 21 and tagged locally as `contract-freeze-10`. M2 Task 6 may resume.
 
 **Goal:** Amend revision 20 so reserve policy is an authoritative durable
 control-plane record, every charge publishes its accounting and class-health
@@ -40,6 +38,12 @@ Exact old charge replays remain historical and do not debit the new window.
 Stale expected records conflict without changing policy, accounting, or health.
 The Store still derives no calendar and imports no `JobClass` functions.
 
+Independent review added two safety constraints. Installing a zero-capacity
+record must publish saturation immediately rather than waiting for a failed
+charge. A changed window must move forward without overlap and must not reuse a
+prior window identity; otherwise a controller could roll backward repeatedly
+to reset usage. Same-window changes retain their original boundaries.
+
 ## Finding 2: accounting and reserve health can become observably inconsistent
 
 The last successful unit makes a lane saturated, while an exhausted attempt
@@ -59,19 +63,27 @@ clearing one lane never clears another, and a class lane remains saturated
 while any applicable non-retired class-version policy record for that lane is
 saturated.
 
+Independent review also found both ways that derivation could drift after this
+amendment. Generic class-health and emergency-halt transitions must preserve
+accounting-owned reserve lanes. Transitioning a class version to `retired` must
+atomically exclude its policy records and recompute only affected lanes, or a
+retired saturated version can leave intake closed indefinitely.
+
 ## Finding 3: charge replay/conflict outcomes are incomplete
 
 An exact `chargeKey` replay must return the original charged or exhausted
 outcome without spending twice. Reusing the key with different workers, lane,
-policy, window, limits, or timestamp is a charge conflict, not a replay and not
-a policy change. The current `ReserveChargeOutcome` has no such conflict arm.
+policy, window, or limits is a charge conflict, not a replay and not a policy
+change. A retry may supply a later call timestamp; the first persisted timestamp
+remains authoritative and replays. The current `ReserveChargeOutcome` has no
+such conflict arm.
 
 Likewise, `openResultAdjudication` and `authorizeOrReplayIntent` can encounter a
-stale/missing installed policy. The normative rule says `policy_conflict`
+stale/missing installed policy. The normative rule says `reserve_policy_conflict`
 changes nothing, but neither command can currently return it distinctly.
-`chargeOk?: boolean` is retained only if it stays correlated with a successfully
-persisted pending request; it must not collapse policy conflict into reserve
-exhaustion. Add correlated typed outcomes that preserve:
+Independent review removed `chargeOk?: boolean`: it cannot represent policy
+conflict, charge conflict, original disposition on replay, or the resulting
+health revision. Add correlated typed outcomes that preserve:
 
 - authorization/effect-intent conflict;
 - result-adjudication request identity conflict;
@@ -106,6 +118,8 @@ collecting cycle still produce one open request and one result-state conflict.
   with the winning outcome;
 - a new explicit window resets only that policy record's usage and clears only
   the affected health lane when every applicable record has capacity;
+- a zero-limit installation saturates its lane atomically, and an older,
+  overlapping, or reused changed window cannot reset usage;
 - exact charged and exhausted charge-key replays preserve their original
   outcome, while changed input under one key conflicts;
 - standalone, result-adjudication, and authorization charges all reject a
@@ -118,6 +132,20 @@ collecting cycle still produce one open request and one result-state conflict.
   reserve usage, core identity map, and pending backlog unchanged;
 - pending backlog reads retain the first persisted `openedAt` across policy
   transitions, exhaustion, and exact replay.
+- generic health transitions preserve reserve lanes, and class-version
+  retirement recomputes only lanes affected by that version's policies.
+
+## Independent review trace
+
+| Path | Frozen comparison and atomic publication | No-change outcomes | Executable identity |
+|---|---|---|---|
+| Policy initialize | Complete snapshot; zero usage; initial lane health | identical replay, changed input, missing/retired class version, missing health, invalid policy | `reserve-policy-initialization-replay-conflict`, `reserve-zero-limit-saturates-on-install` |
+| Same-window transition | Expected record revision; retain class/worker usage; recompute one lane | stale record, invalid policy | `reserve-policy-same-window-retains-usage` |
+| Window rollover | Expected record revision; forward non-overlapping interval; reset one record | stale record, older/overlapping/reused window | `reserve-window-rollback-refused`, `reserve-policy-change-race-fails-closed` |
+| Standalone charge | Charge-key lookup, installed snapshot, usage, charge record, lane health | exact charged/exhausted replay, changed key input, missing/stale policy | `reserve-charge-key-input-conflict`, `reserve-health-last-unit-atomic` |
+| Result adjudication | Request identity, parent cycle transition, charge record, pending `openedAt`, lane health | exact opened disposition replay, request-ID collision, state conflict, charge conflict, policy conflict | `reserve-missing-policy-refuses-all-charge-paths`, `result-adjudication-id-collision-preserves-state` |
+| Action authorization | Effect-intent/authorization identity, receipt, charge record, authorization/adjudication state, lane health | exact receipt replay, intent conflict, charge conflict, policy conflict; exhaustion persists pending split-lane work or a terminal budget denial | `reserve-last-unit-race-fails-closed`, `reserve-policy-version-conflict` |
+| Health/retirement | Operating-only generic health mutation; retirement excludes that version's policies and recomputes affected lanes | stale health or lifecycle revision | `health-transition-preserves-accounting-lanes`, `reserve-retirement-clears-only-applicable-lane` |
 
 ## Exit gate
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## contract-freeze-10 — reviewed and tagged 2026-08-07
+
+Revision 21 amendment discovered by the first Milestone 2 Task-6 runtime trace.
+Reserve policy is now an authoritative class/version/lane Store record with
+typed installation, same-window transition, forward-only rollover, usage, and
+health publication. Charge-bearing commands preserve charged versus exhausted
+replay and distinguish changed charge keys from missing or stale policy. The
+review added zero-limit saturation, rollback prevention, accounting-owned
+health lanes, atomic health recomputation on class-version retirement, and a
+typed result-adjudication identity collision. Wire contract version remains
+`1.1.0`; the reviewed boundary is tagged locally as `contract-freeze-10`.
+
 ## Milestone 2 Task 5 — 2026-08-07
 
 Implemented holder-bound submission settlement with immutable accepted replay,

@@ -55,6 +55,9 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "transitionWorkerRouting",
   "recordNoWorkAttempt",
   "initializeClassHealth",
+  "initializeReservePolicy",
+  "transitionReservePolicy",
+  "chargeReserve",
   "refreshClassHealth",
   "recordReputationEvidence",
   "listLeaseCandidates",
@@ -188,6 +191,91 @@ export const REVISION_19_COMMAND_ARGUMENT_KEYS = deepFreeze({
   },
 } as const);
 
+/** Closed argument shapes for revision-21 commands added by freeze 10. */
+export const REVISION_21_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  initializeReservePolicy: {
+    required: [
+      "classId",
+      "contractVersion",
+      "lane",
+      "policyVersion",
+      "windowId",
+      "windowStartsAt",
+      "windowEndsAt",
+      "laneLimit",
+      "at",
+    ],
+    allowed: [
+      "classId",
+      "contractVersion",
+      "lane",
+      "policyVersion",
+      "windowId",
+      "windowStartsAt",
+      "windowEndsAt",
+      "laneLimit",
+      "perWorkerLimit",
+      "at",
+    ],
+  },
+  transitionReservePolicy: {
+    required: [
+      "classId",
+      "contractVersion",
+      "lane",
+      "expectedRevision",
+      "policyVersion",
+      "windowId",
+      "windowStartsAt",
+      "windowEndsAt",
+      "laneLimit",
+      "at",
+    ],
+    allowed: [
+      "classId",
+      "contractVersion",
+      "lane",
+      "expectedRevision",
+      "policyVersion",
+      "windowId",
+      "windowStartsAt",
+      "windowEndsAt",
+      "laneLimit",
+      "perWorkerLimit",
+      "at",
+    ],
+  },
+  chargeReserve: {
+    required: [
+      "chargeKey",
+      "workerIds",
+      "classId",
+      "contractVersion",
+      "lane",
+      "policyVersion",
+      "windowId",
+      "windowStartsAt",
+      "windowEndsAt",
+      "laneLimit",
+      "at",
+    ],
+    allowed: [
+      "chargeKey",
+      "workerIds",
+      "classId",
+      "contractVersion",
+      "lane",
+      "policyVersion",
+      "windowId",
+      "windowStartsAt",
+      "windowEndsAt",
+      "laneLimit",
+      "perWorkerLimit",
+      "at",
+    ],
+  },
+} as const);
+
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
 );
@@ -258,6 +346,9 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "stale-health-refresh-cannot-replace-operator-halt",
   "queue-class-precedence-atomic",
   "reserve-policy-change-race-fails-closed",
+  "reserve-health-last-unit-atomic",
+  "result-adjudication-id-collision-atomic",
+  "reserve-retirement-health-recompute-atomic",
   "worker-registration-routing-atomic",
   "worker-routing-period-transition-race",
   "class-health-initialization-replay-conflict",
@@ -341,6 +432,15 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "extension-deadline-strict",
   "reserve-policy-version-conflict",
   "reserve-window-rollover-isolated",
+  "reserve-policy-initialization-replay-conflict",
+  "reserve-zero-limit-saturates-on-install",
+  "reserve-policy-same-window-retains-usage",
+  "reserve-window-rollback-refused",
+  "reserve-charge-key-input-conflict",
+  "reserve-missing-policy-refuses-all-charge-paths",
+  "reserve-retirement-clears-only-applicable-lane",
+  "result-adjudication-id-collision-preserves-state",
+  "health-transition-preserves-accounting-lanes",
   "agreement-fixture-families-required",
   "oracle-negative-fixture-families-bound",
   "worker-registration-routing-atomic",
@@ -445,6 +545,11 @@ export function isLifecycleFixture(
     if (!isRecord(step.args)) return false;
     const args = step.args;
     const closedShape = (
+      REVISION_21_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
       REVISION_19_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];

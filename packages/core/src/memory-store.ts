@@ -394,6 +394,12 @@ export class InMemoryStore implements Store {
       if (current.state !== input.from) {
         return { kind: "state_conflict", actual: current.state };
       }
+      const retirementHealth = input.to === "retired"
+        ? this.classHealth.get(input.classId)
+        : undefined;
+      if (input.to === "retired" && retirementHealth === undefined) {
+        throw new Error(`class ${input.classId} has no health snapshot`);
+      }
       const record: ClassVersionRecord = {
         ...current,
         state: input.to,
@@ -405,7 +411,19 @@ export class InMemoryStore implements Store {
           : { acceptedUntil: input.acceptedUntil }),
       };
       this.classVersions.set(key, record);
-      const outcome: ContractTransitionOutcome = { kind: "applied", record };
+      const outcome: ContractTransitionOutcome = record.state === "retired"
+        ? {
+            kind: "applied",
+            record: { ...record, state: "retired" },
+            classHealth: clone(retirementHealth!),
+          }
+        : {
+            kind: "applied",
+            record: {
+              ...record,
+              state: record.state,
+            },
+          };
       this.classTransitionHistory.set(historyKey, clone(outcome));
       return clone(outcome);
     });
@@ -855,7 +873,10 @@ export class InMemoryStore implements Store {
       const next: ClassHealthSnapshot = {
         revision: current.revision + 1,
         classId: current.classId,
-        health: clone(input.next.health),
+        health: {
+          ...clone(input.next.health),
+          reserves: clone(current.health.reserves),
+        },
         updatedAt: input.next.updatedAt,
         source: input.next.source,
       };
@@ -925,7 +946,10 @@ export class InMemoryStore implements Store {
         const snapshot: ClassHealthSnapshot = {
           revision: current.revision + 1,
           classId: next.classId,
-          health: clone(next.health),
+          health: {
+            ...clone(next.health),
+            reserves: clone(current.health.reserves),
+          },
           updatedAt: next.updatedAt,
           source: next.source,
         };
@@ -1583,6 +1607,24 @@ export class InMemoryStore implements Store {
     _charge: Parameters<Store["chargeReserve"]>[0],
   ): ReturnType<Store["chargeReserve"]> {
     return this.unsupported("chargeReserve");
+  }
+
+  getReservePolicy(
+    _input: Parameters<Store["getReservePolicy"]>[0],
+  ): ReturnType<Store["getReservePolicy"]> {
+    return this.unsupported("getReservePolicy");
+  }
+
+  initializeReservePolicy(
+    _input: Parameters<Store["initializeReservePolicy"]>[0],
+  ): ReturnType<Store["initializeReservePolicy"]> {
+    return this.unsupported("initializeReservePolicy");
+  }
+
+  transitionReservePolicy(
+    _input: Parameters<Store["transitionReservePolicy"]>[0],
+  ): ReturnType<Store["transitionReservePolicy"]> {
+    return this.unsupported("transitionReservePolicy");
   }
 
   appendLedger(

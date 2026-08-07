@@ -164,6 +164,7 @@ describe("revision-14 M2-entry port freeze", () => {
     const charge: ReserveCharge = {
       chargeKey: "charge-1",
       workerIds: ["worker-1"],
+      at: now,
       policy: {
         classId: "class-1",
         contractVersion: "1.0.0",
@@ -230,7 +231,6 @@ describe("revision-14 M2-entry port freeze", () => {
         updatedAt: now,
         source: "operator",
         health: {
-          ...expectedHealth.health,
           operating: "emergency_halted",
         },
       }],

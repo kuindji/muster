@@ -1473,7 +1473,7 @@ const emergencyCase: StoreConformanceCase = {
       expectedClassHealth: [health],
       nextClassHealth: [{
         classId: "class-1",
-        health: { ...health.health, operating: "emergency_halted" },
+        health: { operating: "emergency_halted" },
         updatedAt: LATER,
         source: "operator",
       }],
@@ -1492,7 +1492,11 @@ const emergencyCase: StoreConformanceCase = {
     );
     const staleRefresh = await store.transitionClassHealth({
       expected: health,
-      next: { health: readyHealth(), updatedAt: LATER, source: "automatic" },
+      next: {
+        health: { operating: readyHealth().operating },
+        updatedAt: LATER,
+        source: "automatic",
+      },
     });
     assert(staleRefresh.kind === "conflict", "stale health refresh must conflict");
 

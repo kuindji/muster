@@ -248,7 +248,7 @@ describe("M2 Task 4 enqueue", () => {
     });
   });
 
-  it("fails closed on schema, lifecycle, and every intake-blocking health dimension", async () => {
+  it("fails closed on schema, lifecycle, and intake-blocking reserve health", async () => {
     const { service, store } = await setup();
     await expect(enqueue(service, "invalid", {
       rawPayload: { instruction: "x".repeat(5_000) },
@@ -257,19 +257,19 @@ describe("M2 Task 4 enqueue", () => {
       kind: "invalid",
       reason: "payload_too_large",
     });
-    const health = await store.getClassHealth("class-1");
-    expect(health).not.toBeNull();
-    await store.transitionClassHealth({
-      expected: health!,
-      next: {
-        health: {
-          ...health!.health,
-          reserves: { ...health!.health.reserves, audit: "saturated" },
-        },
-        updatedAt: "2026-08-07T08:01:00.000Z",
-        source: "automatic",
-      },
-    });
+    const readHealth = store.getClassHealth.bind(store);
+    store.getClassHealth = async (classId) => {
+      const health = await readHealth(classId);
+      return health === null
+        ? null
+        : {
+            ...health,
+            health: {
+              ...health.health,
+              reserves: { ...health.health.reserves, audit: "saturated" },
+            },
+          };
+    };
     await expect(enqueue(service, "blocked"))
       .resolves.toEqual({ ok: false, kind: "refused", reason: "operational_state" });
   });

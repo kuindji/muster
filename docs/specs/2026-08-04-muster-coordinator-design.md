@@ -1,12 +1,12 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 20)
+**Date:** 2026-08-04 (revision 21)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 9 implements
-the submission-settlement and absorbing-split boundary and is awaiting
-independent review; Milestone 2 Task 5 remains blocked until the reviewed
-commit is tagged locally.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 10 implements
+the authoritative reserve-accounting boundary and is independently reviewed,
+corrected, and tagged locally as `contract-freeze-10`; Milestone 2 Task 6 is
+authorized to resume.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -216,6 +216,19 @@ bounded split-only rerouting opens, and automatic decision persistence compares
 the complete evidence set and refuses a split-marked cycle. These are contract
 corrections only; revision 20 implements no submission or verification service
 and does not change the worker wire.
+
+Revision 21 closes the reserve-accounting gaps found by the first Task-6 trace
+and corrected by its independent boundary review. Reserve policy is now an
+authoritative Store-owned record with explicit initialization, comparison, and
+forward-only window transition. Every charge, exhaustion, zero-limit install,
+same-window limit change, window rollover, and class-version retirement
+publishes its accounting and class-health effect atomically. Exact charge-key
+replay preserves whether the first outcome charged or exhausted; changed input,
+missing or stale policy, and result-adjudication request identity collision all
+have distinct no-change outcomes. Generic health transitions cannot overwrite
+accounting-owned reserve lanes. These are contract corrections only; revision
+21 implements no escalation, adjudication, or invalidation service and does not
+change the worker wire.
 
 ## 1. What Muster is
 
@@ -1192,16 +1205,53 @@ sum of `lowCostPerWeek`, `urgentPerWeek`, and
 `retrospectiveAuditProjectionPerWeek`. The projection is not charged; it is the
 floor against which the separately charged `auditPerWeek` reserve is validated.
 
-Every charge-bearing Store command carries one immutable
-`ReservePolicySnapshot`: class and contract version, reserve-policy version,
+Reserve policy is an authoritative durable control-plane record, never an
+assertion adopted from whichever charge arrives first. One
+`ReservePolicyRecord` is keyed by `(classId, contractVersion, lane)` and contains
+a Store-owned revision, the complete immutable `ReservePolicySnapshot`, class
+usage, canonically worker-ID-sorted per-worker usage where applicable, and an
+update timestamp. Core installs the first record through
+`initializeReservePolicy`, reads it through `getReservePolicy`, and replaces it
+only through a compare-and-transition command. Initialization requires the
+class version and class-health snapshot to exist. Identical initialization
+replays the first record and timestamp even when the retry occurs later;
+changed policy input conflicts. A zero lane limit is valid and publishes that
+lane as saturated in the same transaction as installation.
+
+Every snapshot carries class and contract version, reserve-policy version,
 lane, finite non-negative lane limit, explicit rollover `windowId` and start/end
-timestamps, plus the per-worker limit for the low-cost and urgent lanes. The
-Store compares that snapshot to the durable accounting window inside the same
-transaction that records the charge and any authorization/adjudication state.
-It returns `policy_conflict` on a changed version or window and changes nothing.
-Adapters never load `JobClass` or independently derive weekly boundaries.
-Exact `chargeKey` replay returns the persisted outcome; two distinct charges
-racing for the final unit produce one charge and one exhausted outcome.
+timestamps, plus the per-worker limit for low-cost and urgent lanes. Start must
+precede end. A same-window transition must retain identical boundaries and all
+class and per-worker usage; changing its policy version or limits merely
+recomputes capacity. A changed window must begin at or after the current
+window's end, uses a never-before-installed identity for that policy record,
+and resets only that record's usage. An older, overlapping, or reused changed
+window is `window_not_forward` and changes nothing. Adapters never load
+`JobClass` or derive a week, window, or calendar.
+
+Every charge-bearing Store command carries the complete installed snapshot and
+a core-supplied first-attempt timestamp. The Store first looks up `chargeKey`.
+An existing charge with the same class/version/lane, snapshot, and canonical
+worker set replays its original `charged` or `exhausted` disposition and first
+timestamp even if the retry supplies a later timestamp; any changed semantic
+input is `reserve_charge_conflict`. For a new key, Store compares the supplied
+snapshot with the installed record inside the same transaction that records the
+charge and authorization/adjudication state. Missing or changed policy returns
+`reserve_policy_conflict` with the current nullable record and changes nothing.
+Two distinct charges racing for the final unit produce one charge and one
+exhausted outcome.
+
+The charge that consumes the final class unit marks the lane saturated in the
+same transaction. Every successful charge increments the policy record's
+Store-owned revision with its usage so a policy transition prepared before the
+charge conflicts rather than replacing that accounting. Exhaustion caused only
+by a per-worker quota does not saturate class capacity. Exact exhausted
+outcomes are durable even though they
+debit nothing. `chargeReserve`, `openResultAdjudication`, and
+`authorizeOrReplayIntent` return the correlated charge record, current policy,
+and resulting class-health snapshot; they never collapse policy conflict,
+charge conflict, charged, and exhausted into one boolean. Exact domain replay
+precedes current policy and health checks and does not charge twice.
 
 A worker exceeding either quota has further escalations in that lane denied and
 its suspicion raised — flooding costs the flooder first. Low-cost work never
@@ -1244,6 +1294,29 @@ the audit reserve refuses new class enqueues and fires `onAuditUncovered`,
 because continuing intake while the declared retrospective audit rate is
 unfunded would silently lower the class's worker-drift control. Neither reserve
 may borrow from low-cost or urgent capacity.
+
+Reserve health is accounting-owned. Policy installation and transition,
+standalone charge, result-adjudication open, authorization persistence, and a
+class-version transition to `retired` recompute every affected lane in the same
+transaction as their domain change. A class lane is saturated while any
+installed policy for a non-retired version of that class has no remaining class
+capacity. A same-window limit increase or forward rollover clears the lane only
+when every other applicable policy record has capacity. Retiring a version
+atomically excludes all of that version's policy records and recomputes only
+the affected lanes; it never clears another lane. Policy and charge operations
+narrowly merge the reserve projection into the latest health snapshot, retain
+its operating dimension, own the next revision, and stamp their explicit time.
+Generic `transitionClassHealth` and `enterEmergencyHalt` may change operating
+state but must preserve the current reserve projection. Thus neither a stale
+automatic refresh nor an operator health write can manufacture capacity.
+
+Opening result adjudication preserves the request's first `openedAt` on exact
+replay and on an uncovered split-and-adjudication charge. A prepared
+`result_adjudication_request` ID already owned by another core identity or a
+different request returns `identity_conflict`; the parent cycle, reserve usage,
+identity map, and pending backlog all remain unchanged. Concurrent different
+request IDs for one collecting cycle still produce one open request and one
+`state_conflict`.
 
 Escalation is still the safest direction. It is no longer free, and it can no
 longer be spent by an attacker on the operator's behalf.
@@ -2359,7 +2432,10 @@ minimum:
 `LeaseRecord`, `ClaimLeaseOutcome`, `NoWorkAttemptOutcome`,
 `QueueModeSnapshot`, `ClassHealthSnapshot`, `OperationalStateExpectation`,
 `InitializeClassHealthOutcome`,
-`ReservePolicySnapshot`, `ReserveChargeOutcome`, `OracleNegativeFixture`,
+`ReservePolicySnapshot`, `ReservePolicyRecord`, `ReserveWorkerUsage`,
+`InitializeReservePolicyOutcome`, `TransitionReservePolicyOutcome`,
+`ReserveChargeRecord`, `ReserveMutation`, `ReserveMutationConflict`,
+`ReserveChargeOutcome`, `OracleNegativeFixture`,
 `OracleNegativeFixtureCategory`.
 
 **Tables and state machines.** The worker state machine (3.1); the action gate
@@ -2402,8 +2478,10 @@ Revision 19 has been independently reviewed and corrected but does not reopen
 Task 4 until the reviewed commit is tagged `contract-freeze-8`.
 
 Revision 20 implements the Task-5 boundary correction and has been
-independently reviewed and corrected, but does not reopen Task 5 until the
-result is tagged `contract-freeze-9`.
+independently reviewed, corrected, and tagged `contract-freeze-9`.
+
+Revision 21 implements the Task-6 reserve-accounting boundary correction and is
+independently reviewed, corrected, and tagged `contract-freeze-10`.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2541,7 +2619,34 @@ outcomes. Wire version `1.1.0`, MCP schemas, hash envelopes, events, and durable
 class/job/lease/worker records remain unchanged. M2 Task 5 resumes only from an
 independently reviewed commit tagged `contract-freeze-9`.
 
-### 11.10 Open
+### 11.10 Contract-freeze amendment 10: authoritative reserve accounting
+
+Revision 21 is complete only when reserve policy is a durable
+class/version/lane-qualified record with explicit read, initialize, and
+compare-and-transition commands; same-window changes retain usage; changed
+windows advance without overlap and reset only their record; and zero-capacity
+installation publishes saturation atomically. Every charge-bearing command
+must distinguish missing/stale policy, changed charge-key input, charged,
+exhausted, and exact replay while returning its correlated accounting and
+class-health snapshots. Exact replay retains the first disposition and
+timestamp.
+
+Reserve health is derived atomically from every applicable non-retired policy
+record. Charge, policy transition, and class-version retirement publish their
+lane effects with their domain state; generic health transitions preserve
+reserve lanes. `openResultAdjudication` additionally returns a distinct
+identity conflict without changing its parent cycle, reserve usage, global
+identity map, or pending backlog. Lifecycle, concurrency, closed-command-shape,
+and compile-time port tests cover initialization, same-window changes,
+rollover/rollback, last-unit health publication, all three charge-bearing
+policy conflicts, charge-key conflict, retirement, and request-ID collision.
+
+The amendment changes only internal core/Store records, commands, and outcomes.
+Wire version `1.1.0`, MCP schemas, hash envelopes, events, and durable
+job/lease/worker records remain unchanged. M2 Task 6 resumes only from an
+independently reviewed commit tagged `contract-freeze-10`.
+
+### 11.11 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

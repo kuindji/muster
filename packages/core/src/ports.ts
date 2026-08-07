@@ -235,21 +235,95 @@ export type ReservePolicySnapshot =
       readonly perWorkerLimit?: never;
     });
 
-export interface ReserveCharge {
-  chargeKey: string;
-  workerIds: WorkerId[];
-  policy: ReservePolicySnapshot;
+export interface ReserveWorkerUsage {
+  readonly workerId: WorkerId;
+  readonly used: number;
 }
 
-export type ReserveChargeOutcome =
-  | { kind: "charged" }
-  | { kind: "replayed" }
-  | { kind: "exhausted" }
+/** Authoritative Store-owned accounting state for one class/version/lane. */
+export interface ReservePolicyRecord {
+  readonly revision: number;
+  readonly policy: ReservePolicySnapshot;
+  readonly used: number;
+  /** Canonically sorted by workerId; empty for non-worker-qualified lanes. */
+  readonly workerUsage: readonly ReserveWorkerUsage[];
+  readonly updatedAt: Timestamp;
+}
+
+export type InitializeReservePolicyOutcome =
   | {
-      kind: "policy_conflict";
-      currentPolicyVersion: string;
-      currentWindowId: string;
+      kind: "initialized" | "replayed";
+      current: ReservePolicyRecord;
+      classHealth: ClassHealthSnapshot;
+    }
+  | { kind: "conflict"; current: ReservePolicyRecord }
+  | {
+      kind: "refused";
+      reason:
+        | "class_version_not_found"
+        | "class_version_retired"
+        | "class_health_missing"
+        | "invalid_policy";
     };
+
+export type TransitionReservePolicyOutcome =
+  | {
+      kind: "applied" | "replayed";
+      current: ReservePolicyRecord;
+      classHealth: ClassHealthSnapshot;
+    }
+  | { kind: "conflict"; current: ReservePolicyRecord }
+  | {
+      kind: "refused";
+      reason:
+        | "class_version_retired"
+        | "class_health_missing"
+        | "invalid_policy"
+        | "window_not_forward";
+    };
+
+export interface ReserveCharge {
+  readonly chargeKey: string;
+  /** Canonically sorted and unique. */
+  readonly workerIds: readonly WorkerId[];
+  readonly policy: ReservePolicySnapshot;
+  /** First-attempt timestamp; exact retries replay the first persisted value. */
+  readonly at: Timestamp;
+}
+
+export interface ReserveChargeRecord {
+  readonly charge: ReserveCharge;
+  readonly outcome: "charged" | "exhausted";
+}
+
+export interface ReserveMutation<
+  Outcome extends ReserveChargeRecord["outcome"] = ReserveChargeRecord["outcome"],
+> {
+  readonly charge: ReserveChargeRecord & { readonly outcome: Outcome };
+  readonly currentPolicy: ReservePolicyRecord;
+  readonly classHealth: ClassHealthSnapshot;
+}
+
+export type ReserveMutationConflict =
+  | {
+      kind: "reserve_charge_conflict";
+      existingCharge: ReserveChargeRecord;
+    }
+  | {
+      kind: "reserve_policy_conflict";
+      currentPolicy: ReservePolicyRecord | null;
+    };
+
+export type ReserveChargeOutcome =
+  | ({
+      kind: "charged";
+      status: "applied" | "replayed";
+    } & ReserveMutation<"charged">)
+  | ({
+      kind: "exhausted";
+      status: "applied" | "replayed";
+    } & ReserveMutation<"exhausted">)
+  | ReserveMutationConflict;
 
 export interface LeaseCanaryAssignment {
   readonly kind: "canary";
@@ -441,8 +515,19 @@ export type RegisterClassVersionOutcome =
   | { kind: "conflict"; existing: ClassVersionRecord };
 
 export type ContractTransitionOutcome =
-  | { kind: "applied"; record: ClassVersionRecord }
-  | { kind: "replayed"; record: ClassVersionRecord }
+  | {
+      kind: "applied" | "replayed";
+      record: Omit<ClassVersionRecord, "state"> & {
+        state: Exclude<ContractLifecycleState, "retired">;
+      };
+      classHealth?: never;
+    }
+  | {
+      kind: "applied" | "replayed";
+      record: Omit<ClassVersionRecord, "state"> & { state: "retired" };
+      /** Retirement atomically recomputes accounting-owned reserve health. */
+      classHealth: ClassHealthSnapshot;
+    }
   | { kind: "state_conflict"; actual: ContractLifecycleState }
   | { kind: "not_found" };
 
@@ -584,11 +669,39 @@ export type MarkResultSplitOutcome =
 export type AuthorizeIntentOutcome =
   | {
       kind: "applied";
-      initialReceipt: AuthorizationInitialReceipt;
-      chargeOk?: boolean;
+      initialReceipt: Exclude<
+        AuthorizationInitialReceipt,
+        Extract<
+          AuthorizationInitialReceipt,
+          { outcome: "pending_adjudication" }
+        >
+      >;
+      reserve?: never;
+    }
+  | {
+      kind: "applied";
+      initialReceipt: Extract<
+        AuthorizationInitialReceipt,
+        { outcome: "authorized" | "pending_adjudication" }
+      >;
+      reserve: ReserveMutation<"charged">;
+    }
+  | {
+      kind: "applied";
+      initialReceipt:
+        | Extract<
+            AuthorizationInitialReceipt,
+            { outcome: "pending_adjudication" }
+          >
+        | (Omit<
+            Extract<AuthorizationInitialReceipt, { outcome: "denied" }>,
+            "denialReason"
+          > & { denialReason: "escalation_budget_exhausted" });
+      reserve: ReserveMutation<"exhausted">;
     }
   | { kind: "replayed"; initialReceipt: AuthorizationInitialReceipt }
-  | { kind: "conflict" };
+  | { kind: "conflict" }
+  | ReserveMutationConflict;
 
 interface VerdictReceiptBase {
   requestId: string;
@@ -612,10 +725,23 @@ export type VerdictOutcome =
   | { kind: "terminal" };
 
 export type OpenAdjudicationOutcome =
-  | { kind: "opened_charged" }
-  | { kind: "opened_uncovered" }
-  | { kind: "replayed" }
-  | { kind: "state_conflict"; actual: ResultState };
+  | ({ kind: "opened_charged"; openedAt: Timestamp } &
+      ReserveMutation<"charged">)
+  | ({ kind: "opened_uncovered"; openedAt: Timestamp } &
+      ReserveMutation<"exhausted">)
+  | ({
+      kind: "replayed";
+      original: "opened_charged";
+      openedAt: Timestamp;
+    } & ReserveMutation<"charged">)
+  | ({
+      kind: "replayed";
+      original: "opened_uncovered";
+      openedAt: Timestamp;
+    } & ReserveMutation<"exhausted">)
+  | { kind: "state_conflict"; actual: ResultState }
+  | { kind: "identity_conflict" }
+  | ReserveMutationConflict;
 
 export type TransitionOutcome =
   | { ok: true }
@@ -889,10 +1015,10 @@ export interface Store {
   getClassHealth(classId: string): Promise<ClassHealthSnapshot | null>;
   transitionClassHealth(input: {
     expected: ClassHealthSnapshot;
-    next: Pick<
-      ClassHealthSnapshot,
-      "health" | "updatedAt" | "source"
-    >;
+    next: Pick<ClassHealthSnapshot, "updatedAt" | "source"> & {
+      /** Reserve lanes are accounting-owned and cannot be overwritten here. */
+      health: Readonly<Omit<FrozenClassHealth, "reserves">>;
+    };
   }): Promise<OperationalTransitionOutcome<ClassHealthSnapshot>>;
   enterEmergencyHalt(input: {
     expectedQueue: QueueModeSnapshot;
@@ -902,7 +1028,8 @@ export interface Store {
     expectedClassHealth: ClassHealthSnapshot[];
     nextClassHealth: Array<
       Omit<ClassHealthSnapshot, "revision" | "health"> & {
-        health: FrozenClassHealth & {
+        /** Emergency state changes preserve accounting-owned reserve lanes. */
+        health: Readonly<Omit<FrozenClassHealth, "reserves">> & {
           readonly operating: "emergency_halted";
         };
       }
@@ -927,6 +1054,20 @@ export interface Store {
         invalidation: InvalidationSnapshot;
       }
   >;
+  getReservePolicy(input: {
+    classId: string;
+    contractVersion: string;
+    lane: ReservePolicySnapshot["lane"];
+  }): Promise<ReservePolicyRecord | null>;
+  initializeReservePolicy(input: {
+    policy: ReservePolicySnapshot;
+    at: Timestamp;
+  }): Promise<InitializeReservePolicyOutcome>;
+  transitionReservePolicy(input: {
+    expected: ReservePolicyRecord;
+    next: ReservePolicySnapshot;
+    at: Timestamp;
+  }): Promise<TransitionReservePolicyOutcome>;
   chargeReserve(charge: ReserveCharge): Promise<ReserveChargeOutcome>;
   appendLedger(entry: {
     at: Timestamp;

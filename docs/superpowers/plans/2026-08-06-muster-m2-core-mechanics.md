@@ -1,8 +1,8 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 20 and the reviewed, tagged
-`contract-freeze-9` boundary, including an in-memory Store and reusable
+`@kuindji/muster-core` against revision 21 and the reviewed, tagged
+`contract-freeze-10` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -22,7 +22,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-9 (reviewed and tagged)
+## Entry gate: contract-freeze-10 (reviewed and tagged)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -104,14 +104,16 @@ reserve-health saturation atomically, and lacked typed stale-policy,
 charge-key-conflict, and result-adjudication identity-collision outcomes. The
 separate
 `2026-08-07-muster-contract-freeze-10-reserve-accounting.md` amendment plan
-defines the required boundary. Task 6 is paused until that amendment is
-independently reviewed, corrected, implemented, and tagged locally as
-`contract-freeze-10`.
+defines the required boundary. Revision 21 adds authoritative reserve-policy
+lifecycle, atomic accounting/health publication, typed replay and conflict
+outcomes, forward-only rollover, retirement recomputation, and adjudication-ID
+collision handling. The amendment is independently reviewed, corrected,
+implemented, and tagged locally as `contract-freeze-10`; Task 6 may resume.
 
 ## Global constraints
 
-- Revision 20 is the active reviewed normative boundary, tagged locally as
-  `contract-freeze-9`. The
+- Revision 21 is the active reviewed normative boundary, tagged locally as
+  `contract-freeze-10`. The
   worker wire version is unchanged. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only after review.
 - `muster-core` keeps exactly one runtime dependency and references no network,
@@ -224,7 +226,7 @@ cover each rejection family and durable replay/conflict behavior.
   absorbing splits per collection cycle. Persist verified decisions and hashes
   atomically; isolate old-cycle evidence after result requeues.
 
-## Task 6: Escalation, adjudication, and invalidation (blocked on contract-freeze-10)
+## Task 6: Escalation, adjudication, and invalidation
 
 - Charge reserves idempotently by lane and enforce urgent fail-closed behavior,
   reserve floors, adjudication capacity, and dispute-requeue caps.
