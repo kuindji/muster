@@ -520,7 +520,7 @@
     "description": "Pending adjudication reads preserve openedAt so oldest-backlog dwell can fail closed.",
     "setup": { "result-adjudication:rr-70": { "state": "pending_result_adjudication", "openedAt": "2026-08-06T00:00:00.000Z" } },
     "conditions": ["adjudication_starved"],
-    "steps": [{ "command": "advanceTime", "args": { "seconds": 3601 }, "expect": { "now": "2026-08-06T01:00:01.000Z" } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
+    "steps": [{ "command": "advanceTime", "args": { "seconds": 3601 }, "expect": { "now": "2026-08-06T01:00:01.000Z" } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
     "expectFinal": { "states": { "class-health:c1": "adjudication_starved" } }
   },
   {
@@ -1051,5 +1051,75 @@
       { "command": "applyResultAdjudicationVerdict", "args": { "requestId": "r32", "decidedAt": "2026-08-07T12:00:00.000Z", "processedAt": "2026-08-07T13:00:00.000Z" }, "expect": { "kind": "freshness_conflict" } }
     ],
     "expectFinal": { "states": { "result:j32:1": "expired" } }
+  },
+  {
+    "id": "capacity-projection-effective-throughput",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Capacity removes canary work and replication overhead from nominal throughput.",
+    "setup": {},
+    "conditions": [],
+    "steps": [{ "command": "refreshQueueMode", "args": { "observedAt": "2026-08-07T14:00:00.000Z", "activeWorkers": 10, "itemsPerBatch": 2, "combinedCanaryAuditFraction": 0.2, "meanReplicationFactor": 2, "minimumEffectiveCapacity": 7, "slotWindow": { "startsAt": "2026-08-07T13:00:00.000Z", "endsAt": "2026-08-07T14:00:00.000Z", "providers": [{ "providerSurface": "provider-a", "expectedArrivals": 1, "observedArrivals": 1 }] } }, "expect": { "capacity": 8, "mode": "normal" } }],
+    "expectFinal": { "states": { "queue": "normal" } }
+  },
+  {
+    "id": "queue-pool-offline-cause-is-durable",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "A closed expected-arrival window with no arrivals halts admission with a durable pool-offline cause.",
+    "setup": {},
+    "conditions": ["admission_halted"],
+    "steps": [{ "command": "refreshQueueMode", "args": { "observedAt": "2026-08-07T14:00:00.000Z", "activeWorkers": 0, "itemsPerBatch": 1, "combinedCanaryAuditFraction": 0, "meanReplicationFactor": 1, "minimumEffectiveCapacity": 1, "slotWindow": { "startsAt": "2026-08-07T13:00:00.000Z", "endsAt": "2026-08-07T14:00:00.000Z", "providers": [{ "providerSurface": "provider-a", "expectedArrivals": 2, "observedArrivals": 0 }] } }, "expect": { "mode": "admission_halted", "cause": "pool_offline" } }],
+    "expectFinal": { "states": { "queue": "admission_halted" }, "events": ["pool_offline"] }
+  },
+  {
+    "id": "queue-operator-halt-never-auto-restores",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Healthy automatic observations cannot replace an operator-owned admission halt.",
+    "setup": { "queue": { "mode": "admission_halted", "cause": "operator", "revision": 2 } },
+    "conditions": ["admission_halted"],
+    "steps": [{ "command": "restoreQueueMode", "args": { "expectedRevision": 2, "at": "2026-08-07T14:00:00.000Z" }, "expect": { "kind": "applied", "mode": "normal" } }],
+    "expectFinal": { "states": { "queue": "normal" } }
+  },
+  {
+    "id": "adjudication-under-capacity-dwell-persists",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Continuous under-capacity time is retained until starvation dwell elapses.",
+    "setup": { "class-health:c1": { "operating": "ready", "revision": 1 }, "adjudication-load:c1": { "revision": 1, "admittedDemand": 2 } },
+    "conditions": ["adjudication_starved"],
+    "steps": [{ "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "starvationDwell": 3600 }, "expect": { "operating": "ready", "unsafeSince": "set" } }, { "command": "advanceTime", "args": { "seconds": 3601 } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 2, "expectedLoadRevision": 1, "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
+    "expectFinal": { "states": { "class-health:c1": "adjudication_starved" } }
+  },
+  {
+    "id": "adjudication-starvation-restore-is-explicit",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Starvation remains sticky until an operator restores it above the higher threshold.",
+    "setup": { "class-health:c1": { "operating": "adjudication_starved", "revision": 2 }, "adjudication-load:c1": { "revision": 2, "admittedDemand": 0 } },
+    "conditions": ["adjudication_starved"],
+    "steps": [{ "command": "restoreClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 2, "expectedLoadRevision": 2, "restoreAbovePerWeek": 3 }, "expect": { "kind": "applied", "operating": "ready" } }],
+    "expectFinal": { "states": { "class-health:c1": "ready" } }
+  },
+  {
+    "id": "privacy-ledger-sensitive-is-hash-only",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Sensitive ledger records refuse bodies and retain hash bindings only.",
+    "setup": {},
+    "conditions": [],
+    "steps": [{ "command": "appendLedger", "args": { "at": "2026-08-07T14:00:00.000Z", "kind": "submit", "outcome": "accepted", "privacy": "sensitive", "hashes": { "result": "rh1" }, "body": { "secret": true } }, "expect": { "kind": "refused", "reason": "privacy_violation" } }],
+    "expectFinal": { "states": { "ledger:submit": "absent" } }
+  },
+  {
+    "id": "audit-contract-transition-detail-is-hash-only",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Contract-transition audit detail is represented by a hash and never a body.",
+    "setup": {},
+    "conditions": [],
+    "steps": [{ "command": "transitionClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "from": "active", "to": "draining" }, "expect": { "event": "contract_transition", "detailHash": "present" } }],
+    "expectFinal": { "events": ["contract_transition"] }
   }
 ]

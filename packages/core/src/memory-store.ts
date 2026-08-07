@@ -1,6 +1,8 @@
 import {
+  canonicalize,
   FAIR_ATTEMPT_TABLE,
   INVALIDATION_RESULT_TARGET,
+  PRIVACY_CLASS_RULES,
   type ActionAdjudicationRequest,
   type ActionAuthorization,
   type AuthorizationInitialReceipt,
@@ -19,6 +21,7 @@ import {
 
 import type {
   AppliedInvalidationOutcome,
+  AdjudicationLoadSnapshot,
   AuthorizationContextSnapshot,
   AuthorizationReserveBatchConflict,
   AuthorizationReserveBatchResult,
@@ -69,7 +72,8 @@ import type {
 
 export interface InMemoryStoreOptions {
   /** Explicit deployment bootstrap; the reference Store never invents it. */
-  readonly initialQueue: Pick<QueueModeSnapshot, "mode" | "updatedAt">;
+  readonly initialQueue: Pick<QueueModeSnapshot, "mode" | "updatedAt"> &
+    Partial<Pick<QueueModeSnapshot, "cause">>;
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -96,6 +100,54 @@ const isChargedMutation = (
   mutation.charge.outcome === "charged";
 const compareWireIds = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
+
+const LEDGER_ENTRY_KEYS = new Set([
+  "at", "kind", "outcome", "privacy", "classId", "job", "workerId",
+  "providerSurface", "contractVersion", "correlationId", "hashes", "body",
+  "descriptors",
+]);
+
+const validLedgerEntry = (entry: unknown): boolean => {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+  const value = entry as Record<string, unknown>;
+  if (!Object.keys(value).every((key) => LEDGER_ENTRY_KEYS.has(key))) return false;
+  if (
+    typeof value.at !== "string" || !Number.isFinite(Date.parse(value.at)) ||
+    typeof value.kind !== "string" || value.kind.length === 0 ||
+    typeof value.outcome !== "string" || value.outcome.length === 0 ||
+    (value.privacy !== "public" && value.privacy !== "internal" &&
+      value.privacy !== "sensitive") ||
+    typeof value.hashes !== "object" || value.hashes === null ||
+    Array.isArray(value.hashes) ||
+    !Object.values(value.hashes).every((hash) =>
+      typeof hash === "string" && hash.length > 0
+    )
+  ) return false;
+  for (const key of [
+    "classId", "workerId", "providerSurface", "contractVersion", "correlationId",
+  ]) {
+    if (value[key] !== undefined &&
+      (typeof value[key] !== "string" || value[key].length === 0)) return false;
+  }
+  if (value.job !== undefined) {
+    if (typeof value.job !== "object" || value.job === null || Array.isArray(value.job)) {
+      return false;
+    }
+    const job = value.job as Record<string, unknown>;
+    if (
+      Object.keys(job).some((key) => key !== "jobId" && key !== "collectionCycle") ||
+      typeof job.jobId !== "string" || job.jobId.length === 0 ||
+      !Number.isSafeInteger(job.collectionCycle) || Number(job.collectionCycle) <= 0
+    ) return false;
+  }
+  try {
+    if (value.body !== undefined) canonicalize(value.body);
+    if (value.descriptors !== undefined) canonicalize(value.descriptors);
+  } catch {
+    return false;
+  }
+  return true;
+};
 
 const pairKey = (left: string, right: string): string =>
   JSON.stringify([left, right]);
@@ -127,6 +179,7 @@ export class InMemoryStore implements Store {
   private permitEpochs = new Map<string, string>();
   private queue!: QueueModeSnapshot;
   private classHealth = new Map<string, ClassHealthSnapshot>();
+  private adjudicationLoadRevisions = new Map<string, number>();
 
   private jobs = new Map<string, JobRecord>();
   private jobCycles = new Map<string, JobRecord>();
@@ -210,6 +263,10 @@ export class InMemoryStore implements Store {
     string,
     OperationalTransitionOutcome<ClassHealthSnapshot>
   >();
+  private healthRefreshHistory = new Map<
+    string,
+    Awaited<ReturnType<Store["refreshClassHealth"]>>
+  >();
   private enqueueHistory = new Map<string, EnqueueOutcome>();
   private claimHistory = new Map<string, ClaimLeaseOutcome>();
   private rejectionHistory = new Map<string, {
@@ -246,6 +303,7 @@ export class InMemoryStore implements Store {
     this.classVersions.clear();
     this.permitEpochs.clear();
     this.classHealth.clear();
+    this.adjudicationLoadRevisions.clear();
     this.jobs.clear();
     this.jobCycles.clear();
     this.payloads.clear();
@@ -277,6 +335,7 @@ export class InMemoryStore implements Store {
     this.queueTransitionHistory.clear();
     this.healthInitialization.clear();
     this.healthTransitionHistory.clear();
+    this.healthRefreshHistory.clear();
     this.enqueueHistory.clear();
     this.claimHistory.clear();
     this.rejectionHistory.clear();
@@ -288,6 +347,7 @@ export class InMemoryStore implements Store {
     this.queue = {
       revision: 1,
       mode: options.initialQueue.mode,
+      cause: options.initialQueue.cause ?? "bootstrap",
       updatedAt: options.initialQueue.updatedAt,
     };
   }
@@ -948,6 +1008,7 @@ export class InMemoryStore implements Store {
       this.queue = {
         revision: this.queue.revision + 1,
         mode: input.next.mode,
+        cause: input.next.cause,
         updatedAt: input.next.updatedAt,
       };
       const outcome: OperationalTransitionOutcome<QueueModeSnapshot> = {
@@ -1011,6 +1072,9 @@ export class InMemoryStore implements Store {
         },
         updatedAt: input.next.updatedAt,
         source: input.next.source,
+        ...(current.adjudicationUnsafeSince === undefined
+          ? {}
+          : { adjudicationUnsafeSince: current.adjudicationUnsafeSince }),
       };
       this.classHealth.set(current.classId, next);
       const outcome: OperationalTransitionOutcome<ClassHealthSnapshot> = {
@@ -1018,6 +1082,62 @@ export class InMemoryStore implements Store {
         current: next,
       };
       this.healthTransitionHistory.set(historyKey, clone(outcome));
+      return clone(outcome);
+    });
+  }
+
+  inspectAdjudicationLoad(
+    input: Parameters<Store["inspectAdjudicationLoad"]>[0],
+  ): ReturnType<Store["inspectAdjudicationLoad"]> {
+    return this.atomicInput(input, (input) =>
+      clone(this.currentAdjudicationLoad(input.classId, input.windowStartsAt))
+    );
+  }
+
+  refreshClassHealth(
+    input: Parameters<Store["refreshClassHealth"]>[0],
+  ): ReturnType<Store["refreshClassHealth"]> {
+    return this.atomicInput(input, (input) => {
+      const historyKey = fingerprint(input);
+      const prior = this.healthRefreshHistory.get(historyKey);
+      if (prior?.kind === "applied") {
+        return clone({ ...prior, kind: "replayed" });
+      }
+      const current = this.classHealth.get(input.expectedHealth.classId);
+      if (current === undefined) {
+        throw new Error(`class ${input.expectedHealth.classId} has no health snapshot`);
+      }
+      const load = this.currentAdjudicationLoad(
+        input.expectedLoad.classId,
+        input.expectedLoad.windowStartsAt,
+      );
+      if (
+        !equal(current, input.expectedHealth) ||
+        !equal(load, input.expectedLoad) ||
+        current.classId !== load.classId
+      ) {
+        return clone({ kind: "conflict", health: current, load });
+      }
+      const next: ClassHealthSnapshot = {
+        revision: current.revision + 1,
+        classId: current.classId,
+        health: {
+          ...clone(input.next.health),
+          reserves: clone(current.health.reserves),
+        },
+        updatedAt: input.next.updatedAt,
+        source: input.next.source,
+        ...(input.next.adjudicationUnsafeSince === undefined
+          ? {}
+          : { adjudicationUnsafeSince: input.next.adjudicationUnsafeSince }),
+      };
+      this.classHealth.set(current.classId, next);
+      const outcome: Awaited<ReturnType<Store["refreshClassHealth"]>> = {
+        kind: "applied",
+        health: next,
+        load,
+      };
+      this.healthRefreshHistory.set(historyKey, clone(outcome));
       return clone(outcome);
     });
   }
@@ -1070,6 +1190,7 @@ export class InMemoryStore implements Store {
       this.queue = {
         revision: this.queue.revision + 1,
         mode: "emergency_halted",
+        cause: input.nextQueue.cause,
         updatedAt: input.nextQueue.updatedAt,
       };
       const nextHealth = input.nextClassHealth.map((next) => {
@@ -1084,6 +1205,9 @@ export class InMemoryStore implements Store {
           },
           updatedAt: next.updatedAt,
           source: next.source,
+          ...(current.adjudicationUnsafeSince === undefined
+            ? {}
+            : { adjudicationUnsafeSince: current.adjudicationUnsafeSince }),
         };
         this.classHealth.set(next.classId, snapshot);
         return snapshot;
@@ -1106,6 +1230,54 @@ export class InMemoryStore implements Store {
       queueRevision: this.queue.revision,
       classHealthRevision: health.revision,
     };
+  }
+
+  private currentAdjudicationLoad(
+    classId: string,
+    windowStartsAt: Timestamp,
+  ): AdjudicationLoadSnapshot {
+    const admittedAt: Timestamp[] = [];
+    const pendingAt: Timestamp[] = [];
+    for (const entry of this.resultAdjudications.values()) {
+      const job = this.jobCycles.get(cycleKey(
+        entry.request.jobId,
+        entry.request.collectionCycle,
+      ));
+      if (job?.classId !== classId) continue;
+      if (entry.openedAt >= windowStartsAt) admittedAt.push(entry.openedAt);
+      if (entry.state === "pending_result_adjudication") {
+        pendingAt.push(entry.openedAt);
+      }
+    }
+    for (const entry of this.actionAdjudications.values()) {
+      const job = this.jobCycles.get(cycleKey(
+        entry.request.jobId,
+        entry.request.collectionCycle,
+      ));
+      if (job?.classId !== classId) continue;
+      if (entry.openedAt >= windowStartsAt) admittedAt.push(entry.openedAt);
+      const status = this.authorizationStatuses.get(
+        entry.request.authorizationRequestId,
+      );
+      if (status?.state === "pending_adjudication") pendingAt.push(entry.openedAt);
+    }
+    pendingAt.sort(compareWireIds);
+    return {
+      revision: this.adjudicationLoadRevisions.get(classId) ?? 0,
+      classId,
+      windowStartsAt,
+      admittedDemand: admittedAt.length,
+      ...(pendingAt[0] === undefined
+        ? {}
+        : { oldestPendingOpenedAt: pendingAt[0] }),
+    };
+  }
+
+  private bumpAdjudicationLoad(classId: string): void {
+    this.adjudicationLoadRevisions.set(
+      classId,
+      (this.adjudicationLoadRevisions.get(classId) ?? 0) + 1,
+    );
   }
 
   private reservePolicyKey(policy: Pick<
@@ -1172,6 +1344,9 @@ export class InMemoryStore implements Store {
       },
       updatedAt: at,
       source: "automatic",
+      ...(current.adjudicationUnsafeSince === undefined
+        ? {}
+        : { adjudicationUnsafeSince: current.adjudicationUnsafeSince }),
     };
     this.classHealth.set(classId, next);
     return next;
@@ -1676,6 +1851,9 @@ export class InMemoryStore implements Store {
         to,
       };
     });
+    if (snapshot.targets.length > 0) {
+      this.bumpAdjudicationLoad(snapshot.scope.classId);
+    }
     for (const plan of requeuePlans) {
       const oldKey = cycleKey(plan.jobId, plan.fromCollectionCycle);
       const oldJob = this.jobCycles.get(oldKey)!;
@@ -2256,6 +2434,7 @@ export class InMemoryStore implements Store {
           openedAt: input.at,
           context: clone(input.expectedContext),
         });
+        this.bumpAdjudicationLoad(currentContext.jobCycle.classId);
       }
       this.coreIdentities.set(input.authorizationRequestId, "authorization_request");
       this.effectIntentRecords.set(input.effectIntent.id, {
@@ -2364,6 +2543,8 @@ export class InMemoryStore implements Store {
       this.resultStates.set(key, "pending_result_adjudication");
       this.coreIdentities.set(input.request.id, "result_adjudication_request");
       this.resultAdjudicationByCycle.set(key, input.request.id);
+      const loadClassId = this.jobCycles.get(key)?.classId;
+      if (loadClassId !== undefined) this.bumpAdjudicationLoad(loadClassId);
       if (settlement.kind === "charged") {
         const charge: ReserveMutation<"charged"> = {
           charge: settlement.charge,
@@ -2554,6 +2735,8 @@ export class InMemoryStore implements Store {
         receipt,
       };
       this.resultAdjudications.set(requestId, adjudication);
+      const loadJob = this.jobCycles.get(key);
+      if (loadJob !== undefined) this.bumpAdjudicationLoad(loadJob.classId);
       this.verdictHistory.set(requestId, {
         input: verdictInput,
         record: {
@@ -2718,6 +2901,11 @@ export class InMemoryStore implements Store {
         kind: "applied",
         receipt,
       };
+      const loadJob = this.jobCycles.get(cycleKey(
+        request.jobId,
+        request.collectionCycle,
+      ));
+      if (loadJob !== undefined) this.bumpAdjudicationLoad(loadJob.classId);
       this.verdictHistory.set(requestId, {
         input: verdictInput,
         record: {
@@ -2877,8 +3065,28 @@ export class InMemoryStore implements Store {
     entry: Parameters<Store["appendLedger"]>[0],
   ): ReturnType<Store["appendLedger"]> {
     return this.atomicInput(entry, (entry) => {
+      if (!validLedgerEntry(entry)) {
+        return { kind: "refused", reason: "invalid_entry" };
+      }
+      const rules = PRIVACY_CLASS_RULES[entry.privacy];
+      if (
+        rules.ledgerBodies === "hash_only" &&
+        (entry.body !== undefined || entry.descriptors !== undefined)
+      ) {
+        return { kind: "refused", reason: "privacy_violation" };
+      }
       this.ledger.push(clone(entry));
+      return { kind: "recorded" };
     });
+  }
+
+  listLedger(
+    input: Parameters<Store["listLedger"]>[0] = {},
+  ): ReturnType<Store["listLedger"]> {
+    return this.atomicInput(input, (input) => clone(this.ledger.filter((entry) =>
+      (input.classId === undefined || entry.classId === input.classId) &&
+      (input.kind === undefined || entry.kind === input.kind)
+    )));
   }
 
   recordReputationEvidence(

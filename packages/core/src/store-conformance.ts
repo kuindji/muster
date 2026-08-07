@@ -493,7 +493,7 @@ const losingClaimIdentityCase: StoreConformanceCase = {
     const queue = await store.getQueueMode();
     const changed = await store.transitionQueueMode({
       expected: queue,
-      next: { mode: "degraded", updatedAt: LATER },
+      next: { mode: "degraded", cause: "capacity", updatedAt: LATER },
     });
     assert(changed.kind === "applied", "queue transition must apply");
     const claim = await store.compareAndClaimLease({
@@ -758,7 +758,7 @@ const canaryPayloadCase: StoreConformanceCase = {
     const queue = await losingStore.getQueueMode();
     const advanced = await losingStore.transitionQueueMode({
       expected: queue,
-      next: { mode: "degraded", updatedAt: LATER },
+      next: { mode: "degraded", cause: "capacity", updatedAt: LATER },
     });
     assert(advanced.kind === "applied", "losing canary setup must advance queue");
     const losingPayloadRef = "lease-losing-canary";
@@ -1499,7 +1499,11 @@ const emergencyCase: StoreConformanceCase = {
     });
     const halt = await store.enterEmergencyHalt({
       expectedQueue: queue,
-      nextQueue: { mode: "emergency_halted", updatedAt: LATER },
+      nextQueue: {
+        mode: "emergency_halted",
+        cause: "emergency",
+        updatedAt: LATER,
+      },
       expectedClassHealth: [health],
       nextClassHealth: [{
         classId: "class-1",
@@ -1839,6 +1843,80 @@ const resultRequeueCase: StoreConformanceCase = {
   },
 };
 
+const healthRefreshLoadRaceCase: StoreConformanceCase = {
+  id: "health-refresh-load-race-fails-closed",
+  run: async (factory) => {
+    const store = await factory();
+    const health = await initializeClass(store);
+    const load = await store.inspectAdjudicationLoad({
+      classId: "class-1",
+      windowStartsAt: NOW,
+    });
+    const stale = await store.refreshClassHealth({
+      expectedHealth: health,
+      expectedLoad: { ...load, revision: load.revision + 1 },
+      next: {
+        health: { operating: "adjudication_starved" },
+        updatedAt: LATER,
+        source: "automatic",
+        adjudicationUnsafeSince: NOW,
+      },
+    });
+    assert(stale.kind === "conflict", "stale load must conflict");
+    assert(
+      stale.health.revision === health.revision &&
+      stale.health.health.operating === "ready",
+      "stale load must not change health",
+    );
+    const marked = await store.refreshClassHealth({
+      expectedHealth: health,
+      expectedLoad: load,
+      next: {
+        health: { operating: "ready" },
+        updatedAt: LATER,
+        source: "automatic",
+        adjudicationUnsafeSince: NOW,
+      },
+    });
+    assert(marked.kind === "applied", "fresh load must permit dwell marker");
+    const policy = await store.initializeReservePolicy({
+      policy: reservePolicy("urgent", 1),
+      at: LATER,
+    });
+    assert(
+      policy.kind === "initialized" &&
+      policy.classHealth.adjudicationUnsafeSince === NOW,
+      "reserve publication must preserve starvation dwell",
+    );
+  },
+};
+
+const privacyLedgerCase: StoreConformanceCase = {
+  id: "privacy-ledger-rejects-sensitive-body",
+  run: async (factory) => {
+    const store = await factory();
+    const refused = await store.appendLedger({
+      at: NOW,
+      kind: "submit",
+      outcome: "accepted",
+      privacy: "sensitive",
+      hashes: { result: "result-hash" },
+      body: { secret: true },
+    });
+    assert(refused.kind === "refused", "sensitive body must be refused");
+    assert((await store.listLedger()).length === 0, "refusal must append nothing");
+    const recorded = await store.appendLedger({
+      at: NOW,
+      kind: "submit",
+      outcome: "accepted",
+      privacy: "sensitive",
+      hashes: { result: "result-hash" },
+    });
+    assert(recorded.kind === "recorded", "hash-only sensitive entry must record");
+    assert((await store.listLedger()).length === 1, "one ledger entry expected");
+  },
+};
+
 export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
   Object.freeze([
     classLifecycleAndEpoch,
@@ -1883,6 +1961,13 @@ export const TASK6_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     reserveLastUnitCase,
     resultAdjudicationCase,
     resultRequeueCase,
+  ]);
+
+export const TASK8_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
+  Object.freeze([
+    ...TASK6_STORE_CONFORMANCE_CASES,
+    healthRefreshLoadRaceCase,
+    privacyLedgerCase,
   ]);
 
 export async function runTask1StoreConformance(
@@ -1938,6 +2023,22 @@ export async function runTask6StoreConformance(
 ): Promise<readonly string[]> {
   const passed: string[] = [];
   for (const testCase of TASK6_STORE_CONFORMANCE_CASES) {
+    try {
+      await testCase.run(factory);
+      passed.push(testCase.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${testCase.id}: ${detail}`, { cause: error });
+    }
+  }
+  return Object.freeze(passed);
+}
+
+export async function runTask8StoreConformance(
+  factory: StoreFactory,
+): Promise<readonly string[]> {
+  const passed: string[] = [];
+  for (const testCase of TASK8_STORE_CONFORMANCE_CASES) {
     try {
       await testCase.run(factory);
       passed.push(testCase.id);

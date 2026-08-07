@@ -1,6 +1,7 @@
 import {
   canTransitionContract,
   canTransitionWorker,
+  hashCanonical,
   isWireId,
 } from "@kuindji/muster-contract";
 import type {
@@ -325,10 +326,10 @@ export class ControlPlaneService {
         to: input.to,
         ...(input.to === "draining"
           ? {
-              detail: {
+              detailHash: await hashCanonical({
                 leaseDisabledAt: at,
                 acceptedUntil: input.acceptedUntil!,
-              },
+              }),
             }
           : {}),
       });

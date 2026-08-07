@@ -16,6 +16,7 @@ import type {
   ClassHealth,
   ContractLifecycleState,
   EffectIntent,
+  PrivacyClass,
   ResultAdjudicationRequest,
   ResultAdjudicationVerdict,
   ResultState,
@@ -119,6 +120,31 @@ export interface AdjudicationSource {
   authenticate(
     verdict: ResultAdjudicationVerdict | ActionAdjudicationVerdict,
   ): boolean;
+}
+
+/** Deployment-owned queue facts consumed by deterministic operations policy. */
+export interface QueueCapacityObservation {
+  readonly observedAt: Timestamp;
+  readonly activeWorkers: number;
+  readonly itemsPerBatch: number;
+  readonly combinedCanaryAuditFraction: number;
+  readonly meanReplicationFactor: number;
+  readonly minimumEffectiveCapacity: number;
+  readonly oldestSlaBreachAt?: Timestamp;
+  readonly slotWindow: {
+    readonly startsAt: Timestamp;
+    readonly endsAt: Timestamp;
+    readonly providers: readonly {
+      readonly providerSurface: string;
+      readonly expectedArrivals: number;
+      readonly observedArrivals: number;
+    }[];
+  };
+}
+
+/** Trusted observation boundary; policy is explicit and contains no job body. */
+export interface OperationsSource {
+  observeQueue(): QueueCapacityObservation;
 }
 
 export type ReputationEvidenceSource =
@@ -456,6 +482,13 @@ export interface QueueModeSnapshot {
   /** Store-owned monotonically increasing comparison token. */
   readonly revision: number;
   readonly mode: QueueMode;
+  readonly cause:
+    | "bootstrap"
+    | "capacity"
+    | "sla"
+    | "pool_offline"
+    | "operator"
+    | "emergency";
   readonly updatedAt: Timestamp;
 }
 
@@ -470,7 +503,41 @@ export interface ClassHealthSnapshot {
   readonly health: FrozenClassHealth;
   readonly updatedAt: Timestamp;
   readonly source: "automatic" | "operator";
+  /** First continuously unsafe capacity/demand observation, if any. */
+  readonly adjudicationUnsafeSince?: Timestamp;
 }
+
+/** Atomic rolling-demand and pending-backlog comparison surface. */
+export interface AdjudicationLoadSnapshot {
+  readonly revision: number;
+  readonly classId: string;
+  readonly windowStartsAt: Timestamp;
+  readonly admittedDemand: number;
+  readonly oldestPendingOpenedAt?: Timestamp;
+}
+
+export interface LedgerEntry {
+  readonly at: Timestamp;
+  readonly kind: string;
+  readonly outcome: string;
+  readonly privacy: PrivacyClass;
+  readonly classId?: string;
+  readonly job?: { readonly jobId: string; readonly collectionCycle: number };
+  readonly workerId?: WorkerId;
+  readonly providerSurface?: string;
+  readonly contractVersion?: string;
+  readonly correlationId?: string;
+  readonly hashes: Readonly<Record<string, string>>;
+  readonly body?: CanonicalJsonValue;
+  readonly descriptors?: CanonicalJsonValue;
+}
+
+export type AppendLedgerOutcome =
+  | { readonly kind: "recorded" }
+  | {
+      readonly kind: "refused";
+      readonly reason: "invalid_entry" | "privacy_violation";
+    };
 
 export interface OperationalStateExpectation {
   readonly queueRevision: number;
@@ -1081,7 +1148,7 @@ export interface Store {
   getQueueMode(): Promise<QueueModeSnapshot>;
   transitionQueueMode(input: {
     expected: QueueModeSnapshot;
-    next: Pick<QueueModeSnapshot, "mode" | "updatedAt">;
+    next: Pick<QueueModeSnapshot, "mode" | "cause" | "updatedAt">;
   }): Promise<OperationalTransitionOutcome<QueueModeSnapshot>>;
   initializeClassHealth(input: {
     initial: Omit<ClassHealthSnapshot, "revision">;
@@ -1094,6 +1161,32 @@ export interface Store {
       health: Readonly<Omit<FrozenClassHealth, "reserves">>;
     };
   }): Promise<OperationalTransitionOutcome<ClassHealthSnapshot>>;
+  inspectAdjudicationLoad(input: {
+    classId: string;
+    windowStartsAt: Timestamp;
+  }): Promise<AdjudicationLoadSnapshot>;
+  refreshClassHealth(input: {
+    expectedHealth: ClassHealthSnapshot;
+    expectedLoad: AdjudicationLoadSnapshot;
+    next: Pick<
+      ClassHealthSnapshot,
+      "updatedAt" | "source" | "adjudicationUnsafeSince"
+    > & {
+      /** Reserve lanes remain accounting-owned. */
+      health: Readonly<Omit<FrozenClassHealth, "reserves">>;
+    };
+  }): Promise<
+    | {
+        kind: "applied" | "replayed";
+        health: ClassHealthSnapshot;
+        load: AdjudicationLoadSnapshot;
+      }
+    | {
+        kind: "conflict";
+        health: ClassHealthSnapshot;
+        load: AdjudicationLoadSnapshot;
+      }
+  >;
   enterEmergencyHalt(input: {
     expectedQueue: QueueModeSnapshot;
     nextQueue: Omit<QueueModeSnapshot, "revision" | "mode"> & {
@@ -1143,11 +1236,11 @@ export interface Store {
     at: Timestamp;
   }): Promise<TransitionReservePolicyOutcome>;
   chargeReserve(charge: ReserveCharge): Promise<ReserveChargeOutcome>;
-  appendLedger(entry: {
-    at: Timestamp;
-    kind: string;
-    detail: CanonicalJsonValue;
-  }): Promise<void>;
+  appendLedger(entry: LedgerEntry): Promise<AppendLedgerOutcome>;
+  listLedger(input?: {
+    classId?: string;
+    kind?: string;
+  }): Promise<LedgerEntry[]>;
   recordReputationEvidence(
     record: ReputationEvidenceRecord,
   ): Promise<ReputationEvidenceOutcome>;

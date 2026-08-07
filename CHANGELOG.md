@@ -1,5 +1,19 @@
 # Changelog
 
+## contract-freeze-12 — reviewed and tagged 2026-08-07
+
+Revision 23 amendment discovered by the first Milestone 2 Task-8 trace. A
+deployment-owned observation port now owns closed queue capacity, SLA, and
+expected-slot arrival facts while core owns the finite effective-throughput
+formula and automatic mode derivation. Queue snapshots persist transition
+causes. Store exposes one revisioned result/action adjudication-load snapshot
+and atomically compares it with persistent unsafe dwell and class health, so
+request races fail closed and starvation restoration remains explicit.
+Privacy-qualified closed ledger records reject sensitive bodies/descriptors,
+and contract-transition audit detail is hash-only. Lifecycle, concurrency,
+compile-time, and reference Store coverage accompany the change. Wire contract
+version remains `1.1.0`; Task 8 runtime operations remain a separate unit.
+
 ## Milestone 2 Task 7 — 2026-08-07
 
 Implemented descriptor-bound, all-actions authorization with canonical intent

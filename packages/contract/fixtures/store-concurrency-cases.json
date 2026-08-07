@@ -214,5 +214,13 @@
   {
     "id": "result-verdict-cutoff-retires-before-transition",
     "description": "A processing-time cutoff materializes invalidation before an overdue first result verdict can resolve, reject, or requeue its cycle."
+  },
+  {
+    "id": "health-refresh-load-race-fails-closed",
+    "description": "A request opening or leaving pending state after load inspection makes class-health refresh conflict without losing dwell or replacing operator state."
+  },
+  {
+    "id": "privacy-ledger-rejects-sensitive-body",
+    "description": "A sensitive ledger append carrying a body or descriptor persists no partial record while a hash-only append succeeds."
   }
 ]

@@ -3,7 +3,6 @@ import {
   type AuthorizationDenialReason,
   type AuthorizationInvalidationReason,
   type AuthorizationRequestState,
-  type CanonicalJsonValue,
   type ClassHealth,
   type ResultAdjudicationRequestState,
   type ResultState,
@@ -201,7 +200,7 @@ export type MusterAuditEvent =
       contractVersion: string;
       from: string;
       to: string;
-      detail?: CanonicalJsonValue;
+      detailHash?: string;
     });
 
 export type MusterEvent = MusterNotification | MusterAuditEvent;

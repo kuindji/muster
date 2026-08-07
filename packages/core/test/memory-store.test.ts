@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { InMemoryStore } from "../src/memory-store.js";
 import {
-  runTask6StoreConformance,
-  TASK6_STORE_CONFORMANCE_CASES,
+  runTask8StoreConformance,
+  TASK8_STORE_CONFORMANCE_CASES,
 } from "../src/store-conformance.js";
 import {
   ManualClock,
@@ -21,10 +21,10 @@ const createStore = (): InMemoryStore => new InMemoryStore({
   initialQueue: { mode: "normal", updatedAt: now },
 });
 
-describe("M2 Task 6 reference Store boundary", () => {
-  it("passes the reusable Store conformance suite through adjudication", async () => {
-    const passed = await runTask6StoreConformance(createStore);
-    expect(passed).toEqual(TASK6_STORE_CONFORMANCE_CASES.map((entry) => entry.id));
+describe("M2 Task 8 reference Store boundary", () => {
+  it("passes the reusable Store conformance suite through operations", async () => {
+    const passed = await runTask8StoreConformance(createStore);
+    expect(passed).toEqual(TASK8_STORE_CONFORMANCE_CASES.map((entry) => entry.id));
   });
 
   it("binds every conformance case to a frozen fixture identity", () => {
@@ -32,7 +32,7 @@ describe("M2 Task 6 reference Store boundary", () => {
       ...REQUIRED_CONCURRENCY_CASE_IDS,
       ...REQUIRED_LIFECYCLE_FIXTURE_IDS,
     ]);
-    for (const testCase of TASK6_STORE_CONFORMANCE_CASES) {
+    for (const testCase of TASK8_STORE_CONFORMANCE_CASES) {
       expect(frozen.has(testCase.id), testCase.id).toBe(true);
     }
   });
@@ -55,6 +55,7 @@ describe("M2 Task 6 reference Store boundary", () => {
     expect(await store.getQueueMode()).toEqual({
       revision: 1,
       mode: "degraded",
+      cause: "bootstrap",
       updatedAt: "2026-08-06T17:00:00.000Z",
     });
   });

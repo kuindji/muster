@@ -20,6 +20,7 @@ export const LIFECYCLE_FIXTURE_AREAS = deepFreeze([
   "identity",
   "routing",
   "operational_state",
+  "operations_observability",
   "lease_bounds",
   "reserve_policy",
   "fixture_coverage",
@@ -51,6 +52,7 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "rollReserveWindow",
   "registerWorker",
   "registerClassVersion",
+  "transitionClassVersion",
   "transitionWorkerState",
   "transitionWorkerRouting",
   "recordNoWorkAttempt",
@@ -59,6 +61,10 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "transitionReservePolicy",
   "chargeReserve",
   "refreshClassHealth",
+  "refreshQueueMode",
+  "restoreQueueMode",
+  "restoreClassHealth",
+  "appendLedger",
   "recordReputationEvidence",
   "listLeaseCandidates",
   "compareAndClaimLease",
@@ -320,6 +326,65 @@ export const REVISION_22_COMMAND_ARGUMENT_KEYS = deepFreeze({
   },
 } as const);
 
+/** Closed lifecycle command shapes added by revision 23. */
+export const REVISION_23_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  refreshQueueMode: {
+    required: [
+      "observedAt",
+      "activeWorkers",
+      "itemsPerBatch",
+      "combinedCanaryAuditFraction",
+      "meanReplicationFactor",
+      "minimumEffectiveCapacity",
+      "slotWindow",
+    ],
+    allowed: [
+      "observedAt",
+      "activeWorkers",
+      "itemsPerBatch",
+      "combinedCanaryAuditFraction",
+      "meanReplicationFactor",
+      "minimumEffectiveCapacity",
+      "oldestSlaBreachAt",
+      "slotWindow",
+    ],
+  },
+  restoreQueueMode: {
+    required: ["expectedRevision", "at"],
+    allowed: ["expectedRevision", "at"],
+  },
+  refreshClassHealth: {
+    required: ["classId", "expectedHealthRevision", "expectedLoadRevision"],
+    allowed: [
+      "classId",
+      "expectedHealthRevision",
+      "expectedLoadRevision",
+      "starvationDwell",
+    ],
+  },
+  restoreClassHealth: {
+    required: ["classId", "expectedHealthRevision", "expectedLoadRevision"],
+    allowed: [
+      "classId",
+      "expectedHealthRevision",
+      "expectedLoadRevision",
+      "restoreAbovePerWeek",
+    ],
+  },
+  appendLedger: {
+    required: ["at", "kind", "outcome", "privacy", "hashes"],
+    allowed: [
+      "at",
+      "kind",
+      "outcome",
+      "privacy",
+      "hashes",
+      "body",
+      "descriptors",
+    ],
+  },
+} as const);
+
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
 );
@@ -405,6 +470,8 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "action-verdict-vs-invalidation-single-winner",
   "result-verdict-vs-invalidation-single-winner",
   "result-verdict-cutoff-retires-before-transition",
+  "health-refresh-load-race-fails-closed",
+  "privacy-ledger-rejects-sensitive-body",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -512,6 +579,13 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "verdict-replay-precedes-runtime-and-freshness",
   "authorization-cutoff-retires-before-new-intent",
   "verdict-processing-time-cannot-be-backdated",
+  "capacity-projection-effective-throughput",
+  "queue-pool-offline-cause-is-durable",
+  "queue-operator-halt-never-auto-restores",
+  "adjudication-under-capacity-dwell-persists",
+  "adjudication-starvation-restore-is-explicit",
+  "privacy-ledger-sensitive-is-hash-only",
+  "audit-contract-transition-detail-is-hash-only",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -607,6 +681,11 @@ export function isLifecycleFixture(
     if (!isRecord(step.args)) return false;
     const args = step.args;
     const closedShape = (
+      REVISION_23_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
       REVISION_22_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];

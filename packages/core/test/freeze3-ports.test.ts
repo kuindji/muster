@@ -201,6 +201,7 @@ describe("revision-14 M2-entry port freeze", () => {
     const expectedQueue: QueueModeSnapshot = {
       revision: 1,
       mode: "normal",
+      cause: "bootstrap",
       updatedAt: now,
     };
     const expectedHealth: ClassHealthSnapshot = {
@@ -223,6 +224,7 @@ describe("revision-14 M2-entry port freeze", () => {
       expectedQueue,
       nextQueue: {
         mode: "emergency_halted",
+        cause: "emergency",
         updatedAt: now,
       },
       expectedClassHealth: [expectedHealth],

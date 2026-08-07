@@ -1,13 +1,13 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 22)
+**Date:** 2026-08-04 (revision 23)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 11 implements
-the live authorization-context, atomic composite-reserve, processing-time, and
-early verdict-replay boundary and is independently reviewed and corrected.
-The reviewed boundary is tagged locally as `contract-freeze-11`; Milestone 2
-Task 7 may resume in a separate implementation unit.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 12 defines
+the Task-8 operations-observation, starvation, queue-cause, and privacy-safe
+ledger boundary and is independently reviewed and corrected. The reviewed
+boundary is tagged locally as `contract-freeze-12`; Task 8 runtime work resumes
+in a separate implementation unit.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -243,6 +243,18 @@ is readable before runtime, freshness, and terminal-state checks so an exact
 lost-response retry remains byte-identical. These are contract corrections;
 revision 22 does not implement the Task-7 action-gate evaluator or change the
 worker wire.
+
+Revision 23 closes four Task-8 ownership gaps. A deployment-owned
+`OperationsSource` now supplies one closed queue observation; core validates it
+and owns the effective-capacity formula and mode derivation. Queue snapshots
+retain a cause, so `pool_offline` cannot be emitted for an operator pause.
+Store exposes one revisioned rolling adjudication-load snapshot and atomically
+compares it with class health, including the continuous unsafe-dwell marker;
+automatic starvation and explicit higher-threshold restoration therefore
+cannot race a newly opened or resolved request. Finally, ledger entries are
+closed, privacy-qualified records, and audit contract transitions carry only a
+detail hash. These are contract corrections only; revision 23 implements no
+Task-8 runtime service, retention deletion, or worker-wire change.
 
 ## 1. What Muster is
 
@@ -1687,6 +1699,16 @@ stays below `requiredRatePerWeek` or rolling admitted demand exceeds reported
 supply for `starvationDwell`, or when the oldest pending review itself exceeds
 `starvationDwell`. A fresh supply assertion cannot hide an aging backlog.
 
+The Store exposes that demand as one `AdjudicationLoadSnapshot`, combining
+result and action requests opened in the requested rolling window and the
+oldest request still pending. Its revision advances whenever either request
+kind opens or leaves pending state. `ClassHealthSnapshot` retains
+`adjudicationUnsafeSince`; `refreshClassHealth` compares both complete
+snapshots before changing either the operating dimension or that marker.
+Automatic refresh never replaces an operator-owned admission/emergency halt
+and never restores `adjudication_starved`. Explicit restoration uses the same
+atomic comparison and the higher `restoreAbovePerWeek` threshold.
+
 | Dimension | Meaning and intake effect |
 |---|---|
 | `operating: 'ready'` | Normal for the operating dimension |
@@ -2018,6 +2040,16 @@ read-only. Context, reserve-policy, reserve-key, and freshness conflicts are
 typed no-change outcomes. No new field enters an MCP message, effect intent,
 verdict, receipt, or authorization hash.
 
+Revision 23 adds `QueueCapacityObservation`, `OperationsSource`,
+`AdjudicationLoadSnapshot`, and `LedgerEntry`. Queue observations contain only
+aggregate worker/capacity/arrival facts and no job or payload body. Store owns
+the adjudication-load revision and compares it with the complete expected
+class-health snapshot in `refreshClassHealth`; reserve lanes remain
+accounting-owned. `QueueModeSnapshot.cause` is mandatory. `appendLedger`
+rejects privacy-invalid body or descriptor retention and `listLedger` returns
+immutable records for conformance and adapter export. No new field enters an
+MCP message or wire hash.
+
 ### 6.7 `OracleSpec`
 
 `JsonPath` has exactly three productions: `$` is the payload or result root,
@@ -2261,10 +2293,22 @@ Probation counts **checked** successes only.
 ### 6.12 Capacity and degraded modes
 
 `projectCapacity({ W, B, q, R_avg })` returns effective, not nominal,
-throughput: `W` active workers, `B` items per batch, `q` the combined canary
-and audit fraction, `R_avg` the mean replication factor derived from configured
-targets plus measured split-evidence reroutes. Canary and replicated runs
-produce no net output by design.
+throughput as `W * B * (1 - q) / R_avg`: `W` is a finite non-negative active
+worker count, `B` is a finite positive items-per-batch value, `q` is the finite
+combined canary/audit fraction in `[0, 1)`, and `R_avg` is a finite value at
+least one derived from configured targets plus measured split-evidence
+reroutes. Canary and replicated runs produce no net output by design. Invalid
+inputs fail closed rather than producing `NaN`, infinity, or negative capacity.
+
+A deployment-owned `OperationsSource` returns one timestamped closed
+observation containing those four inputs, the minimum effective-capacity
+threshold, the oldest already-breached SLA timestamp if any, and a closed slot
+window with per-provider expected and observed arrivals. Core derives
+`degraded` for an SLA breach or below-threshold projection. It derives
+pool-offline `admission_halted` only after the observation window closed, at
+least one arrival was expected, and none arrived. A queue snapshot retains the
+cause. Automatic refresh cannot overwrite an operator or emergency cause, and
+recovery from an admission halt is explicit.
 
 | Mode | Condition | Behaviour |
 |---|---|---|
@@ -2319,6 +2363,12 @@ then the class rule and operator-configured retention duration apply. Once a
 `sensitive` body has been reduced to hash-only storage it cannot be reconstructed
 for later human re-examination. Lawful-basis and duration decisions are the
 consumer's.
+
+Core submits only closed, privacy-qualified `LedgerEntry` records. Every entry
+contains hash bindings and may additionally contain a body or descriptor only
+when the class rule permits ledger retention. Store refuses a sensitive entry
+that contains either. `contract_transition` audit detail is represented only
+by `detailHash`; arbitrary canonical detail is not part of the audit union.
 
 ## 8. Trust model as tests
 
@@ -2588,6 +2638,10 @@ independently reviewed, corrected, and tagged `contract-freeze-10`.
 Revision 22 implements the Task-7 authorization boundary correction and is
 independently reviewed, corrected, and tagged `contract-freeze-11`.
 
+Revision 23 implements the Task-8 operations and observability boundary
+correction and is independently reviewed, corrected, and tagged
+`contract-freeze-12`.
+
 ### 11.2 Contract-freeze amendment 2
 
 Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
@@ -2780,7 +2834,32 @@ effect-intent and verdict shapes, action tables, consumer error codes, and the
 trusted-consumer effect boundary remain unchanged. M2 Task 7 resumes only from
 an independently reviewed commit tagged `contract-freeze-11`.
 
-### 11.12 Open
+### 11.12 Contract-freeze amendment 12: operations and observability
+
+Revision 23 is complete only when queue observations have one explicit trusted
+owner, effective capacity is exactly `W * B * (1 - q) / R_avg`, malformed or
+non-finite inputs fail closed, and durable queue causes distinguish capacity,
+SLA, pool-offline, operator, and emergency transitions. Automatic refresh may
+move only between normal/degraded or into a truthful pool-offline admission
+halt; admission and emergency halts require explicit operator restoration.
+
+Adjudication load must combine result and action requests, retain rolling
+admitted demand and oldest pending age, and advance one Store-owned revision on
+every open or terminal transition. Health refresh compares that load with the
+complete class-health snapshot and retains `adjudicationUnsafeSince` across the
+dwell. Automatic refresh never clears starvation. Explicit restoration
+requires fresh capacity strictly above `restoreAbovePerWeek`, demand coverage,
+and a pending age below `starvationDwell`.
+
+Ledger records carry their `PrivacyClass`, hashes, and any optional bodies or
+descriptors through a closed type. Sensitive records reject bodies and
+descriptors; internal records may retain bodies only in the ledger; public
+records may retain and notify both. Every audit event remains body- and
+descriptor-free; contract transition detail is hash-only. The amendment changes
+only internal core/Store/events/fixtures, leaves the worker wire at `1.1.0`,
+and is reviewed before the local `contract-freeze-12` tag.
+
+### 11.13 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

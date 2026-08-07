@@ -239,6 +239,7 @@ describe("M2 Task 4 enqueue", () => {
       expected: queue,
       next: {
         mode: "admission_halted",
+        cause: "operator",
         updatedAt: "2026-08-07T08:02:00.000Z",
       },
     });
