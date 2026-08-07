@@ -226,7 +226,7 @@ cover each rejection family and durable replay/conflict behavior.
   absorbing splits per collection cycle. Persist verified decisions and hashes
   atomically; isolate old-cycle evidence after result requeues.
 
-## Task 6: Escalation, adjudication, and invalidation
+## Task 6: Escalation, adjudication, and invalidation (complete 2026-08-07)
 
 - Charge reserves idempotently by lane and enforce urgent fail-closed behavior,
   reserve floors, adjudication capacity, and dispute-requeue caps.

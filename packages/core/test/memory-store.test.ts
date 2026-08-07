@@ -4,13 +4,10 @@ import {
 } from "@kuindji/muster-contract";
 import { describe, expect, it } from "vitest";
 
+import { InMemoryStore } from "../src/memory-store.js";
 import {
-  InMemoryStore,
-  StoreOperationNotImplementedError,
-} from "../src/memory-store.js";
-import {
-  runTask5StoreConformance,
-  TASK5_STORE_CONFORMANCE_CASES,
+  runTask6StoreConformance,
+  TASK6_STORE_CONFORMANCE_CASES,
 } from "../src/store-conformance.js";
 import {
   ManualClock,
@@ -24,10 +21,10 @@ const createStore = (): InMemoryStore => new InMemoryStore({
   initialQueue: { mode: "normal", updatedAt: now },
 });
 
-describe("M2 Task 5 reference Store boundary", () => {
-  it("passes the reusable Store conformance suite through submission settlement", async () => {
-    const passed = await runTask5StoreConformance(createStore);
-    expect(passed).toEqual(TASK5_STORE_CONFORMANCE_CASES.map((entry) => entry.id));
+describe("M2 Task 6 reference Store boundary", () => {
+  it("passes the reusable Store conformance suite through adjudication", async () => {
+    const passed = await runTask6StoreConformance(createStore);
+    expect(passed).toEqual(TASK6_STORE_CONFORMANCE_CASES.map((entry) => entry.id));
   });
 
   it("binds every conformance case to a frozen fixture identity", () => {
@@ -35,7 +32,7 @@ describe("M2 Task 5 reference Store boundary", () => {
       ...REQUIRED_CONCURRENCY_CASE_IDS,
       ...REQUIRED_LIFECYCLE_FIXTURE_IDS,
     ]);
-    for (const testCase of TASK5_STORE_CONFORMANCE_CASES) {
+    for (const testCase of TASK6_STORE_CONFORMANCE_CASES) {
       expect(frozen.has(testCase.id), testCase.id).toBe(true);
     }
   });
@@ -96,15 +93,6 @@ describe("M2 Task 5 reference Store boundary", () => {
       .toEqual(["en"]);
   });
 
-  it("fails explicitly for Store slices owned by later M2 tasks", async () => {
-    const store = createStore();
-    await expect(store.authorizeOrReplayIntent({} as never)).rejects.toEqual(
-      expect.objectContaining<Partial<StoreOperationNotImplementedError>>({
-        name: "StoreOperationNotImplementedError",
-        operation: "authorizeOrReplayIntent",
-      }),
-    );
-  });
 });
 
 describe("deterministic Task 1 test ports", () => {

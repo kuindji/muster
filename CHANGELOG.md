@@ -1,5 +1,19 @@
 # Changelog
 
+## Milestone 2 Task 6 — 2026-08-07
+
+Implemented authoritative reserve installation, transition, forward rollover,
+idempotent charge settlement, atomic reserve-health publication, final-unit
+races, per-worker quotas, and urgent fail-closed authorization persistence in
+the reference Store. Added authenticated result and human-only action verdict
+services with canonical hashes, exact replay/conflict behavior, observable
+backlog timestamps, bounded rejected-dispute requeues, and capacity freshness
+signals. Class-qualified invalidation now closes affected leases, transitions
+pending requests, invalidates issued authorization validity without rewriting
+initial receipts, performs emergency epoch withdrawal atomically, and computes
+a distinct input hash for every new cycle. The reusable Store conformance suite
+now runs through Task 6; Task 7 action-gate evaluation is next.
+
 ## contract-freeze-10 — reviewed and tagged 2026-08-07
 
 Revision 21 amendment discovered by the first Milestone 2 Task-6 runtime trace.

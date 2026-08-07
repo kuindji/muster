@@ -1,8 +1,16 @@
 import {
   FAIR_ATTEMPT_TABLE,
   INVALIDATION_RESULT_TARGET,
+  type ActionAdjudicationRequest,
+  type ActionAuthorization,
+  type AuthorizationInitialReceipt,
   type AuthorizationInvalidationReason,
+  type AuthorizationRequestState,
+  type AuthorizationStatus,
   type CanonicalJsonValue,
+  type EffectIntent,
+  type ResultAdjudicationRequest,
+  type ResultAdjudicationRequestState,
   type ResultState,
   type SubmissionEvidence,
   type Timestamp,
@@ -34,12 +42,17 @@ import type {
   PermitEpochTransition,
   PermitEpochTransitionOutcome,
   QueueModeSnapshot,
+  ReserveChargeRecord,
+  ReserveMutation,
+  ReservePolicyRecord,
+  ReservePolicySnapshot,
   ReputationEvidenceRecord,
   RejectSubmissionOutcome,
   RegisterClassVersionOutcome,
   RegisterWorkerOutcome,
   Store,
   TransitionOutcome,
+  VerdictOutcome,
   WorkerRecord,
   WorkerRegistration,
   WorkerRoutingSnapshot,
@@ -51,13 +64,6 @@ import type {
 export interface InMemoryStoreOptions {
   /** Explicit deployment bootstrap; the reference Store never invents it. */
   readonly initialQueue: Pick<QueueModeSnapshot, "mode" | "updatedAt">;
-}
-
-export class StoreOperationNotImplementedError extends Error {
-  constructor(readonly operation: keyof Store) {
-    super(`${String(operation)} is scheduled for a later M2 task`);
-    this.name = "StoreOperationNotImplementedError";
-  }
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -78,11 +84,17 @@ const normalized = (value: unknown): unknown => {
 const fingerprint = (value: unknown): string => JSON.stringify(normalized(value));
 const equal = (left: unknown, right: unknown): boolean =>
   fingerprint(left) === fingerprint(right);
+const isChargedMutation = (
+  mutation: ReserveMutation<"charged"> | ReserveMutation<"exhausted">,
+): mutation is ReserveMutation<"charged"> =>
+  mutation.charge.outcome === "charged";
 const compareWireIds = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
 const pairKey = (left: string, right: string): string =>
   JSON.stringify([left, right]);
+const tripleKey = (first: string, second: string, third: string): string =>
+  JSON.stringify([first, second, third]);
 const cycleKey = (jobId: string, collectionCycle: number): string =>
   JSON.stringify([jobId, collectionCycle]);
 
@@ -127,6 +139,47 @@ export class InMemoryStore implements Store {
   private resultStates = new Map<string, ResultState>();
   private decisions = new Map<string, DecisionResultRecord>();
   private reputationEvidence = new Map<string, ReputationEvidenceRecord>();
+  private reservePolicies = new Map<string, ReservePolicyRecord>();
+  private reserveWindowHistory = new Map<string, Set<string>>();
+  private reserveCharges = new Map<
+    string,
+    ReserveMutation<"charged"> | ReserveMutation<"exhausted">
+  >();
+  private resultAdjudications = new Map<
+    string,
+    {
+      request: ResultAdjudicationRequest;
+      openedAt: Timestamp;
+      state: ResultAdjudicationRequestState;
+      charge: ReserveMutation<"charged"> | ReserveMutation<"exhausted">;
+    }
+  >();
+  private resultAdjudicationByCycle = new Map<string, string>();
+  private actionAdjudications = new Map<
+    string,
+    { request: ActionAdjudicationRequest; openedAt: Timestamp }
+  >();
+  private authorizationStatuses = new Map<string, AuthorizationStatus>();
+  private authorizations = new Map<string, ActionAuthorization>();
+  private initialReceipts = new Map<string, AuthorizationInitialReceipt>();
+  private effectIntentRecords = new Map<
+    string,
+    {
+      input: string;
+      authorizationRequestId: string;
+      effectIntent: EffectIntent;
+      effectIntentHash: string;
+      decisionResultHash: string;
+    }
+  >();
+  private verdictHistory = new Map<
+    string,
+    {
+      input: string;
+      outcome: Extract<VerdictOutcome, { kind: "applied" }>;
+    }
+  >();
+  private ledger: Array<Parameters<Store["appendLedger"]>[0]> = [];
 
   private classTransitionHistory = new Map<string, ContractTransitionOutcome>();
   private permitTransitionHistory = new Map<string, PermitEpochTransitionOutcome>();
@@ -157,6 +210,14 @@ export class InMemoryStore implements Store {
     string,
     Awaited<ReturnType<Store["enterEmergencyHalt"]>>
   >();
+  private reserveInitializationHistory = new Map<
+    string,
+    Awaited<ReturnType<Store["initializeReservePolicy"]>>
+  >();
+  private reserveTransitionHistory = new Map<
+    string,
+    Awaited<ReturnType<Store["transitionReservePolicy"]>>
+  >();
 
   constructor(options: InMemoryStoreOptions) {
     this.initialize(options);
@@ -184,6 +245,18 @@ export class InMemoryStore implements Store {
     this.resultStates.clear();
     this.decisions.clear();
     this.reputationEvidence.clear();
+    this.reservePolicies.clear();
+    this.reserveWindowHistory.clear();
+    this.reserveCharges.clear();
+    this.resultAdjudications.clear();
+    this.resultAdjudicationByCycle.clear();
+    this.actionAdjudications.clear();
+    this.authorizationStatuses.clear();
+    this.authorizations.clear();
+    this.initialReceipts.clear();
+    this.effectIntentRecords.clear();
+    this.verdictHistory.clear();
+    this.ledger = [];
     this.classTransitionHistory.clear();
     this.permitTransitionHistory.clear();
     this.workerTransitionHistory.clear();
@@ -198,6 +271,8 @@ export class InMemoryStore implements Store {
     this.splitHistory.clear();
     this.invalidationHistory.clear();
     this.emergencyHistory.clear();
+    this.reserveInitializationHistory.clear();
+    this.reserveTransitionHistory.clear();
     this.queue = {
       revision: 1,
       mode: options.initialQueue.mode,
@@ -217,10 +292,6 @@ export class InMemoryStore implements Store {
   ): Promise<Output> {
     const captured = clone(input);
     return this.atomic(() => operation(captured));
-  }
-
-  private unsupported<T>(operation: keyof Store): Promise<T> {
-    return Promise.reject(new StoreOperationNotImplementedError(operation));
   }
 
   getWorker(workerId: WorkerId): Promise<WorkerRecord | null> {
@@ -394,10 +465,10 @@ export class InMemoryStore implements Store {
       if (current.state !== input.from) {
         return { kind: "state_conflict", actual: current.state };
       }
-      const retirementHealth = input.to === "retired"
+      const currentHealth = input.to === "retired"
         ? this.classHealth.get(input.classId)
         : undefined;
-      if (input.to === "retired" && retirementHealth === undefined) {
+      if (input.to === "retired" && currentHealth === undefined) {
         throw new Error(`class ${input.classId} has no health snapshot`);
       }
       const record: ClassVersionRecord = {
@@ -411,6 +482,9 @@ export class InMemoryStore implements Store {
           : { acceptedUntil: input.acceptedUntil }),
       };
       this.classVersions.set(key, record);
+      const retirementHealth = record.state === "retired"
+        ? this.publishReserveHealth(input.classId, input.at)
+        : undefined;
       const outcome: ContractTransitionOutcome = record.state === "retired"
         ? {
             kind: "applied",
@@ -753,9 +827,55 @@ export class InMemoryStore implements Store {
   }
 
   transitionResult(
-    _input: Parameters<Store["transitionResult"]>[0],
+    input: Parameters<Store["transitionResult"]>[0],
   ): Promise<TransitionOutcome> {
-    return this.unsupported("transitionResult");
+    return this.atomicInput(input, (input) => {
+      const key = cycleKey(input.jobId, input.collectionCycle);
+      const actual = this.resultStates.get(key);
+      if (actual !== input.from) {
+        return { ok: false, actual: actual ?? input.from };
+      }
+      const job = this.jobCycles.get(key);
+      if (job === undefined) return { ok: false, actual: input.from };
+      let next: JobRecord | undefined;
+      if (input.startNewCycle !== undefined) {
+        const nextCycle = input.collectionCycle + 1;
+        const nextKey = cycleKey(input.jobId, nextCycle);
+        if (
+          this.jobCycles.has(nextKey) ||
+          input.startNewCycle.permitEpoch.length === 0 ||
+          input.startNewCycle.inputHash.length === 0
+        ) return { ok: false, actual };
+        next = {
+          ...job,
+          collectionCycle: nextCycle,
+          permitEpoch: input.startNewCycle.permitEpoch,
+          inputHash: input.startNewCycle.inputHash,
+          cycleStartedAt: input.startNewCycle.cycleStartedAt,
+        };
+      }
+      const attempts = this.attempts.get(key);
+      for (const leaseId of [...(attempts?.openLeaseIds ?? [])]) {
+        const lease = this.leases.get(leaseId);
+        if (lease !== undefined && lease.open) this.closeLeaseAttempt(lease, true);
+      }
+      this.resultStates.set(key, input.to);
+      if (next !== undefined) {
+        const nextKey = cycleKey(next.jobId, next.collectionCycle);
+        this.jobs.set(next.jobId, next);
+        this.jobCycles.set(nextKey, next);
+        this.resultStates.set(nextKey, "collecting");
+        this.candidateRevisions.set(nextKey, 1);
+        this.attempts.set(nextKey, {
+          attemptCount: 0,
+          openLeaseIds: [],
+          acceptedWorkerIds: [],
+          acceptedDiversity: [],
+          splitObserved: false,
+        });
+      }
+      return { ok: true };
+    });
   }
 
   inspectInvalidationScope(scope: InvalidationScope): Promise<InvalidationSnapshot> {
@@ -976,6 +1096,153 @@ export class InMemoryStore implements Store {
     };
   }
 
+  private reservePolicyKey(policy: Pick<
+    ReservePolicySnapshot,
+    "classId" | "contractVersion" | "lane"
+  >): string {
+    return tripleKey(policy.classId, policy.contractVersion, policy.lane);
+  }
+
+  private validReservePolicy(policy: ReservePolicySnapshot): boolean {
+    const start = Date.parse(policy.windowStartsAt);
+    const end = Date.parse(policy.windowEndsAt);
+    return policy.classId.length > 0 &&
+      policy.contractVersion.length > 0 &&
+      policy.policyVersion.length > 0 &&
+      policy.windowId.length > 0 &&
+      Number.isFinite(start) &&
+      Number.isFinite(end) &&
+      start < end &&
+      Number.isSafeInteger(policy.laneLimit) &&
+      policy.laneLimit >= 0 &&
+      (policy.lane === "lowCost" || policy.lane === "urgent"
+        ? Number.isSafeInteger(policy.perWorkerLimit) &&
+          policy.perWorkerLimit >= 0
+        : policy.perWorkerLimit === undefined);
+  }
+
+  private publishReserveHealth(
+    classId: string,
+    at: Timestamp,
+  ): ClassHealthSnapshot {
+    const current = this.classHealth.get(classId);
+    if (current === undefined) {
+      throw new Error(`class ${classId} has no health snapshot`);
+    }
+    const reserves: {
+      lowCost: "available" | "saturated";
+      urgent: "available" | "saturated";
+      splitAndAdjudication: "available" | "saturated";
+      audit: "available" | "saturated";
+    } = {
+      lowCost: "available",
+      urgent: "available",
+      splitAndAdjudication: "available",
+      audit: "available",
+    };
+    for (const record of this.reservePolicies.values()) {
+      if (record.policy.classId !== classId) continue;
+      const version = this.classVersions.get(pairKey(
+        classId,
+        record.policy.contractVersion,
+      ));
+      if (version === undefined || version.state === "retired") continue;
+      if (record.used >= record.policy.laneLimit) {
+        reserves[record.policy.lane] = "saturated";
+      }
+    }
+    const next: ClassHealthSnapshot = {
+      revision: current.revision + 1,
+      classId,
+      health: {
+        ...clone(current.health),
+        reserves,
+      },
+      updatedAt: at,
+      source: "automatic",
+    };
+    this.classHealth.set(classId, next);
+    return next;
+  }
+
+  private settleReserve(
+    charge: Parameters<Store["chargeReserve"]>[0],
+  ): Awaited<ReturnType<Store["chargeReserve"]>> {
+    const existing = this.reserveCharges.get(charge.chargeKey);
+    if (existing !== undefined) {
+      const sameSemanticInput = equal(existing.charge.charge.policy, charge.policy) &&
+        equal(existing.charge.charge.workerIds, charge.workerIds);
+      if (!sameSemanticInput) {
+        return clone({
+          kind: "reserve_charge_conflict",
+          existingCharge: existing.charge,
+        });
+      }
+      return isChargedMutation(existing)
+        ? clone({ kind: "charged", status: "replayed", ...existing })
+        : clone({ kind: "exhausted", status: "replayed", ...existing });
+    }
+
+    const key = this.reservePolicyKey(charge.policy);
+    const current = this.reservePolicies.get(key);
+    if (current === undefined || !equal(current.policy, charge.policy)) {
+      return clone({
+        kind: "reserve_policy_conflict",
+        currentPolicy: current ?? null,
+      });
+    }
+
+    const classCapacity = current.used < current.policy.laneLimit;
+    let perWorkerCapacity = true;
+    if (current.policy.lane === "lowCost" || current.policy.lane === "urgent") {
+      const perWorkerLimit = current.policy.perWorkerLimit;
+      perWorkerCapacity = charge.workerIds.every((workerId) =>
+        (current.workerUsage.find((usage) => usage.workerId === workerId)?.used ?? 0) <
+          perWorkerLimit
+      );
+    }
+    const outcome = classCapacity && perWorkerCapacity ? "charged" : "exhausted";
+    const firstCharge = clone(charge);
+    let nextPolicy = current;
+    if (outcome === "charged") {
+      const usage = new Map(
+        current.workerUsage.map((entry) => [entry.workerId, entry.used]),
+      );
+      if (current.policy.lane === "lowCost" || current.policy.lane === "urgent") {
+        for (const workerId of charge.workerIds) {
+          usage.set(workerId, (usage.get(workerId) ?? 0) + 1);
+        }
+      }
+      nextPolicy = {
+        revision: current.revision + 1,
+        policy: clone(current.policy),
+        used: current.used + 1,
+        workerUsage: [...usage.entries()]
+          .sort(([left], [right]) => compareWireIds(left, right))
+          .map(([workerId, used]) => ({ workerId, used })),
+        updatedAt: charge.at,
+      };
+      this.reservePolicies.set(key, nextPolicy);
+    }
+    const classHealth = this.publishReserveHealth(charge.policy.classId, charge.at);
+    if (outcome === "charged") {
+      const mutation: ReserveMutation<"charged"> = {
+        charge: { charge: firstCharge, outcome },
+        currentPolicy: nextPolicy,
+        classHealth,
+      };
+      this.reserveCharges.set(charge.chargeKey, clone(mutation));
+      return clone({ kind: "charged", status: "applied", ...mutation });
+    }
+    const mutation: ReserveMutation<"exhausted"> = {
+      charge: { charge: firstCharge, outcome },
+      currentPolicy: nextPolicy,
+      classHealth,
+    };
+    this.reserveCharges.set(charge.chargeKey, clone(mutation));
+    return clone({ kind: "exhausted", status: "applied", ...mutation });
+  }
+
   private currentCandidate(jobId: string): LeaseCandidateSnapshot | null {
     const job = this.jobs.get(jobId);
     if (job === undefined) return null;
@@ -1123,12 +1390,70 @@ export class InMemoryStore implements Store {
     snapshot: InvalidationSnapshot,
     reason: AuthorizationInvalidationReason,
     requeuePlans: CycleRequeuePlan[],
-    _at: Timestamp,
+    at: Timestamp,
     epochTransition?: PermitEpochTransition,
   ): AppliedInvalidationOutcome {
     const to = INVALIDATION_RESULT_TARGET[reason];
+    const authorizationTarget = to as Extract<
+      AuthorizationRequestState,
+      "expired" | "superseded" | "cancelled"
+    >;
+    const authorizationTransitions: AppliedInvalidationOutcome["authorizationTransitions"] = [];
+    const invalidatedAuthorizations: AppliedInvalidationOutcome["invalidatedAuthorizations"] = [];
     const resultTransitions = snapshot.targets.map((target) => {
-      this.resultStates.set(cycleKey(target.jobId, target.collectionCycle), to);
+      const key = cycleKey(target.jobId, target.collectionCycle);
+      const attempts = this.attempts.get(key);
+      for (const leaseId of [...(attempts?.openLeaseIds ?? [])]) {
+        const lease = this.leases.get(leaseId);
+        if (lease !== undefined && lease.open) this.closeLeaseAttempt(lease, true);
+      }
+      this.resultStates.set(key, to);
+      const resultRequestId = this.resultAdjudicationByCycle.get(key);
+      if (resultRequestId !== undefined) {
+        const request = this.resultAdjudications.get(resultRequestId);
+        if (request?.state === "pending_result_adjudication") {
+          request.state = to as ResultAdjudicationRequestState;
+          this.resultAdjudications.set(resultRequestId, request);
+        }
+      }
+      for (const [authorizationRequestId, pending] of this.actionAdjudications) {
+        if (
+          pending.request.jobId !== target.jobId ||
+          pending.request.collectionCycle !== target.collectionCycle
+        ) continue;
+        const status = this.authorizationStatuses.get(authorizationRequestId);
+        if (status?.state === "pending_adjudication") {
+          this.authorizationStatuses.set(authorizationRequestId, {
+            state: authorizationTarget,
+          });
+          authorizationTransitions.push({
+            authorizationRequestId,
+            from: "pending_adjudication",
+            to: authorizationTarget,
+          });
+        }
+      }
+      for (const [authorizationRequestId, authorization] of this.authorizations) {
+        if (
+          authorization.jobId !== target.jobId ||
+          authorization.collectionCycle !== target.collectionCycle
+        ) continue;
+        const status = this.authorizationStatuses.get(authorizationRequestId);
+        if (status?.state === "authorized" && status.validity.kind === "valid") {
+          this.authorizationStatuses.set(authorizationRequestId, {
+            state: "authorized",
+            validity: { kind: "invalid", reason, invalidatedAt: at },
+          });
+          const job = this.jobCycles.get(key);
+          invalidatedAuthorizations.push({
+            authorizationRequestId,
+            classId: job?.classId ?? snapshot.scope.classId,
+            jobId: target.jobId,
+            collectionCycle: target.collectionCycle,
+            reason,
+          });
+        }
+      }
       return {
         jobId: target.jobId,
         collectionCycle: target.collectionCycle,
@@ -1165,8 +1490,8 @@ export class InMemoryStore implements Store {
     return clone({
       kind: "applied",
       resultTransitions,
-      authorizationTransitions: [],
-      invalidatedAuthorizations: [],
+      authorizationTransitions,
+      invalidatedAuthorizations,
       newCycles: requeuePlans,
       ...(epochTransition === undefined ? {} : { epochTransition }),
     });
@@ -1538,99 +1863,708 @@ export class InMemoryStore implements Store {
   }
 
   authorizeOrReplayIntent(
-    _input: Parameters<Store["authorizeOrReplayIntent"]>[0],
+    input: Parameters<Store["authorizeOrReplayIntent"]>[0],
   ): ReturnType<Store["authorizeOrReplayIntent"]> {
-    return this.unsupported("authorizeOrReplayIntent");
+    return this.atomicInput(input, (input) => {
+      const semantic = {
+        authorizationRequestId: input.authorizationRequestId,
+        effectIntent: input.effectIntent,
+        effectIntentHash: input.effectIntentHash,
+        decisionResultHash: input.decisionResultHash,
+        decision: input.decision.kind === "deny"
+          ? input.decision
+          : {
+              ...input.decision,
+              ...(input.decision.charge === undefined
+                ? {}
+                : {
+                    charge: {
+                      ...input.decision.charge,
+                      at: undefined,
+                    },
+                  }),
+            },
+      };
+      const existing = this.effectIntentRecords.get(input.effectIntent.id);
+      if (existing !== undefined) {
+        const receipt = this.initialReceipts.get(input.effectIntent.id);
+        if (receipt === undefined) throw new Error("missing initial receipt");
+        return existing.input === fingerprint(semantic)
+          ? clone({ kind: "replayed", initialReceipt: receipt })
+          : { kind: "conflict" };
+      }
+      if (this.coreIdentities.has(input.authorizationRequestId)) {
+        return { kind: "conflict" };
+      }
+      const durableDecision = this.decisions.get(input.decisionResultHash);
+      if (durableDecision === undefined) return { kind: "conflict" };
+
+      let reserve:
+        | ReserveMutation<"charged">
+        | ReserveMutation<"exhausted">
+        | undefined;
+      if (input.decision.kind !== "deny" && input.decision.charge !== undefined) {
+        const settlement = this.settleReserve(input.decision.charge);
+        if (
+          settlement.kind === "reserve_charge_conflict" ||
+          settlement.kind === "reserve_policy_conflict"
+        ) return settlement;
+        reserve = settlement.kind === "charged"
+          ? {
+              charge: settlement.charge,
+              currentPolicy: settlement.currentPolicy,
+              classHealth: settlement.classHealth,
+            }
+          : {
+              charge: settlement.charge,
+              currentPolicy: settlement.currentPolicy,
+              classHealth: settlement.classHealth,
+            };
+      }
+      if (input.decision.kind === "pend" && reserve === undefined) {
+        throw new Error("pending adjudication requires a reserve charge");
+      }
+
+      let receipt: AuthorizationInitialReceipt;
+      if (input.decision.kind === "deny") {
+        receipt = {
+          authorizationRequestId: input.authorizationRequestId,
+          effectIntentId: input.effectIntent.id,
+          effectIntentHash: input.effectIntentHash,
+          jobId: durableDecision.jobId,
+          collectionCycle: durableDecision.collectionCycle,
+          decisionResultHash: input.decisionResultHash,
+          at: input.at,
+          outcome: "denied",
+          denialReason: input.decision.reason,
+        };
+        this.authorizationStatuses.set(input.authorizationRequestId, {
+          state: "denied",
+          reason: input.decision.reason,
+        });
+      } else if (input.decision.kind === "authorize" && reserve?.charge.outcome === "exhausted") {
+        receipt = {
+          authorizationRequestId: input.authorizationRequestId,
+          effectIntentId: input.effectIntent.id,
+          effectIntentHash: input.effectIntentHash,
+          jobId: durableDecision.jobId,
+          collectionCycle: durableDecision.collectionCycle,
+          decisionResultHash: input.decisionResultHash,
+          at: input.at,
+          outcome: "denied",
+          denialReason: "escalation_budget_exhausted",
+        };
+        this.authorizationStatuses.set(input.authorizationRequestId, {
+          state: "denied",
+          reason: "escalation_budget_exhausted",
+        });
+      } else if (input.decision.kind === "authorize") {
+        receipt = {
+          authorizationRequestId: input.authorizationRequestId,
+          effectIntentId: input.effectIntent.id,
+          effectIntentHash: input.effectIntentHash,
+          jobId: durableDecision.jobId,
+          collectionCycle: durableDecision.collectionCycle,
+          decisionResultHash: input.decisionResultHash,
+          at: input.at,
+          outcome: "authorized",
+          authorization: clone(input.decision.authorization),
+        };
+        this.authorizationStatuses.set(input.authorizationRequestId, {
+          state: "authorized",
+          validity: { kind: "valid" },
+        });
+        this.authorizations.set(
+          input.authorizationRequestId,
+          clone(input.decision.authorization),
+        );
+      } else {
+        receipt = {
+          authorizationRequestId: input.authorizationRequestId,
+          effectIntentId: input.effectIntent.id,
+          effectIntentHash: input.effectIntentHash,
+          jobId: durableDecision.jobId,
+          collectionCycle: durableDecision.collectionCycle,
+          decisionResultHash: input.decisionResultHash,
+          at: input.at,
+          outcome: "pending_adjudication",
+        };
+        this.authorizationStatuses.set(input.authorizationRequestId, {
+          state: "pending_adjudication",
+        });
+        this.actionAdjudications.set(input.authorizationRequestId, {
+          request: clone(input.decision.request),
+          openedAt: input.at,
+        });
+      }
+      this.coreIdentities.set(input.authorizationRequestId, "authorization_request");
+      this.effectIntentRecords.set(input.effectIntent.id, {
+        input: fingerprint(semantic),
+        authorizationRequestId: input.authorizationRequestId,
+        effectIntent: clone(input.effectIntent),
+        effectIntentHash: input.effectIntentHash,
+        decisionResultHash: input.decisionResultHash,
+      });
+      this.initialReceipts.set(input.effectIntent.id, clone(receipt));
+      if (reserve === undefined) {
+        return clone({
+          kind: "applied",
+          initialReceipt: receipt as Exclude<
+            AuthorizationInitialReceipt,
+            Extract<AuthorizationInitialReceipt, { outcome: "pending_adjudication" }>
+          >,
+        });
+      }
+      if (isChargedMutation(reserve)) {
+        const chargedReserve: ReserveMutation<"charged"> = reserve;
+        return clone({
+          kind: "applied",
+          initialReceipt: receipt as Extract<
+            AuthorizationInitialReceipt,
+            { outcome: "authorized" | "pending_adjudication" }
+          >,
+          reserve: chargedReserve,
+        });
+      }
+      const exhaustedReserve: ReserveMutation<"exhausted"> = reserve;
+      return clone({
+        kind: "applied",
+        initialReceipt: receipt as
+          | Extract<AuthorizationInitialReceipt, { outcome: "pending_adjudication" }>
+          | (Omit<
+              Extract<AuthorizationInitialReceipt, { outcome: "denied" }>,
+              "denialReason"
+            > & { denialReason: "escalation_budget_exhausted" }),
+        reserve: exhaustedReserve,
+      });
+    });
   }
 
   getAuthorizationStatus(
-    _authorizationRequestId: string,
+    authorizationRequestId: string,
   ): ReturnType<Store["getAuthorizationStatus"]> {
-    return this.unsupported("getAuthorizationStatus");
+    return this.atomic(() => clone(
+      this.authorizationStatuses.get(authorizationRequestId) ?? null,
+    ));
   }
 
   getInitialReceipt(
-    _effectIntentId: string,
+    effectIntentId: string,
   ): ReturnType<Store["getInitialReceipt"]> {
-    return this.unsupported("getInitialReceipt");
+    return this.atomic(() => clone(this.initialReceipts.get(effectIntentId) ?? null));
   }
 
   getAuthorization(
-    _authorizationRequestId: string,
+    authorizationRequestId: string,
   ): ReturnType<Store["getAuthorization"]> {
-    return this.unsupported("getAuthorization");
+    return this.atomic(() => clone(
+      this.authorizations.get(authorizationRequestId) ?? null,
+    ));
   }
 
   openResultAdjudication(
-    _input: Parameters<Store["openResultAdjudication"]>[0],
+    input: Parameters<Store["openResultAdjudication"]>[0],
   ): ReturnType<Store["openResultAdjudication"]> {
-    return this.unsupported("openResultAdjudication");
+    return this.atomicInput(input, (input) => {
+      const existing = this.resultAdjudications.get(input.request.id);
+      if (existing !== undefined) {
+        const same = equal(existing.request, input.request) &&
+          equal(
+            {
+              ...existing.charge.charge.charge,
+              at: undefined,
+            },
+            { ...input.charge, at: undefined },
+          );
+        if (!same) return { kind: "identity_conflict" };
+        return isChargedMutation(existing.charge)
+          ? clone({
+              kind: "replayed",
+              original: "opened_charged",
+              openedAt: existing.openedAt,
+              ...existing.charge,
+            })
+          : clone({
+              kind: "replayed",
+              original: "opened_uncovered",
+              openedAt: existing.openedAt,
+              ...existing.charge,
+            });
+      }
+      if (this.coreIdentities.has(input.request.id)) {
+        return { kind: "identity_conflict" };
+      }
+      const key = cycleKey(
+        input.resultTransition.jobId,
+        input.resultTransition.collectionCycle,
+      );
+      const job = this.jobCycles.get(key);
+      if (
+        job === undefined ||
+        input.request.jobId !== input.resultTransition.jobId ||
+        input.request.collectionCycle !== input.resultTransition.collectionCycle ||
+        input.request.inputHash !== job.inputHash ||
+        input.request.contractVersion !== job.contractVersion ||
+        input.request.permitEpoch !== job.permitEpoch
+      ) {
+        return {
+          kind: "state_conflict",
+          actual: this.resultStates.get(key) ?? input.resultTransition.from,
+        };
+      }
+      const actual = this.resultStates.get(key);
+      if (actual !== input.resultTransition.from) {
+        return { kind: "state_conflict", actual: actual ?? input.resultTransition.from };
+      }
+      const existingCycleRequest = this.resultAdjudicationByCycle.get(key);
+      if (existingCycleRequest !== undefined) {
+        return { kind: "state_conflict", actual };
+      }
+      const settlement = this.settleReserve(input.charge);
+      if (
+        settlement.kind === "reserve_charge_conflict" ||
+        settlement.kind === "reserve_policy_conflict"
+      ) return settlement;
+      const openedAt = input.resultTransition.at;
+      this.resultStates.set(key, "pending_result_adjudication");
+      this.coreIdentities.set(input.request.id, "result_adjudication_request");
+      this.resultAdjudicationByCycle.set(key, input.request.id);
+      if (settlement.kind === "charged") {
+        const charge: ReserveMutation<"charged"> = {
+          charge: settlement.charge,
+          currentPolicy: settlement.currentPolicy,
+          classHealth: settlement.classHealth,
+        };
+        this.resultAdjudications.set(input.request.id, {
+          request: clone(input.request),
+          openedAt,
+          state: "pending_result_adjudication",
+          charge,
+        });
+        return clone({ kind: "opened_charged", openedAt, ...charge });
+      }
+      const charge: ReserveMutation<"exhausted"> = {
+        charge: settlement.charge,
+        currentPolicy: settlement.currentPolicy,
+        classHealth: settlement.classHealth,
+      };
+      this.resultAdjudications.set(input.request.id, {
+        request: clone(input.request),
+        openedAt,
+        state: "pending_result_adjudication",
+        charge,
+      });
+      return clone({ kind: "opened_uncovered", openedAt, ...charge });
+    });
   }
 
   getResultAdjudicationRequest(
-    _id: string,
+    id: string,
   ): ReturnType<Store["getResultAdjudicationRequest"]> {
-    return this.unsupported("getResultAdjudicationRequest");
+    return this.atomic(() => clone(this.resultAdjudications.get(id)?.request ?? null));
   }
 
   listPendingResultAdjudications(
-    _classId: string,
+    classId: string,
   ): ReturnType<Store["listPendingResultAdjudications"]> {
-    return this.unsupported("listPendingResultAdjudications");
+    return this.atomic(() => clone([...this.resultAdjudications.values()]
+      .filter((entry) => {
+        if (entry.state !== "pending_result_adjudication") return false;
+        const job = this.jobCycles.get(cycleKey(
+          entry.request.jobId,
+          entry.request.collectionCycle,
+        ));
+        return job?.classId === classId;
+      })
+      .map(({ request, openedAt }) => ({ request, openedAt }))
+      .sort((left, right) =>
+        compareWireIds(left.openedAt, right.openedAt) ||
+        compareWireIds(left.request.id, right.request.id)
+      )));
   }
 
   applyResultAdjudicationVerdict(
-    _input: Parameters<Store["applyResultAdjudicationVerdict"]>[0],
+    input: Parameters<Store["applyResultAdjudicationVerdict"]>[0],
   ): ReturnType<Store["applyResultAdjudicationVerdict"]> {
-    return this.unsupported("applyResultAdjudicationVerdict");
+    return this.atomicInput(input, (input) => {
+      const requestId = input.verdict.resultAdjudicationRequestId;
+      const verdictInput = fingerprint({
+        verdict: input.verdict,
+        verdictHash: input.verdictHash,
+        at: input.at,
+      });
+      const prior = this.verdictHistory.get(requestId);
+      if (prior !== undefined) {
+        return prior.input === verdictInput
+          ? clone({ kind: "replayed", receipt: prior.outcome.receipt })
+          : { kind: "conflict" };
+      }
+      const adjudication = this.resultAdjudications.get(requestId);
+      if (adjudication === undefined ||
+        adjudication.state !== "pending_result_adjudication") {
+        return { kind: "terminal" };
+      }
+      const request = adjudication.request;
+      const verdictMatches =
+        input.verdict.reason === request.reason &&
+        input.verdict.jobId === request.jobId &&
+        input.verdict.collectionCycle === request.collectionCycle &&
+        input.verdict.inputHash === request.inputHash &&
+        equal(input.verdict.candidateResultHashes, request.candidateResultHashes) &&
+        equal(input.verdict.evidence, request.evidence) &&
+        input.verdict.contractVersion === request.contractVersion &&
+        input.verdict.permitEpoch === request.permitEpoch &&
+        input.verdict.decidedAt === input.at &&
+        input.verdict.decision.kind === input.decision;
+      if (!verdictMatches) return { kind: "conflict" };
+      const key = cycleKey(request.jobId, request.collectionCycle);
+      if (this.resultStates.get(key) !== "pending_result_adjudication") {
+        return { kind: "terminal" };
+      }
+
+      let receipt: Extract<VerdictOutcome, { kind: "applied" }>["receipt"];
+      if (input.decision === "resolve") {
+        const resolved = input.resolved;
+        if (
+          resolved.jobId !== request.jobId ||
+          resolved.collectionCycle !== request.collectionCycle ||
+          resolved.inputHash !== request.inputHash ||
+          resolved.contractVersion !== request.contractVersion ||
+          resolved.permitEpoch !== request.permitEpoch ||
+          resolved.resultAdjudicationVerdictHash !== input.verdictHash ||
+          !equal(resolved.evidence, request.evidence) ||
+          this.decisions.has(resolved.decisionResultHash)
+        ) return { kind: "conflict" };
+        this.decisions.set(resolved.decisionResultHash, clone(resolved));
+        this.resultStates.set(key, "verified");
+        adjudication.state = "resolved";
+        receipt = {
+          requestId,
+          verdictHash: input.verdictHash,
+          decidedAt: input.at,
+          outcome: "resolved",
+        };
+      } else {
+        const job = this.jobCycles.get(key);
+        if (job === undefined) return { kind: "terminal" };
+        const requeue = job.rejectedDisputeRequeues < input.onReject.cap;
+        if (requeue) {
+          if (
+            input.onReject.newCycleEpoch.length === 0 ||
+            input.onReject.newCycleInputHash.length === 0
+          ) return { kind: "conflict" };
+          const nextCycle = job.collectionCycle + 1;
+          const nextKey = cycleKey(job.jobId, nextCycle);
+          if (this.jobCycles.has(nextKey)) return { kind: "conflict" };
+          this.resultStates.set(key, "rejected");
+          adjudication.state = "rejected";
+          const next: JobRecord = {
+            ...job,
+            collectionCycle: nextCycle,
+            permitEpoch: input.onReject.newCycleEpoch,
+            inputHash: input.onReject.newCycleInputHash,
+            cycleStartedAt: input.onReject.cycleStartedAt,
+            rejectedDisputeRequeues: job.rejectedDisputeRequeues + 1,
+          };
+          this.jobs.set(job.jobId, next);
+          this.jobCycles.set(nextKey, next);
+          this.resultStates.set(nextKey, "collecting");
+          this.candidateRevisions.set(nextKey, 1);
+          this.attempts.set(nextKey, {
+            attemptCount: 0,
+            openLeaseIds: [],
+            acceptedWorkerIds: [],
+            acceptedDiversity: [],
+            splitObserved: false,
+          });
+        } else {
+          this.resultStates.set(key, "rejected");
+          adjudication.state = "rejected";
+        }
+        receipt = {
+          requestId,
+          verdictHash: input.verdictHash,
+          decidedAt: input.at,
+          outcome: "rejected",
+          rejectOutcome: requeue ? "requeued" : "cap_exhausted",
+        };
+      }
+      const outcome: Extract<VerdictOutcome, { kind: "applied" }> = {
+        kind: "applied",
+        receipt,
+      };
+      this.resultAdjudications.set(requestId, adjudication);
+      this.verdictHistory.set(requestId, { input: verdictInput, outcome: clone(outcome) });
+      return clone(outcome);
+    });
   }
 
   getActionAdjudicationRequest(
-    _authorizationRequestId: string,
+    authorizationRequestId: string,
   ): ReturnType<Store["getActionAdjudicationRequest"]> {
-    return this.unsupported("getActionAdjudicationRequest");
+    return this.atomic(() => clone(
+      this.actionAdjudications.get(authorizationRequestId)?.request ?? null,
+    ));
   }
 
   listPendingActionAdjudications(
-    _classId: string,
+    classId: string,
   ): ReturnType<Store["listPendingActionAdjudications"]> {
-    return this.unsupported("listPendingActionAdjudications");
+    return this.atomic(() => clone([...this.actionAdjudications.values()]
+      .filter((entry) => {
+        const status = this.authorizationStatuses.get(
+          entry.request.authorizationRequestId,
+        );
+        const job = this.jobCycles.get(cycleKey(
+          entry.request.jobId,
+          entry.request.collectionCycle,
+        ));
+        return status?.state === "pending_adjudication" && job?.classId === classId;
+      })
+      .sort((left, right) =>
+        compareWireIds(left.openedAt, right.openedAt) ||
+        compareWireIds(
+          left.request.authorizationRequestId,
+          right.request.authorizationRequestId,
+        )
+      )));
   }
 
   applyActionAdjudicationVerdict(
-    _input: Parameters<Store["applyActionAdjudicationVerdict"]>[0],
+    input: Parameters<Store["applyActionAdjudicationVerdict"]>[0],
   ): ReturnType<Store["applyActionAdjudicationVerdict"]> {
-    return this.unsupported("applyActionAdjudicationVerdict");
+    return this.atomicInput(input, (input) => {
+      const requestId = input.verdict.authorizationRequestId;
+      const verdictInput = fingerprint({
+        verdict: input.verdict,
+        verdictHash: input.verdictHash,
+        at: input.at,
+      });
+      const prior = this.verdictHistory.get(requestId);
+      if (prior !== undefined) {
+        return prior.input === verdictInput
+          ? clone({ kind: "replayed", receipt: prior.outcome.receipt })
+          : { kind: "conflict" };
+      }
+      const pending = this.actionAdjudications.get(requestId);
+      const status = this.authorizationStatuses.get(requestId);
+      if (pending === undefined || status?.state !== "pending_adjudication") {
+        return { kind: "terminal" };
+      }
+      const request = pending.request;
+      const verdictMatches =
+        input.verdict.jobId === request.jobId &&
+        input.verdict.collectionCycle === request.collectionCycle &&
+        input.verdict.effectIntentId === request.effectIntent.id &&
+        input.verdict.effectIntentHash === request.effectIntentHash &&
+        input.verdict.inputHash === request.inputHash &&
+        input.verdict.decisionResultHash === request.decisionResultHash &&
+        equal(input.verdict.evidence, request.evidence) &&
+        input.verdict.resultAdjudicationVerdictHash ===
+          request.resultAdjudicationVerdictHash &&
+        input.verdict.contractVersion === request.contractVersion &&
+        input.verdict.permitEpoch === request.permitEpoch &&
+        input.verdict.decidedAt === input.at &&
+        input.verdict.decision === input.decision;
+      if (!verdictMatches) return { kind: "conflict" };
+
+      const receipt = input.decision === "approve"
+        ? {
+            requestId,
+            verdictHash: input.verdictHash,
+            decidedAt: input.at,
+            outcome: "approved" as const,
+          }
+        : {
+            requestId,
+            verdictHash: input.verdictHash,
+            decidedAt: input.at,
+            outcome: "denied" as const,
+          };
+      if (input.decision === "approve") {
+        const authorization = input.authorization;
+        if (
+          authorization.authorizationRequestId !== requestId ||
+          authorization.effectIntentId !== request.effectIntent.id ||
+          authorization.effectIntentHash !== request.effectIntentHash ||
+          authorization.jobId !== request.jobId ||
+          authorization.collectionCycle !== request.collectionCycle ||
+          authorization.inputHash !== request.inputHash ||
+          authorization.decisionResultHash !== request.decisionResultHash ||
+          !equal(authorization.evidence, request.evidence) ||
+          authorization.resultAdjudicationVerdictHash !==
+            request.resultAdjudicationVerdictHash ||
+          authorization.actionAdjudicationVerdictHash !== input.verdictHash ||
+          authorization.contractVersion !== request.contractVersion ||
+          authorization.permitEpoch !== request.permitEpoch ||
+          !equal(authorization.actions, input.verdict.actions)
+        ) return { kind: "conflict" };
+        this.authorizations.set(requestId, clone(authorization));
+        this.authorizationStatuses.set(requestId, {
+          state: "authorized",
+          validity: { kind: "valid" },
+        });
+      } else {
+        this.authorizationStatuses.set(requestId, {
+          state: "denied",
+          reason: "human_rejected",
+        });
+      }
+      const outcome: Extract<VerdictOutcome, { kind: "applied" }> = {
+        kind: "applied",
+        receipt,
+      };
+      this.verdictHistory.set(requestId, { input: verdictInput, outcome: clone(outcome) });
+      return clone(outcome);
+    });
   }
 
   chargeReserve(
-    _charge: Parameters<Store["chargeReserve"]>[0],
+    charge: Parameters<Store["chargeReserve"]>[0],
   ): ReturnType<Store["chargeReserve"]> {
-    return this.unsupported("chargeReserve");
+    return this.atomicInput(charge, (charge) => this.settleReserve(charge));
   }
 
   getReservePolicy(
-    _input: Parameters<Store["getReservePolicy"]>[0],
+    input: Parameters<Store["getReservePolicy"]>[0],
   ): ReturnType<Store["getReservePolicy"]> {
-    return this.unsupported("getReservePolicy");
+    return this.atomicInput(input, (input) => clone(
+      this.reservePolicies.get(this.reservePolicyKey(input)) ?? null,
+    ));
   }
 
   initializeReservePolicy(
-    _input: Parameters<Store["initializeReservePolicy"]>[0],
+    input: Parameters<Store["initializeReservePolicy"]>[0],
   ): ReturnType<Store["initializeReservePolicy"]> {
-    return this.unsupported("initializeReservePolicy");
+    return this.atomicInput(input, (input) => {
+      const key = this.reservePolicyKey(input.policy);
+      const existing = this.reservePolicies.get(key);
+      const prior = this.reserveInitializationHistory.get(key);
+      if (
+        prior?.kind === "initialized" &&
+        equal(prior.current.policy, input.policy)
+      ) {
+        return clone({ ...prior, kind: "replayed" });
+      }
+      if (existing !== undefined) {
+        return clone({ kind: "conflict", current: existing });
+      }
+      const version = this.classVersions.get(pairKey(
+        input.policy.classId,
+        input.policy.contractVersion,
+      ));
+      if (version === undefined) {
+        return { kind: "refused", reason: "class_version_not_found" };
+      }
+      if (version.state === "retired") {
+        return { kind: "refused", reason: "class_version_retired" };
+      }
+      if (!this.classHealth.has(input.policy.classId)) {
+        return { kind: "refused", reason: "class_health_missing" };
+      }
+      if (!this.validReservePolicy(input.policy)) {
+        return { kind: "refused", reason: "invalid_policy" };
+      }
+      const current: ReservePolicyRecord = {
+        revision: 1,
+        policy: clone(input.policy),
+        used: 0,
+        workerUsage: [],
+        updatedAt: input.at,
+      };
+      this.reservePolicies.set(key, current);
+      this.reserveWindowHistory.set(key, new Set([input.policy.windowId]));
+      const classHealth = this.publishReserveHealth(input.policy.classId, input.at);
+      const outcome: Awaited<ReturnType<Store["initializeReservePolicy"]>> = {
+        kind: "initialized",
+        current,
+        classHealth,
+      };
+      this.reserveInitializationHistory.set(key, clone(outcome));
+      return clone(outcome);
+    });
   }
 
   transitionReservePolicy(
-    _input: Parameters<Store["transitionReservePolicy"]>[0],
+    input: Parameters<Store["transitionReservePolicy"]>[0],
   ): ReturnType<Store["transitionReservePolicy"]> {
-    return this.unsupported("transitionReservePolicy");
+    return this.atomicInput(input, (input) => {
+      const replayKey = fingerprint({ expected: input.expected, next: input.next });
+      const prior = this.reserveTransitionHistory.get(replayKey);
+      if (prior?.kind === "applied") {
+        return clone({ ...prior, kind: "replayed" });
+      }
+      const key = this.reservePolicyKey(input.expected.policy);
+      const current = this.reservePolicies.get(key);
+      if (current === undefined || !equal(current, input.expected)) {
+        if (current === undefined) {
+          throw new Error(`reserve policy ${key} is missing`);
+        }
+        return clone({ kind: "conflict", current });
+      }
+      const version = this.classVersions.get(pairKey(
+        input.next.classId,
+        input.next.contractVersion,
+      ));
+      if (version?.state === "retired") {
+        return { kind: "refused", reason: "class_version_retired" };
+      }
+      if (!this.classHealth.has(input.next.classId)) {
+        return { kind: "refused", reason: "class_health_missing" };
+      }
+      if (
+        !this.validReservePolicy(input.next) ||
+        this.reservePolicyKey(input.next) !== key
+      ) {
+        return { kind: "refused", reason: "invalid_policy" };
+      }
+      const sameWindow = input.next.windowId === current.policy.windowId;
+      if (
+        sameWindow &&
+        (
+          input.next.windowStartsAt !== current.policy.windowStartsAt ||
+          input.next.windowEndsAt !== current.policy.windowEndsAt
+        )
+      ) {
+        return { kind: "refused", reason: "window_not_forward" };
+      }
+      const history = this.reserveWindowHistory.get(key) ?? new Set<string>();
+      if (
+        !sameWindow &&
+        (
+          history.has(input.next.windowId) ||
+          Date.parse(input.next.windowStartsAt) < Date.parse(current.policy.windowEndsAt)
+        )
+      ) {
+        return { kind: "refused", reason: "window_not_forward" };
+      }
+      const next: ReservePolicyRecord = {
+        revision: current.revision + 1,
+        policy: clone(input.next),
+        used: sameWindow ? current.used : 0,
+        workerUsage: sameWindow ? clone(current.workerUsage) : [],
+        updatedAt: input.at,
+      };
+      this.reservePolicies.set(key, next);
+      history.add(input.next.windowId);
+      this.reserveWindowHistory.set(key, history);
+      const classHealth = this.publishReserveHealth(input.next.classId, input.at);
+      const outcome: Awaited<ReturnType<Store["transitionReservePolicy"]>> = {
+        kind: "applied",
+        current: next,
+        classHealth,
+      };
+      this.reserveTransitionHistory.set(replayKey, clone(outcome));
+      return clone(outcome);
+    });
   }
 
   appendLedger(
-    _entry: Parameters<Store["appendLedger"]>[0],
+    entry: Parameters<Store["appendLedger"]>[0],
   ): ReturnType<Store["appendLedger"]> {
-    return this.unsupported("appendLedger");
+    return this.atomicInput(entry, (entry) => {
+      this.ledger.push(clone(entry));
+    });
   }
 
   recordReputationEvidence(

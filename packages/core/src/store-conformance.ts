@@ -1,10 +1,14 @@
-import type { ClassHealth } from "@kuindji/muster-contract";
+import type {
+  ClassHealth,
+  ResultAdjudicationRequest,
+} from "@kuindji/muster-contract";
 
 import type {
   ClassHealthSnapshot,
   JobRecord,
   LeaseCandidateSnapshot,
   LeaseRecord,
+  ReservePolicySnapshot,
   Store,
   WorkerRegistration,
   WorkerRoutingSnapshot,
@@ -219,6 +223,32 @@ const enqueue = async (
   assert(candidate !== undefined, `${jobId} candidate must be readable`);
   return candidate;
 };
+
+const reservePolicy = (
+  lane: ReservePolicySnapshot["lane"] = "splitAndAdjudication",
+  laneLimit = 1,
+): ReservePolicySnapshot => lane === "lowCost" || lane === "urgent"
+  ? {
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      policyVersion: "reserve-policy-1",
+      windowId: "2026-W32",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane,
+      laneLimit,
+      perWorkerLimit: 1,
+    }
+  : {
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      policyVersion: "reserve-policy-1",
+      windowId: "2026-W32",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane,
+      laneLimit,
+    };
 
 const classLifecycleAndEpoch: StoreConformanceCase = {
   id: "class-version-schema-digest-conflict",
@@ -1515,6 +1545,284 @@ const emergencyCase: StoreConformanceCase = {
   },
 };
 
+const reservePolicyLifecycleCase: StoreConformanceCase = {
+  id: "reserve-policy-change-race-fails-closed",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const policy = reservePolicy("urgent", 1);
+    const initialized = await store.initializeReservePolicy({ policy, at: NOW });
+    assert(initialized.kind === "initialized", "reserve policy must initialize");
+    const replay = await store.initializeReservePolicy({ policy, at: LATER });
+    assert(replay.kind === "replayed", "identical policy initialization must replay");
+    assert(replay.current.updatedAt === NOW, "initialization replay must retain first timestamp");
+
+    const charged = await store.chargeReserve({
+      chargeKey: "charge-policy-race",
+      workerIds: ["worker-1"],
+      policy,
+      at: NOW,
+    });
+    assert(charged.kind === "charged", "first reserve unit must charge");
+    const staleTransition = await store.transitionReservePolicy({
+      expected: initialized.current,
+      next: { ...policy, policyVersion: "reserve-policy-2", laneLimit: 2 },
+      at: LATER,
+    });
+    assert(staleTransition.kind === "conflict", "a charge must fence a stale policy transition");
+
+    const current = await store.getReservePolicy({
+      classId: policy.classId,
+      contractVersion: policy.contractVersion,
+      lane: policy.lane,
+    });
+    assert(current !== null, "installed policy must remain readable");
+    const raised = await store.transitionReservePolicy({
+      expected: current,
+      next: { ...policy, policyVersion: "reserve-policy-2", laneLimit: 2 },
+      at: LATER,
+    });
+    assert(raised.kind === "applied", "same-window limit increase must apply");
+    assert(raised.current.used === 1, "same-window transition must retain usage");
+    assert(
+      raised.classHealth.health.reserves.urgent === "available",
+      "raising capacity must clear only the affected lane",
+    );
+
+    const rolled = await store.transitionReservePolicy({
+      expected: raised.current,
+      next: {
+        ...raised.current.policy,
+        windowId: "2026-W33",
+        windowStartsAt: "2026-08-10T00:00:00.000Z",
+        windowEndsAt: "2026-08-17T00:00:00.000Z",
+      },
+      at: "2026-08-10T00:00:00.000Z",
+    });
+    assert(rolled.kind === "applied", "forward reserve window must apply");
+    assert(rolled.current.used === 0, "forward reserve window must reset usage");
+    const oldInitializationRetry = await store.initializeReservePolicy({
+      policy,
+      at: "2026-08-10T00:01:00.000Z",
+    });
+    assert(
+      oldInitializationRetry.kind === "replayed" &&
+        oldInitializationRetry.current.updatedAt === NOW,
+      "initialization retry must replay its first record after later transitions",
+    );
+    const reused = await store.transitionReservePolicy({
+      expected: rolled.current,
+      next: { ...policy, policyVersion: "reserve-policy-3" },
+      at: "2026-08-17T00:00:00.000Z",
+    });
+    assert(
+      reused.kind === "refused" && reused.reason === "window_not_forward",
+      "a prior reserve window identity must never be reused",
+    );
+  },
+};
+
+const reserveLastUnitCase: StoreConformanceCase = {
+  id: "reserve-last-unit-race-fails-closed",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const policy = reservePolicy("urgent", 1);
+    const initialized = await store.initializeReservePolicy({ policy, at: NOW });
+    assert(initialized.kind === "initialized", "reserve policy must initialize");
+    const [left, right] = await Promise.all([
+      store.chargeReserve({
+        chargeKey: "last-unit-left",
+        workerIds: ["worker-1"],
+        policy,
+        at: NOW,
+      }),
+      store.chargeReserve({
+        chargeKey: "last-unit-right",
+        workerIds: ["worker-2"],
+        policy,
+        at: NOW,
+      }),
+    ]);
+    assert(
+      [left.kind, right.kind].sort().join(",") === "charged,exhausted",
+      "one final unit must produce one charge and one exhaustion",
+    );
+    const charged = left.kind === "charged" ? left : right;
+    assert(charged.kind === "charged", "one race participant must charge");
+    assert(
+      charged.classHealth.health.reserves.urgent === "saturated",
+      "the final unit and saturated health must publish atomically",
+    );
+    const exact = await store.chargeReserve({
+      ...charged.charge.charge,
+      at: LATER,
+    });
+    assert(
+      exact.kind === "charged" && exact.status === "replayed",
+      "an exact charge retry must preserve its first disposition",
+    );
+    const conflict = await store.chargeReserve({
+      ...charged.charge.charge,
+      workerIds: ["worker-changed"],
+      at: LATER,
+    });
+    assert(
+      conflict.kind === "reserve_charge_conflict",
+      "changed semantic input under one charge key must conflict",
+    );
+  },
+};
+
+const resultAdjudicationCase: StoreConformanceCase = {
+  id: "pending-backlog-preserves-opened-at",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const policy = reservePolicy("splitAndAdjudication", 1);
+    const initialized = await store.initializeReservePolicy({ policy, at: NOW });
+    assert(initialized.kind === "initialized", "adjudication reserve must initialize");
+    const candidate = await enqueue(store);
+    const request: ResultAdjudicationRequest = {
+      id: "result-adjudication-1",
+      reason: "split_exhausted",
+      jobId: candidate.job.jobId,
+      collectionCycle: candidate.job.collectionCycle,
+      inputHash: candidate.job.inputHash,
+      candidateResultHashes: ["result-a", "result-b"],
+      evidence: [],
+      contractVersion: candidate.job.contractVersion,
+      permitEpoch: candidate.job.permitEpoch,
+    };
+    const charge = {
+      chargeKey: "result-adjudication-1:splitAndAdjudication",
+      workerIds: [],
+      policy,
+      at: NOW,
+    } as const;
+    const opened = await store.openResultAdjudication({
+      request,
+      resultTransition: {
+        jobId: request.jobId,
+        collectionCycle: request.collectionCycle,
+        from: "collecting",
+        at: NOW,
+      },
+      charge,
+    });
+    assert(opened.kind === "opened_charged", "result adjudication must open");
+    const replay = await store.openResultAdjudication({
+      request,
+      resultTransition: {
+        jobId: request.jobId,
+        collectionCycle: request.collectionCycle,
+        from: "collecting",
+        at: LATER,
+      },
+      charge: { ...charge, at: LATER },
+    });
+    assert(replay.kind === "replayed", "exact adjudication open must replay");
+    assert(replay.openedAt === NOW, "open replay must preserve first openedAt");
+    const backlog = await store.listPendingResultAdjudications("class-1");
+    assert(backlog.length === 1, "one result adjudication must be pending");
+    assert(backlog[0]?.openedAt === NOW, "backlog must expose first openedAt");
+
+    const verdict = {
+      kind: "human" as const,
+      resultAdjudicationRequestId: request.id,
+      reason: request.reason,
+      jobId: request.jobId,
+      collectionCycle: request.collectionCycle,
+      inputHash: request.inputHash,
+      candidateResultHashes: request.candidateResultHashes,
+      evidence: request.evidence,
+      contractVersion: request.contractVersion,
+      permitEpoch: request.permitEpoch,
+      adjudicatorId: "human-1",
+      decision: { kind: "reject" as const },
+      decidedAt: LATER,
+    };
+    const applied = await store.applyResultAdjudicationVerdict({
+      verdict,
+      verdictHash: "verdict-1",
+      at: LATER,
+      decision: "reject",
+      onReject: {
+        cap: 1,
+        newCycleEpoch: "epoch-1",
+        newCycleInputHash: "input-job-1-cycle-2",
+        cycleStartedAt: LATER,
+      },
+    });
+    assert(applied.kind === "applied", "first verdict must apply");
+    assert(
+      applied.receipt.outcome === "rejected" &&
+        applied.receipt.rejectOutcome === "requeued",
+      "rejected dispute below cap must requeue",
+    );
+    const exactVerdict = await store.applyResultAdjudicationVerdict({
+      verdict,
+      verdictHash: "verdict-1",
+      at: LATER,
+      decision: "reject",
+      onReject: {
+        cap: 1,
+        newCycleEpoch: "epoch-1",
+        newCycleInputHash: "input-job-1-cycle-2",
+        cycleStartedAt: LATER,
+      },
+    });
+    assert(exactVerdict.kind === "replayed", "exact verdict must replay");
+    const conflict = await store.applyResultAdjudicationVerdict({
+      verdict: { ...verdict, adjudicatorId: "human-2" },
+      verdictHash: "verdict-2",
+      at: LATER,
+      decision: "reject",
+      onReject: {
+        cap: 1,
+        newCycleEpoch: "epoch-1",
+        newCycleInputHash: "input-job-1-cycle-2",
+        cycleStartedAt: LATER,
+      },
+    });
+    assert(conflict.kind === "conflict", "different verdict must conflict");
+    assert((await store.getJob("job-1"))?.collectionCycle === 2, "requeue must advance one cycle");
+  },
+};
+
+const resultRequeueCase: StoreConformanceCase = {
+  id: "result-requeue-cycle-increment-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    await enqueue(store);
+    const transitioned = await store.transitionResult({
+      jobId: "job-1",
+      collectionCycle: 1,
+      from: "collecting",
+      to: "expired",
+      at: LATER,
+      startNewCycle: {
+        permitEpoch: "epoch-1",
+        inputHash: "input-job-1-cycle-2",
+        cycleStartedAt: LATER,
+      },
+    });
+    assert(transitioned.ok, "result requeue must apply");
+    assert(
+      await store.getResultState("job-1", 1) === "expired",
+      "old result cycle must become terminal",
+    );
+    assert(
+      await store.getResultState("job-1", 2) === "collecting",
+      "new result cycle must become collecting atomically",
+    );
+    const current = await store.getJob("job-1");
+    assert(current?.collectionCycle === 2, "current job must advance exactly one cycle");
+    assert(current?.inputHash === "input-job-1-cycle-2", "new cycle hash must persist");
+  },
+};
+
 export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
   Object.freeze([
     classLifecycleAndEpoch,
@@ -1550,6 +1858,15 @@ export const TASK5_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     contractExpirySettlementCase,
     splitEvidenceFenceCase,
     decisionEvidenceSnapshotCase,
+  ]);
+
+export const TASK6_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
+  Object.freeze([
+    ...TASK5_STORE_CONFORMANCE_CASES,
+    reservePolicyLifecycleCase,
+    reserveLastUnitCase,
+    resultAdjudicationCase,
+    resultRequeueCase,
   ]);
 
 export async function runTask1StoreConformance(
@@ -1589,6 +1906,22 @@ export async function runTask5StoreConformance(
 ): Promise<readonly string[]> {
   const passed: string[] = [];
   for (const testCase of TASK5_STORE_CONFORMANCE_CASES) {
+    try {
+      await testCase.run(factory);
+      passed.push(testCase.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${testCase.id}: ${detail}`, { cause: error });
+    }
+  }
+  return Object.freeze(passed);
+}
+
+export async function runTask6StoreConformance(
+  factory: StoreFactory,
+): Promise<readonly string[]> {
+  const passed: string[] = [];
+  for (const testCase of TASK6_STORE_CONFORMANCE_CASES) {
     try {
       await testCase.run(factory);
       passed.push(testCase.id);

@@ -14,14 +14,16 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Milestone 2 Task 5 is complete.** The real-provider unattended platform gate
+**Milestone 2 Task 6 is complete.** The real-provider unattended platform gate
 passed, and revision 21 is tagged locally as `contract-freeze-10`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
 registry and registration validator, class/permit/worker control plane,
 enqueue/routing/lease lifecycle, and the submission plus cycle-scoped automatic
-verification pipeline. The reserve-accounting boundary found by the first Task
-6 trace is independently reviewed and frozen; escalation, adjudication, and
-invalidation are next.
+verification pipeline. It also implements authoritative reserve lifecycle and
+atomic health publication, fail-closed escalation charging, authenticated
+result and human-only action adjudication with exact verdict replay, bounded
+dispute requeues, and class-qualified invalidation with live authorization
+validity. Action-gate evaluation and replay-stable authorization are next.
 
 ## Specs
 
@@ -65,8 +67,8 @@ The [freeze-9 submission-settlement amendment](docs/superpowers/plans/2026-08-07
 is independently reviewed, corrected, and tagged; M2 Task 5 is complete against
 that boundary.
 The [freeze-10 reserve-accounting amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-10-reserve-accounting.md)
-is independently reviewed, corrected, and tagged; that boundary authorizes M2
-Task 6.
+is independently reviewed, corrected, and tagged; M2 Task 6 is complete against
+that boundary.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 
