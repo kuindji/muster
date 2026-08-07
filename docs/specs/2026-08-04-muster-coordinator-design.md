@@ -1,11 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 18)
+**Date:** 2026-08-04 (revision 19)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 7 completed
-the reviewed worker-control policy boundary; Milestone 2 Task 3 may resume only
-from its reviewed local tag.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 8 completed
+the reviewed lease-payload and no-work accounting boundary and is tagged
+locally; Milestone 2 Task 4 is implemented against that boundary.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.

@@ -443,8 +443,10 @@ export class InMemoryStore implements Store {
       if (
         this.queue.mode === "admission_halted" ||
         this.queue.mode === "emergency_halted" ||
-        health.health.operating === "admission_halted" ||
-        health.health.operating === "emergency_halted"
+        health.health.operating !== "ready" ||
+        health.health.reserves.urgent === "saturated" ||
+        health.health.reserves.splitAndAdjudication === "saturated" ||
+        health.health.reserves.audit === "saturated"
       ) {
         return clone({
           kind: "refused",
@@ -463,7 +465,10 @@ export class InMemoryStore implements Store {
       }
       const hasPayloadCollision = this.payloads.has(input.job.payloadRef);
       const payloadCollision = this.payloads.get(input.job.payloadRef);
-      if (hasPayloadCollision && !equal(payloadCollision, input.payload)) {
+      if (
+        this.coreIdentities.has(input.job.payloadRef) ||
+        (hasPayloadCollision && !equal(payloadCollision, input.payload))
+      ) {
         return { kind: "conflict" };
       }
 
@@ -562,6 +567,12 @@ export class InMemoryStore implements Store {
       if (this.coreIdentities.has(input.preparedLease.leaseId)) {
         return { kind: "conflict", reason: "identity_collision" };
       }
+      if (
+        input.preparedLease.assignment.kind === "ordinary" &&
+        this.payloads.has(input.preparedLease.leaseId)
+      ) {
+        return { kind: "conflict", reason: "identity_collision" };
+      }
       const currentCandidate = this.currentCandidate(
         input.expectedCandidate.job.jobId,
       );
@@ -598,6 +609,12 @@ export class InMemoryStore implements Store {
         ),
       );
       if (classVersion?.state !== "active") {
+        return { kind: "conflict", reason: "unclaimable" };
+      }
+      if (
+        this.permitEpochs.get(currentCandidate.job.classId) !==
+        currentCandidate.job.permitEpoch
+      ) {
         return { kind: "conflict", reason: "unclaimable" };
       }
 
@@ -935,6 +952,43 @@ export class InMemoryStore implements Store {
     });
   }
 
+  private closeLeaseAttempt(
+    lease: LeaseRecord,
+    releaseContribution: boolean,
+  ): void {
+    const closed = { ...lease, open: false };
+    this.leases.set(lease.leaseId, closed);
+    const key = cycleKey(lease.jobId, lease.collectionCycle);
+    const attempt = this.attempts.get(key);
+    if (attempt !== undefined) {
+      this.attempts.set(key, {
+        ...attempt,
+        openLeaseIds: attempt.openLeaseIds.filter((id) => id !== lease.leaseId),
+      });
+    }
+    this.candidateRevisions.set(
+      key,
+      (this.candidateRevisions.get(key) ?? 0) + 1,
+    );
+
+    const routing = this.workerRouting.get(lease.holder);
+    if (routing === undefined) {
+      throw new Error(`worker ${lease.holder} has no routing snapshot`);
+    }
+    const mayRelease =
+      releaseContribution &&
+      routing.contributionWindowId === lease.routing.contributionWindowId &&
+      routing.contributionUsed > 0;
+    this.workerRouting.set(lease.holder, {
+      ...routing,
+      revision: routing.revision + 1,
+      contributionUsed: mayRelease
+        ? routing.contributionUsed - 1
+        : routing.contributionUsed,
+      openLeaseIds: routing.openLeaseIds.filter((id) => id !== lease.leaseId),
+    });
+  }
+
   private currentInvalidationSnapshot(scope: InvalidationScope): InvalidationSnapshot {
     const selectedDecisionHashes =
       scope.kind === "decision_results" ? new Set(scope.decisionResultHashes) : null;
@@ -1058,22 +1112,83 @@ export class InMemoryStore implements Store {
   }
 
   extendLease(
-    _input: Parameters<Store["extendLease"]>[0],
+    input: Parameters<Store["extendLease"]>[0],
   ): ReturnType<Store["extendLease"]> {
-    return this.unsupported("extendLease");
+    return this.atomicInput(input, (input) => {
+      const lease = this.leases.get(input.leaseId);
+      if (
+        lease === undefined ||
+        !lease.open ||
+        lease.holder !== input.workerId ||
+        lease.expiresAt !== input.expectedExpiry ||
+        lease.extensionsUsed !== input.expectedExtensionsUsed ||
+        !Number.isFinite(lease.extensionPolicy.extensionTtl) ||
+        lease.extensionPolicy.extensionTtl <= 0 ||
+        !Number.isSafeInteger(lease.extensionPolicy.maxExtensionsPerLease) ||
+        lease.extensionPolicy.maxExtensionsPerLease < 0 ||
+        input.newExtensionsUsed !== lease.extensionsUsed + 1 ||
+        input.newExtensionsUsed > lease.extensionPolicy.maxExtensionsPerLease
+      ) {
+        return { kind: "refused" };
+      }
+      const expectedNewExpiry =
+        Date.parse(lease.expiresAt) + lease.extensionPolicy.extensionTtl * 1_000;
+      if (
+        !Number.isFinite(expectedNewExpiry) ||
+        !Number.isFinite(Date.parse(lease.absoluteInFlightDeadline)) ||
+        !Number.isFinite(Date.parse(input.newExpiry)) ||
+        Date.parse(input.newExpiry) !== expectedNewExpiry ||
+        Date.parse(input.newExpiry) >= Date.parse(lease.absoluteInFlightDeadline)
+      ) {
+        return { kind: "refused" };
+      }
+      this.leases.set(input.leaseId, {
+        ...lease,
+        expiresAt: input.newExpiry,
+        extensionsUsed: input.newExtensionsUsed,
+      });
+      return { kind: "extended", newExpiry: input.newExpiry };
+    });
   }
 
   abandonLease(
-    _input: Parameters<Store["abandonLease"]>[0],
+    input: Parameters<Store["abandonLease"]>[0],
   ): ReturnType<Store["abandonLease"]> {
-    return this.unsupported("abandonLease");
+    return this.atomicInput(input, (input) => {
+      const lease = this.leases.get(input.leaseId);
+      if (
+        lease === undefined ||
+        !lease.open ||
+        lease.holder !== input.workerId ||
+        lease.permitEpoch !== input.requeue.sameCyclePermitEpoch ||
+        this.permitEpochs.get(lease.classId) !== input.requeue.sameCyclePermitEpoch
+      ) {
+        return { kind: "refused" };
+      }
+      this.closeLeaseAttempt(
+        lease,
+        input.classification !== "provider_or_platform_failure",
+      );
+      return { kind: "recorded" };
+    });
   }
 
   expireAndRequeue(
-    _leaseId: string,
-    _under: Parameters<Store["expireAndRequeue"]>[1],
+    leaseId: string,
+    under: Parameters<Store["expireAndRequeue"]>[1],
   ): ReturnType<Store["expireAndRequeue"]> {
-    return this.unsupported("expireAndRequeue");
+    return this.atomicInput({ leaseId, under }, ({ leaseId, under }) => {
+      const lease = this.leases.get(leaseId);
+      if (
+        lease === undefined ||
+        !lease.open ||
+        lease.permitEpoch !== under.sameCyclePermitEpoch ||
+        this.permitEpochs.get(lease.classId) !== under.sameCyclePermitEpoch
+      ) {
+        return;
+      }
+      this.closeLeaseAttempt(lease, true);
+    });
   }
 
   acceptOrReplaySubmission(

@@ -1,6 +1,15 @@
 # Changelog
 
-## contract-freeze-8 — reviewed 2026-08-07; tag pending
+## Milestone 2 Task 4 — 2026-08-07
+
+Implemented deterministic enqueue, worker-pull routing, ordinary and canary
+lease preparation, quantized TTL/deadline snapshots, coarse no-work accounting,
+holder-bound extension and abandonment, and same-cycle expiry requeue. The
+reference Store conformance suite now covers lease holder binding, atomic
+expiry/requeue, sticky cycle epochs, fair-attempt contribution release, and
+provider-failure retention. Task 5 (submission and verification) remains next.
+
+## contract-freeze-8 — reviewed and tagged 2026-08-07
 
 Revision 19 amendment discovered by the first Milestone 2 Task-4
 runtime trace. Every lease now retains the exact operational payload reference,
@@ -11,7 +20,7 @@ the compared worker-routing revision. Lifecycle, concurrency, compile-time, and
 reference-Store coverage accompany the change. The review additionally fixes
 canary payload-reference ownership, collision preservation, complete no-work
 routing comparisons, and transition fencing. Wire contract version remains
-`1.1.0`; the local `contract-freeze-8` tag is pending.
+`1.1.0`; the reviewed boundary is tagged locally as `contract-freeze-8`.
 
 ## contract-freeze-5 — 2026-08-06
 

@@ -1,8 +1,8 @@
 # Muster contract-freeze-8 lease-payload and no-work accounting amendment plan
 
-**Status:** Independently reviewed and corrected as coordinator revision 19.
-M2 Task 4 remains paused until the reviewed commit is tagged
-`contract-freeze-8`.
+**Status:** Independently reviewed and corrected as coordinator revision 19,
+then tagged locally as `contract-freeze-8`. M2 Task 4 is implemented against
+that boundary.
 
 **Goal:** Amend revision 18 into revision 19 so every lease binds the exact
 payload sent to the worker and every coarse `no_work` outcome can consume one
@@ -63,8 +63,8 @@ Run frozen install, invariants, contract/core typechecks and tests, builds,
 fixture checks, package-content inspection, Markdown fence/local-link checks,
 and `git diff --check`. Independently trace ordinary and canary payloads from
 enqueue through claim and submit, then race no-work accounting against routing
-and worker-state changes. Only a reviewed commit tagged `contract-freeze-8`
-authorizes M2 Task 4 to resume.
+and worker-state changes. The reviewed commit is tagged `contract-freeze-8`,
+which authorized M2 Task 4.
 
 The independent review found and corrected four gaps before the reviewed
 commit: canary payload-reference ownership was unspecified, payload-reference

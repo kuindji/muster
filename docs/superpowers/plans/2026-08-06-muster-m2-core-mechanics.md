@@ -1,8 +1,8 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 19 and `contract-freeze-8` once that
-reviewed boundary is tagged, including an in-memory Store and reusable
+`@kuindji/muster-core` against revision 19 and the tagged
+`contract-freeze-8` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -22,7 +22,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-8 (independent review complete; tag pending)
+## Entry gate: contract-freeze-8 (complete)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -87,14 +87,13 @@ The first Task-4 runtime trace found that canary claims could neither persist
 nor later retrieve the exact payload they send, and that the contribution rule
 for coarse `no_work` had no atomic Store command. Revision 19 and the separate
 `2026-08-07-muster-contract-freeze-8-lease-payload-accounting.md` amendment add
-those minimal boundaries. Task 4 may resume only after independent review and
-the local `contract-freeze-8` tag.
+those minimal boundaries. Independent review and the local
+`contract-freeze-8` tag are complete.
 
 ## Global constraints
 
-- Revision 19 becomes the active normative boundary at the local
-  `contract-freeze-8` tag. Its independent review is complete; until the tag,
-  Task 4 remains paused. The worker wire version is
+- Revision 19 is the active normative boundary at the local
+  `contract-freeze-8` tag. Its independent review is complete. The worker wire version is
   unchanged. Frozen exported types, tables, state machines, schemas, and
   fixtures are read-only in M2.
 - `muster-core` keeps exactly one runtime dependency and references no network,
@@ -173,7 +172,7 @@ cover each rejection family and durable replay/conflict behavior.
   state-change audit event, and emit one identity-bearing `lease_requeue` audit
   event for every requeued open lease.
 
-## Task 4: Enqueue, routing, and lease lifecycle
+## Task 4: Enqueue, routing, and lease lifecycle (complete 2026-08-07)
 
 - Enqueue only active compatible class versions after precedence, health,
   reserve, schema, payload-size, and current-epoch checks.

@@ -765,6 +765,145 @@ const canaryPayloadCase: StoreConformanceCase = {
   },
 };
 
+const workerLeaseBindingCase: StoreConformanceCase = {
+  id: "worker-id-binding-rejects-other-holder",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-holder-bound");
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(claimed.kind === "claimed", "holder-bound lease must claim");
+    const extended = await store.extendLease({
+      workerId: "other-worker",
+      leaseId: lease.leaseId,
+      expectedExpiry: lease.expiresAt,
+      expectedExtensionsUsed: 0,
+      newExpiry: "2026-08-06T16:20:00.000Z",
+      newExtensionsUsed: 1,
+    });
+    assert(extended.kind === "refused", "other worker must not extend a lease");
+    const abandoned = await store.abandonLease({
+      workerId: "other-worker",
+      leaseId: lease.leaseId,
+      classification: "abandoned_before_payload",
+      requeue: { sameCyclePermitEpoch: "epoch-1" },
+      at: LATER,
+    });
+    assert(abandoned.kind === "refused", "other worker must not abandon a lease");
+    assert((await store.getLease(lease.leaseId))?.open, "refusals must preserve lease");
+  },
+};
+
+const extensionDeadlineCase: StoreConformanceCase = {
+  id: "extension-deadline-strict",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease: LeaseRecord = {
+      ...preparedLease(candidate, worker, "lease-deadline"),
+      absoluteInFlightDeadline: "2026-08-06T16:20:00.000Z",
+    };
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(claimed.kind === "claimed", "deadline lease must claim");
+    const extension = await store.extendLease({
+      workerId: worker.workerId,
+      leaseId: lease.leaseId,
+      expectedExpiry: lease.expiresAt,
+      expectedExtensionsUsed: 0,
+      newExpiry: lease.absoluteInFlightDeadline,
+      newExtensionsUsed: 1,
+    });
+    assert(extension.kind === "refused", "deadline equality must refuse");
+    const current = await store.getLease(lease.leaseId);
+    assert(current?.expiresAt === lease.expiresAt, "refusal must preserve expiry");
+    assert(current?.extensionsUsed === 0, "refusal must preserve extension count");
+  },
+};
+
+const expiryRequeueCase: StoreConformanceCase = {
+  id: "expiry-requeue-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-expiring");
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(claimed.kind === "claimed", "expiring lease must claim");
+    await store.expireAndRequeue(lease.leaseId, {
+      sameCyclePermitEpoch: "epoch-1",
+    });
+    assert((await store.getLease(lease.leaseId))?.open === false, "expiry must close");
+    const after = await store.listLeaseCandidates({ classIds: ["class-1"] });
+    assert(after.length === 1, "expiry must expose one same-cycle candidate");
+    assert(after[0]?.job.collectionCycle === 1, "expiry must stay in cycle");
+    assert(after[0]?.attempts.openLeaseIds.length === 0, "requeue must be atomic");
+    const routing = await store.getWorkerRoutingSnapshot(worker.workerId);
+    assert(routing?.contributionUsed === 0, "no-fault expiry must release contribution");
+  },
+};
+
+const stickyEpochRequeueCase: StoreConformanceCase = {
+  id: "epoch-sticky-through-requeue",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-abandoned");
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(claimed.kind === "claimed", "abandonment lease must claim");
+    const wrongEpoch = await store.abandonLease({
+      workerId: worker.workerId,
+      leaseId: lease.leaseId,
+      classification: "provider_or_platform_failure",
+      requeue: { sameCyclePermitEpoch: "epoch-other" },
+      at: LATER,
+    });
+    assert(wrongEpoch.kind === "refused", "same-cycle epoch mismatch must refuse");
+    const recorded = await store.abandonLease({
+      workerId: worker.workerId,
+      leaseId: lease.leaseId,
+      classification: "provider_or_platform_failure",
+      requeue: { sameCyclePermitEpoch: "epoch-1" },
+      at: LATER,
+    });
+    assert(recorded.kind === "recorded", "matching epoch abandonment must record");
+    const after = await store.listLeaseCandidates({ classIds: ["class-1"] });
+    assert(after[0]?.job.collectionCycle === 1, "abandonment must stay in cycle");
+    assert(after[0]?.job.permitEpoch === "epoch-1", "cycle epoch must stay stamped");
+    const routing = await store.getWorkerRoutingSnapshot(worker.workerId);
+    assert(
+      routing?.contributionUsed === 1,
+      "provider failure must retain its fair-attempt contribution",
+    );
+  },
+};
+
 const emergencyCase: StoreConformanceCase = {
   id: "queue-class-precedence-atomic",
   run: async (factory) => {
@@ -836,11 +975,36 @@ export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     emergencyCase,
   ]);
 
+export const TASK4_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
+  Object.freeze([
+    ...TASK1_STORE_CONFORMANCE_CASES,
+    workerLeaseBindingCase,
+    extensionDeadlineCase,
+    expiryRequeueCase,
+    stickyEpochRequeueCase,
+  ]);
+
 export async function runTask1StoreConformance(
   factory: StoreFactory,
 ): Promise<readonly string[]> {
   const passed: string[] = [];
   for (const testCase of TASK1_STORE_CONFORMANCE_CASES) {
+    try {
+      await testCase.run(factory);
+      passed.push(testCase.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${testCase.id}: ${detail}`, { cause: error });
+    }
+  }
+  return Object.freeze(passed);
+}
+
+export async function runTask4StoreConformance(
+  factory: StoreFactory,
+): Promise<readonly string[]> {
+  const passed: string[] = [];
+  for (const testCase of TASK4_STORE_CONFORMANCE_CASES) {
     try {
       await testCase.run(factory);
       passed.push(testCase.id);
