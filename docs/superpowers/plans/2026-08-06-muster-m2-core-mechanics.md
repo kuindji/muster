@@ -250,7 +250,7 @@ cover each rejection family and durable replay/conflict behavior.
   invalidate issued authorization validity, retain retrievable initial
   receipts, and emit every returned audit transition.
 
-## Task 7: Action gates and replay-stable authorization (blocked on contract-freeze-11)
+## Task 7: Action gates and replay-stable authorization (complete 2026-08-07)
 
 - Verify descriptor-bound `EffectIntent` hashes, action composition, exact
   `deriveEffect` byte identity, decision-result freshness, class/version/epoch,

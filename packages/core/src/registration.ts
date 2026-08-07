@@ -39,6 +39,7 @@ import type {
   CoreDeploymentPolicy,
   Store,
 } from "./ports.js";
+import { cloneCanonical, projectCanonical } from "./projection.js";
 
 export type RegistrationIssueCode =
   | "identity_invalid"
@@ -286,72 +287,6 @@ function requirementCovered(
   } catch {
     return false;
   }
-}
-
-function cloneCanonical<T>(value: T): T {
-  return JSON.parse(canonicalize(value)) as T;
-}
-
-function mergeProjection(left: unknown, right: unknown): unknown {
-  if (left === undefined) return right;
-  if (right === undefined) return left;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.map((entry, index) => mergeProjection(entry, right[index]));
-  }
-  if (
-    typeof left === "object" && left !== null && !Array.isArray(left) &&
-    typeof right === "object" && right !== null && !Array.isArray(right)
-  ) {
-    const merged: Record<string, unknown> = { ...left };
-    for (const [key, value] of Object.entries(right)) {
-      merged[key] = mergeProjection(merged[key], value);
-    }
-    return merged;
-  }
-  return right;
-}
-
-function selectProjection(value: unknown, segments: readonly string[]): unknown {
-  if (segments.length === 0) return cloneCanonical(value);
-  const [head, ...tail] = segments;
-  if (head === "[*]") {
-    if (!Array.isArray(value)) return undefined;
-    return value.map((entry) => selectProjection(entry, tail));
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (head === undefined || !Object.hasOwn(record, head)) return undefined;
-  return { [head]: selectProjection(record[head], tail) };
-}
-
-function parseProjectionPath(path: string): string[] {
-  const segments: string[] = [];
-  let rest = path.slice(1);
-  while (rest.length > 0) {
-    if (rest.startsWith("[*]")) {
-      segments.push("[*]");
-      rest = rest.slice(3);
-    } else {
-      const match = /^\.([A-Za-z0-9_-]+)/.exec(rest);
-      if (match === null) throw new Error(`invalid projection path: ${path}`);
-      segments.push(match[1]!);
-      rest = rest.slice(match[0].length);
-    }
-  }
-  return segments;
-}
-
-function project(value: CanonicalJsonValue, paths: readonly string[]): CanonicalJsonValue {
-  let selected: unknown;
-  for (const path of paths) {
-    selected = mergeProjection(
-      selected,
-      selectProjection(value, parseProjectionPath(path)),
-    );
-  }
-  return cloneCanonical((selected ?? {}) as CanonicalJsonValue);
 }
 
 const HUMAN_ABSENCE_ACTIONS = new Set<Action>([
@@ -752,8 +687,14 @@ function validateEffectFixture(
     }
     try {
       const input = {
-        payload: project(fixture.input.payload, permit.effectInput.payloadPaths),
-        result: project(fixture.input.result, permit.effectInput.resultPaths),
+        payload: projectCanonical(
+          fixture.input.payload,
+          permit.effectInput.payloadPaths,
+        ),
+        result: projectCanonical(
+          fixture.input.result,
+          permit.effectInput.resultPaths,
+        ),
       };
       const first = permit.deriveEffect(input);
       const second = permit.deriveEffect(cloneCanonical(input));

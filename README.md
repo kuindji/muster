@@ -14,7 +14,7 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Milestone 2 Task 6 is complete.** The real-provider unattended platform gate
+**Milestone 2 Task 7 is complete.** The real-provider unattended platform gate
 passed. Revision 22 is independently reviewed, corrected, and tagged locally
 as `contract-freeze-11`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
@@ -27,8 +27,12 @@ dispute requeues, and class-qualified invalidation with live authorization
 validity. The first Task 7 trace found frozen authorization-atomicity,
 composite-reserve, verdict-replay, and processing-time gaps. The
 `contract-freeze-11` amendment now has executable live-context, composite
-reserve, processing-time, and early verdict-replay coverage; action-gate
-implementation may resume as the next separate unit.
+reserve, processing-time, and early verdict-replay coverage. M2 now also
+implements descriptor-bound all-actions authorization, projected automatic
+effect derivation, per-action support and completeness gates, mixed human-only
+review binding, atomic authorization reserve selection, immutable initial
+receipt replay, and live authorization-status reads. Capacity, health,
+observability, and privacy integration remain the next bounded unit.
 
 ## Specs
 

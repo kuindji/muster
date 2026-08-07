@@ -1,5 +1,19 @@
 # Changelog
 
+## Milestone 2 Task 7 — 2026-08-07
+
+Implemented descriptor-bound, all-actions authorization with canonical intent
+hashing, transport and schema checks, declared-path effect projection, exact
+automatic derivation comparison, action-specific support/completeness gates,
+and human-only review binding. New intents compare the complete live
+authorization context, settle every applicable low-cost, urgent, and
+split-and-adjudication lane atomically, and persist one immutable authorized,
+pending, or denied initial receipt. Exact retries now replay before runtime and
+freshness checks, while live status remains independently readable after later
+invalidation. Focused coverage includes mixed permits, no-identity descriptor
+failure, typed permit denial, fail-closed reserve exhaustion, runtime-unloaded
+replay, and contract/maximum-lifetime retirement.
+
 ## contract-freeze-11 — reviewed and tagged 2026-08-07
 
 Revision 22 amendment discovered by the first Milestone 2 Task-7 trace. New

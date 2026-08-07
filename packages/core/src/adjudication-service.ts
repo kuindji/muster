@@ -1,19 +1,15 @@
 import {
-  ACTION_GATE_TABLE,
-  absenceDomainCovers,
   canonicalVerdict,
   canonicalize,
   computeDecisionResultHash,
   computeInputHash,
   computeVerdictHash,
-  effectiveGateAction,
   isWireId,
   pathsCover,
   validateMusterValue,
   VerdictShapeError,
   type ActionAdjudicationVerdict,
   type ActionAuthorization,
-  type ActionPermit,
   type AutomaticVerificationStrength,
   type CanonicalJsonValue,
   type JobClass,
@@ -24,6 +20,7 @@ import {
   type Timestamp,
 } from "@kuindji/muster-contract";
 
+import { evaluateActionPermit } from "./action-gates.js";
 import type {
   AdjudicationSource,
   ActionVerdictContextSnapshot,
@@ -124,56 +121,6 @@ const verifyAdjudicatedResult = (
     };
   } catch {
     return { ok: false };
-  }
-};
-
-const automaticPermitPasses = (
-  jobClass: JobClass<unknown, unknown>,
-  permit: Extract<ActionPermit, { mode: "automatic" }>,
-  payload: CanonicalJsonValue,
-  decision: Awaited<ReturnType<Store["getDecisionResult"]>> & {},
-  descriptor: CanonicalJsonValue,
-): boolean => {
-  const gate = ACTION_GATE_TABLE[
-    effectiveGateAction(permit.action, jobClass.surface)
-  ];
-  if (gate.automaticGate === "unavailable" ||
-    (gate.automaticGate === "deterministic_oracle" &&
-      decision.achievedStrength !== "deterministic_oracle")) return false;
-  try {
-    if (!validateMusterValue(permit.effectSchema, descriptor).ok ||
-      !same(permit.deriveEffect({ payload, result: decision.result }), descriptor)) {
-      return false;
-    }
-    if (gate.automaticGate === "deterministic_oracle") {
-      const requirement = jobClass.evidenceRequirements.find((entry) =>
-        entry.action === permit.action
-      );
-      if (requirement === undefined || !jobClass.oracles.some((oracle) =>
-        oracle.kind === "support" &&
-        oracle.predicates.includes(requirement.predicate) &&
-        pathsCover(oracle.coversPayloadPaths, requirement.requiredPayloadPaths) &&
-        pathsCover(oracle.coversResultPaths, requirement.requiredResultPaths) &&
-        oracle.run(payload, decision.result).kind === "pass"
-      )) return false;
-    }
-    if (gate.requiresCompletenessOracle) {
-      const requirement = jobClass.absenceRequirements.find((entry) =>
-        entry.action === permit.action
-      );
-      if (requirement === undefined || !jobClass.oracles.some((oracle) =>
-        oracle.kind === "completeness" &&
-        oracle.predicates.includes(requirement.predicate) &&
-        oracle.absenceDomain !== undefined &&
-        pathsCover(oracle.coversPayloadPaths, requirement.requiredPayloadPaths) &&
-        pathsCover(oracle.coversResultPaths, requirement.requiredResultPaths) &&
-        absenceDomainCovers(oracle.absenceDomain, requirement.requiredDomain) &&
-        oracle.run(payload, decision.result).kind === "pass"
-      )) return false;
-    }
-    return true;
-  } catch {
-    return false;
   }
 };
 
@@ -749,13 +696,13 @@ export class AdjudicationService {
       if (permit === undefined) return { kind: "binding_conflict" };
       if (permit.mode === "human_only") {
         humanReviews.push({ action, ...permit.reviewRequirement });
-      } else if (!automaticPermitPasses(
+      } else if (!evaluateActionPermit(
         compatibility.entry.jobClass,
         permit,
         payload,
         decision,
         request.effectIntent.effects[index]!.descriptor,
-      )) {
+      ).ok) {
         return { kind: "verification_failed" };
       }
     }
