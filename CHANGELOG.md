@@ -1,5 +1,18 @@
 # Changelog
 
+## contract-freeze-9 — review pending 2026-08-07
+
+Proposed revision 20 amendment discovered by the first Milestone 2 Task-5
+runtime trace. Submission acceptance now commits optional checked reputation
+evidence atomically and settles lease/contract cutoffs in the same Store
+command. A distinct invalid-submission settlement applies honest fair-attempt
+accounting instead of masquerading as abandonment. Same-cycle settlement uses
+the lease-stamped epoch. Job-cycle snapshots durably mark the first exact
+absorbing split, and automatic decisions compare the complete current evidence
+set and refuse split-marked cycles. Wire contract version remains `1.1.0`.
+Independent review and the `contract-freeze-9` tag are still required before
+Task 5 runtime work.
+
 ## Milestone 2 Task 4 — 2026-08-07
 
 Implemented deterministic enqueue, worker-pull routing, ordinary and canary

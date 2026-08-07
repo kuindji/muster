@@ -1,11 +1,12 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 19)
+**Date:** 2026-08-04 (revision 20)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 8 completed
-the reviewed lease-payload and no-work accounting boundary and is tagged
-locally; Milestone 2 Task 4 is implemented against that boundary.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 9 implements
+the submission-settlement and absorbing-split boundary and is awaiting
+independent review; Milestone 2 Task 5 remains blocked until the reviewed
+commit is tagged locally.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -201,6 +202,20 @@ atomic no-work command compares the complete worker-routing snapshot and
 advances contribution usage, matching the frozen fair-attempt table without
 fabricating a lease. This is a contract correction only; revision 19 implements
 no lease service and does not change the worker wire.
+
+Revision 20 closes four submission-boundary gaps found by the first Task-5
+runtime trace. Invalid results need an atomic settlement distinct from an
+abandonment so Store can close/requeue the lease, apply the exact fair-attempt
+row, and record qualifying reputation evidence together. Submission acceptance
+now commits optional checked evidence with the body and immutable receipt and
+observes lease and contract cutoffs in the same transaction, including the
+typed `contract_expired` coordinator-fault outcome. Same-cycle lease settlement
+uses the lease's stamped epoch rather than a later current epoch. Finally, the
+first exact non-unanimous evidence set durably marks an absorbing split before
+bounded split-only rerouting opens, and automatic decision persistence compares
+the complete evidence set and refuses a split-marked cycle. These are contract
+corrections only; revision 20 implements no submission or verification service
+and does not change the worker wire.
 
 ## 1. What Muster is
 
@@ -2236,6 +2251,15 @@ leases preserved; and routing-period and worker-state fencing of stale no-work
 snapshots. A Store adapter passes without allocating payload identities or
 deriving routing calendars.
 
+Revision-20 conformance additionally proves atomic accepted body/receipt and
+checked-evidence persistence; exact submit replay and changed-result conflict;
+invalid-submission closure, same-cycle requeue, contribution release, and
+negative-evidence persistence; atomic contract-cutoff settlement with
+coordinator-fault accounting; stamped-epoch settlement after a later ordinary
+epoch transition; and exact-evidence fencing of the durable absorbing-split
+marker and automatic decision. A Store adapter passes without reclassifying an
+invalid result as abandonment or deriving agreement policy.
+
 ### 8.2 Protocol conformance
 
 Golden `input_hash` over the exact canonical sanitized payload and both frozen
@@ -2377,6 +2401,10 @@ correct the frozen boundary before runtime mechanics depend on it.
 Revision 19 has been independently reviewed and corrected but does not reopen
 Task 4 until the reviewed commit is tagged `contract-freeze-8`.
 
+Revision 20 implements the proposed Task-5 boundary correction but does not
+reopen Task 5 until an independent review corrects the commit and the result is
+tagged `contract-freeze-9`.
+
 ### 11.2 Contract-freeze amendment 2
 
 Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
@@ -2490,7 +2518,30 @@ version `1.1.0`, MCP schemas, hash envelopes, events, job/class/worker records,
 and worker-visible outcomes remain unchanged. M2 Task 4 resumes only from an
 independently reviewed commit tagged `contract-freeze-8`.
 
-### 11.9 Open
+### 11.9 Contract-freeze amendment 9: submission settlement and split routing
+
+Revision 20 is complete only when first acceptance atomically persists its
+receipt, body, ordinary replica/diversity facts, lease settlement, and optional
+qualifying reputation evidence after holder-first exact-replay lookup;
+acceptance also settles lease and contract cutoffs without a pre-read race.
+`rejectSubmission` must represent `rejected_invalid`, `coordinator_fault`, and
+`lease_expired_no_fault` directly, applying the frozen contribution rule and
+optional reputation evidence in the same transaction. All same-cycle lease
+settlement uses the lease's stamped epoch.
+
+Every job cycle starts with `splitObserved: false`. `markResultSplit` compares
+the complete accepted ordinary evidence set for that cycle before making the
+absorbing marker durable. Automatic decision persistence compares that same
+current evidence set, requires no open lease, and refuses a split-marked cycle.
+The lifecycle and concurrency fixtures cover exact acceptance/replay/conflict,
+invalid and contract-cutoff settlement, and stale split evidence.
+
+The amendment changes only internal core/Store snapshots, commands, and
+outcomes. Wire version `1.1.0`, MCP schemas, hash envelopes, events, and durable
+class/job/lease/worker records remain unchanged. M2 Task 5 resumes only from an
+independently reviewed commit tagged `contract-freeze-9`.
+
+### 11.10 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

@@ -14,18 +14,20 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Contract freeze 8 is independently reviewed and tagged locally.** The
-real-provider unattended platform gate passed. Revision 19 corrects the
-canary-payload binding and atomic no-work contribution gaps found by the first
-M2 Task-4 runtime trace. M2 now includes the reference in-memory Store,
-runtime class registry and registration validator, class/permit/worker control
-plane, and the enqueue/routing/lease lifecycle. Task 5 is next.
+**Contract freeze 9 is awaiting independent review.** The real-provider
+unattended platform gate passed. Revision 20 adds the atomic submission
+settlement, checked-evidence, contract-cutoff, and absorbing-split boundaries
+found missing by the first M2 Task-5 runtime trace. M2 includes the reference
+in-memory Store through that proposed boundary, runtime class registry and
+registration validator, class/permit/worker control plane, and the
+enqueue/routing/lease lifecycle. Task 5 runtime work remains blocked until the
+reviewed commit is tagged `contract-freeze-9`.
 
 ## Specs
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 19) | `oneshot` scope; contract-freeze-8 reviewed and tagged | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement with absorbing splits, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 20) | `oneshot` scope; contract-freeze-9 review pending | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -47,9 +49,9 @@ plane, and the enqueue/routing/lease lifecycle. Task 5 is next.
 ## Contract freeze
 
 The wire contract remains frozen at version `1.1.0`. The current reviewed
-internal boundary is tagged `contract-freeze-8`; `contract-freeze-1` through
-`contract-freeze-7` remain historical boundaries. The binding scope is defined
-by [spec §11.1–11.7](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+internal boundary is tagged `contract-freeze-8`; `contract-freeze-9` is the
+proposed revision-20 internal boundary awaiting independent review. The binding scope is defined
+by [spec §11.1–11.9](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
 the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
 the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md),
@@ -59,6 +61,8 @@ the [freeze-6 worker-state audit amendment plan](docs/superpowers/plans/2026-08-
 and the [freeze-7 worker-control policy amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-7-worker-control-policy.md).
 The independently reviewed [freeze-8 lease-payload and no-work accounting amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-8-lease-payload-accounting.md)
 is implemented and tagged locally; that boundary authorized M2 Task 4.
+The [freeze-9 submission-settlement amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-9-submission-settlement.md)
+is implemented for review but untagged; it does not yet authorize M2 Task 5.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

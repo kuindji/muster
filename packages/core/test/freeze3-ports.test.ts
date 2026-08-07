@@ -48,6 +48,7 @@ const candidate: LeaseCandidateSnapshot = {
     openLeaseIds: [],
     acceptedWorkerIds: [],
     acceptedDiversity: [],
+    splitObserved: false,
   },
   operational,
 };

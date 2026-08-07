@@ -1,8 +1,8 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 19 and the tagged
-`contract-freeze-8` boundary, including an in-memory Store and reusable
+`@kuindji/muster-core` against revision 20 and the pending
+`contract-freeze-9` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -22,7 +22,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-8 (complete)
+## Entry gate: contract-freeze-9 (review pending)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -90,12 +90,20 @@ for coarse `no_work` had no atomic Store command. Revision 19 and the separate
 those minimal boundaries. Independent review and the local
 `contract-freeze-8` tag are complete.
 
+The first Task-5 implementation trace then found that invalid submission
+settlement, contract-cutoff races, checked evidence atomicity, and durable
+absorbing-split routing were not representable through the frozen Store.
+Revision 20 and the separate
+`2026-08-07-muster-contract-freeze-9-submission-settlement.md` amendment add
+those minimal boundaries. Task 5 may begin only after independent review and
+the local `contract-freeze-9` tag.
+
 ## Global constraints
 
-- Revision 19 is the active normative boundary at the local
-  `contract-freeze-8` tag. Its independent review is complete. The worker wire version is
-  unchanged. Frozen exported types, tables, state machines, schemas, and
-  fixtures are read-only in M2.
+- Revision 20 is the active proposed normative boundary. Its
+  `contract-freeze-9` review and tag are pending, so Task 5 runtime work is
+  blocked. The worker wire version is unchanged. Frozen exported types, tables,
+  state machines, schemas, and fixtures are read-only after review.
 - `muster-core` keeps exactly one runtime dependency and references no network,
   filesystem, environment, or model-inference API.
 - Core sees only opaque `WorkerId`; raw OAuth issuer and subject fields stop at

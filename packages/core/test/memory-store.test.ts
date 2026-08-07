@@ -9,8 +9,8 @@ import {
   StoreOperationNotImplementedError,
 } from "../src/memory-store.js";
 import {
-  runTask4StoreConformance,
-  TASK4_STORE_CONFORMANCE_CASES,
+  runTask5StoreConformance,
+  TASK5_STORE_CONFORMANCE_CASES,
 } from "../src/store-conformance.js";
 import {
   ManualClock,
@@ -24,10 +24,10 @@ const createStore = (): InMemoryStore => new InMemoryStore({
   initialQueue: { mode: "normal", updatedAt: now },
 });
 
-describe("M2 Task 4 reference Store", () => {
-  it("passes the reusable Store conformance suite through lease lifecycle", async () => {
-    const passed = await runTask4StoreConformance(createStore);
-    expect(passed).toEqual(TASK4_STORE_CONFORMANCE_CASES.map((entry) => entry.id));
+describe("M2 Task 5 reference Store boundary", () => {
+  it("passes the reusable Store conformance suite through submission settlement", async () => {
+    const passed = await runTask5StoreConformance(createStore);
+    expect(passed).toEqual(TASK5_STORE_CONFORMANCE_CASES.map((entry) => entry.id));
   });
 
   it("binds every conformance case to a frozen fixture identity", () => {
@@ -35,7 +35,7 @@ describe("M2 Task 4 reference Store", () => {
       ...REQUIRED_CONCURRENCY_CASE_IDS,
       ...REQUIRED_LIFECYCLE_FIXTURE_IDS,
     ]);
-    for (const testCase of TASK4_STORE_CONFORMANCE_CASES) {
+    for (const testCase of TASK5_STORE_CONFORMANCE_CASES) {
       expect(frozen.has(testCase.id), testCase.id).toBe(true);
     }
   });
@@ -98,27 +98,10 @@ describe("M2 Task 4 reference Store", () => {
 
   it("fails explicitly for Store slices owned by later M2 tasks", async () => {
     const store = createStore();
-    await expect(store.acceptOrReplaySubmission({
-      workerId: "worker-1",
-      leaseId: "lease-1",
-      inputHash: "input-1",
-      resultHash: "result-1",
-      body: { answer: "later Task 5" },
-      receipt: {
-        leaseId: "lease-1",
-        jobId: "job-1",
-        collectionCycle: 1,
-        inputHash: "input-1",
-        resultHash: "result-1",
-        contractVersion: "1.0.0",
-        permitEpoch: "epoch-1",
-        outcome: "accepted",
-        acceptedAt: now,
-      },
-    })).rejects.toEqual(
+    await expect(store.authorizeOrReplayIntent({} as never)).rejects.toEqual(
       expect.objectContaining<Partial<StoreOperationNotImplementedError>>({
         name: "StoreOperationNotImplementedError",
-        operation: "acceptOrReplaySubmission",
+        operation: "authorizeOrReplayIntent",
       }),
     );
   });

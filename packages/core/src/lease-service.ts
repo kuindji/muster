@@ -613,16 +613,12 @@ export class LeaseService {
     if (lease === null || !lease.open || lease.holder !== workerId) {
       return { outcome: "refused" };
     }
-    const currentEpoch = await this.options.store.getCurrentPermitEpoch(lease.classId);
-    if (currentEpoch === null || currentEpoch !== lease.permitEpoch) {
-      return { outcome: "refused" };
-    }
     const at = this.options.clock.now();
     const outcome = await this.options.store.abandonLease({
       workerId,
       leaseId,
       classification,
-      requeue: { sameCyclePermitEpoch: currentEpoch },
+      requeue: { sameCyclePermitEpoch: lease.permitEpoch },
       at,
     });
     if (outcome.kind === "refused") return { outcome: "refused" };
@@ -644,10 +640,8 @@ export class LeaseService {
     if (lease === null || !lease.open || Date.parse(at) < Date.parse(lease.expiresAt)) {
       return false;
     }
-    const currentEpoch = await this.options.store.getCurrentPermitEpoch(lease.classId);
-    if (currentEpoch === null || currentEpoch !== lease.permitEpoch) return false;
     await this.options.store.expireAndRequeue(leaseId, {
-      sameCyclePermitEpoch: currentEpoch,
+      sameCyclePermitEpoch: lease.permitEpoch,
     });
     return true;
   }

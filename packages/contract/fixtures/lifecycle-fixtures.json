@@ -120,6 +120,36 @@
     "expectFinal": { "states": { "lease:lease-10": "open" } }
   },
   {
+    "id": "invalid-submission-requeues-same-cycle",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "Invalid submission settlement closes and requeues the stamped-cycle lease, releases its current-window contribution occurrence, and records qualifying failure evidence atomically.",
+    "setup": { "lease:lease-11": { "holder": "worker-1", "collectionCycle": 1, "permitEpoch": "e1", "open": true }, "worker-routing:worker-1": { "contributionUsed": 1 } },
+    "conditions": [],
+    "steps": [{ "command": "rejectSubmission", "args": { "workerId": "worker-1", "leaseId": "lease-11", "classification": "rejected_invalid", "evidenceId": "rep-11" }, "expect": { "kind": "recorded" } }],
+    "expectFinal": { "states": { "lease:lease-11": "closed", "job:j11:1": "collecting", "worker-routing:worker-1": "usage-0", "reputation:rep-11": "recorded" } }
+  },
+  {
+    "id": "contract-cutoff-settles-submission",
+    "version": 1,
+    "area": "submission_retry",
+    "description": "A submission losing the durable contract-cutoff race returns contract_expired and settles its lease with coordinator-fault contribution accounting in the same transaction.",
+    "setup": { "lease:lease-12": { "holder": "worker-1", "open": true }, "class:c1:v1": { "state": "draining", "acceptedUntil": "2026-08-07T00:00:00.000Z" } },
+    "conditions": ["contract_expired"],
+    "steps": [{ "command": "submit", "args": { "workerId": "worker-1", "leaseId": "lease-12", "acceptedAt": "2026-08-07T00:00:01.000Z" }, "expect": { "kind": "refused", "error": "contract_expired" } }],
+    "expectFinal": { "states": { "lease:lease-12": "closed", "job:j12:1": "collecting", "worker-routing:worker-1": "usage-retained" } }
+  },
+  {
+    "id": "absorbing-split-marker-persists",
+    "version": 1,
+    "area": "collection_cycle",
+    "description": "The first exact non-unanimous same-cycle evidence set durably marks an absorbing split before bounded split-only rerouting opens.",
+    "setup": { "result:j13:1": { "state": "collecting", "acceptedResultHashes": ["rh-a", "rh-b"], "splitObserved": false } },
+    "conditions": [],
+    "steps": [{ "command": "markResultSplit", "args": { "jobId": "j13", "collectionCycle": 1, "inputHash": "ih-13", "resultHashes": ["rh-a", "rh-b"] }, "expect": { "kind": "recorded" } }],
+    "expectFinal": { "states": { "result:j13:1": "collecting_split_absorbing" } }
+  },
+  {
     "id": "auth-exact-retry-replays-initial-receipt",
     "version": 1,
     "area": "authorization_retry",

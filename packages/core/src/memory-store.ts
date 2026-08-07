@@ -1,8 +1,10 @@
 import {
+  FAIR_ATTEMPT_TABLE,
   INVALIDATION_RESULT_TARGET,
   type AuthorizationInvalidationReason,
   type CanonicalJsonValue,
   type ResultState,
+  type SubmissionEvidence,
   type Timestamp,
   type WorkerId,
 } from "@kuindji/muster-contract";
@@ -25,6 +27,7 @@ import type {
   JobRecord,
   LeaseCandidateSnapshot,
   LeaseRecord,
+  MarkResultSplitOutcome,
   NoWorkAttemptOutcome,
   OperationalStateExpectation,
   OperationalTransitionOutcome,
@@ -32,6 +35,7 @@ import type {
   PermitEpochTransitionOutcome,
   QueueModeSnapshot,
   ReputationEvidenceRecord,
+  RejectSubmissionOutcome,
   RegisterClassVersionOutcome,
   RegisterWorkerOutcome,
   Store,
@@ -74,6 +78,8 @@ const normalized = (value: unknown): unknown => {
 const fingerprint = (value: unknown): string => JSON.stringify(normalized(value));
 const equal = (left: unknown, right: unknown): boolean =>
   fingerprint(left) === fingerprint(right);
+const compareWireIds = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
 
 const pairKey = (left: string, right: string): string =>
   JSON.stringify([left, right]);
@@ -110,6 +116,13 @@ export class InMemoryStore implements Store {
   private candidateRevisions = new Map<string, number>();
   private attempts = new Map<string, JobCycleAttemptSnapshot>();
   private leases = new Map<string, LeaseRecord>();
+  private acceptedSubmissions = new Map<
+    string,
+    {
+      receipt: Parameters<Store["acceptOrReplaySubmission"]>[0]["receipt"];
+      body: CanonicalJsonValue;
+    }
+  >();
   private coreIdentities = new Map<string, CoreIdentityKind>();
   private resultStates = new Map<string, ResultState>();
   private decisions = new Map<string, DecisionResultRecord>();
@@ -134,6 +147,11 @@ export class InMemoryStore implements Store {
   >();
   private enqueueHistory = new Map<string, EnqueueOutcome>();
   private claimHistory = new Map<string, ClaimLeaseOutcome>();
+  private rejectionHistory = new Map<string, {
+    input: string;
+    outcome: RejectSubmissionOutcome;
+  }>();
+  private splitHistory = new Map<string, string>();
   private invalidationHistory = new Map<string, InvalidationOutcome>();
   private emergencyHistory = new Map<
     string,
@@ -161,6 +179,7 @@ export class InMemoryStore implements Store {
     this.candidateRevisions.clear();
     this.attempts.clear();
     this.leases.clear();
+    this.acceptedSubmissions.clear();
     this.coreIdentities.clear();
     this.resultStates.clear();
     this.decisions.clear();
@@ -175,6 +194,8 @@ export class InMemoryStore implements Store {
     this.healthTransitionHistory.clear();
     this.enqueueHistory.clear();
     this.claimHistory.clear();
+    this.rejectionHistory.clear();
+    this.splitHistory.clear();
     this.invalidationHistory.clear();
     this.emergencyHistory.clear();
     this.queue = {
@@ -483,6 +504,7 @@ export class InMemoryStore implements Store {
         openLeaseIds: [],
         acceptedWorkerIds: [],
         acceptedDiversity: [],
+        splitObserved: false,
       });
       this.resultStates.set(key, "collecting");
       const outcome: EnqueueOutcome = { kind: "enqueued" };
@@ -989,6 +1011,51 @@ export class InMemoryStore implements Store {
     });
   }
 
+  private acceptedReplicasFor(
+    jobId: string,
+    collectionCycle: number,
+  ): Array<{
+    evidence: SubmissionEvidence;
+    body: CanonicalJsonValue;
+    acceptedAt: Timestamp;
+  }> {
+    const replicas = [];
+    for (const [leaseId, accepted] of this.acceptedSubmissions) {
+      const lease = this.leases.get(leaseId);
+      if (
+        lease === undefined ||
+        lease.assignment.kind !== "ordinary" ||
+        lease.jobId !== jobId ||
+        lease.collectionCycle !== collectionCycle
+      ) continue;
+      replicas.push({
+        evidence: {
+          leaseId,
+          collectionCycle,
+          resultHash: accepted.receipt.resultHash,
+          workerId: lease.holder,
+        },
+        body: clone(accepted.body),
+        acceptedAt: accepted.receipt.acceptedAt,
+      });
+    }
+    return replicas.sort((left, right) =>
+      compareWireIds(left.evidence.leaseId, right.evidence.leaseId)
+    );
+  }
+
+  private evidenceConflict(record?: ReputationEvidenceRecord): boolean {
+    if (record === undefined) return false;
+    const existing = this.reputationEvidence.get(record.evidenceId);
+    return existing !== undefined && !equal(existing, record);
+  }
+
+  private persistEvidence(record?: ReputationEvidenceRecord): void {
+    if (record !== undefined && !this.reputationEvidence.has(record.evidenceId)) {
+      this.reputationEvidence.set(record.evidenceId, clone(record));
+    }
+  }
+
   private currentInvalidationSnapshot(scope: InvalidationScope): InvalidationSnapshot {
     const selectedDecisionHashes =
       scope.kind === "decision_results" ? new Set(scope.decisionResultHashes) : null;
@@ -1072,6 +1139,7 @@ export class InMemoryStore implements Store {
         openLeaseIds: [],
         acceptedWorkerIds: [],
         acceptedDiversity: [],
+        splitObserved: false,
       });
     }
     if (epochTransition !== undefined) {
@@ -1160,8 +1228,7 @@ export class InMemoryStore implements Store {
         lease === undefined ||
         !lease.open ||
         lease.holder !== input.workerId ||
-        lease.permitEpoch !== input.requeue.sameCyclePermitEpoch ||
-        this.permitEpochs.get(lease.classId) !== input.requeue.sameCyclePermitEpoch
+        lease.permitEpoch !== input.requeue.sameCyclePermitEpoch
       ) {
         return { kind: "refused" };
       }
@@ -1182,8 +1249,7 @@ export class InMemoryStore implements Store {
       if (
         lease === undefined ||
         !lease.open ||
-        lease.permitEpoch !== under.sameCyclePermitEpoch ||
-        this.permitEpochs.get(lease.classId) !== under.sameCyclePermitEpoch
+        lease.permitEpoch !== under.sameCyclePermitEpoch
       ) {
         return;
       }
@@ -1192,28 +1258,260 @@ export class InMemoryStore implements Store {
   }
 
   acceptOrReplaySubmission(
-    _input: Parameters<Store["acceptOrReplaySubmission"]>[0],
+    input: Parameters<Store["acceptOrReplaySubmission"]>[0],
   ): ReturnType<Store["acceptOrReplaySubmission"]> {
-    return this.unsupported("acceptOrReplaySubmission");
+    return this.atomicInput(input, (input) => {
+      const lease = this.leases.get(input.leaseId);
+      if (lease === undefined || lease.holder !== input.workerId) {
+        return { kind: "refused", error: "lease_not_held" };
+      }
+      const accepted = this.acceptedSubmissions.get(input.leaseId);
+      if (accepted !== undefined) {
+        return accepted.receipt.inputHash === input.inputHash &&
+            accepted.receipt.resultHash === input.resultHash
+          ? clone({ kind: "replayed", receipt: accepted.receipt })
+          : { kind: "conflict" };
+      }
+      if (!lease.open) return { kind: "refused", error: "lease_not_held" };
+
+      const receiptMatches =
+        input.receipt.leaseId === lease.leaseId &&
+        input.receipt.jobId === lease.jobId &&
+        input.receipt.collectionCycle === lease.collectionCycle &&
+        input.receipt.inputHash === input.inputHash &&
+        input.receipt.resultHash === input.resultHash &&
+        input.receipt.contractVersion === lease.contractVersion &&
+        input.receipt.permitEpoch === lease.permitEpoch &&
+        input.receipt.outcome === "accepted";
+      if (!receiptMatches || input.inputHash !== lease.inputHash) {
+        return { kind: "conflict" };
+      }
+
+      const acceptedAt = Date.parse(input.receipt.acceptedAt);
+      if (
+        !Number.isFinite(acceptedAt) ||
+        acceptedAt < Date.parse(lease.issuedAt)
+      ) return { kind: "conflict" };
+      if (
+        acceptedAt >= Date.parse(lease.expiresAt) ||
+        acceptedAt >= Date.parse(lease.absoluteInFlightDeadline)
+      ) {
+        this.closeLeaseAttempt(
+          lease,
+          !FAIR_ATTEMPT_TABLE.lease_expired_no_fault.countsForContribution,
+        );
+        return { kind: "refused", error: "lease_not_held" };
+      }
+      const contract = this.classVersions.get(
+        pairKey(lease.classId, lease.contractVersion),
+      );
+      const contractAccepts = contract?.state === "active" ||
+        (
+          contract?.state === "draining" &&
+          contract.acceptedUntil !== undefined &&
+          acceptedAt <= Date.parse(contract.acceptedUntil)
+        );
+      if (!contractAccepts) {
+        this.closeLeaseAttempt(
+          lease,
+          !FAIR_ATTEMPT_TABLE.coordinator_fault.countsForContribution,
+        );
+        return { kind: "refused", error: "contract_expired" };
+      }
+      if (
+        this.resultStates.get(cycleKey(lease.jobId, lease.collectionCycle)) !==
+          "collecting"
+      ) return { kind: "refused", error: "lease_not_held" };
+      if (
+        input.reputationEvidence !== undefined &&
+        (
+          input.reputationEvidence.workerId !== lease.holder ||
+          input.reputationEvidence.job === undefined ||
+          input.reputationEvidence.job.jobId !== lease.jobId ||
+          input.reputationEvidence.job.collectionCycle !== lease.collectionCycle
+        )
+      ) return { kind: "evidence_conflict" };
+      if (this.evidenceConflict(input.reputationEvidence)) {
+        return { kind: "evidence_conflict" };
+      }
+
+      this.closeLeaseAttempt(lease, false);
+      const persisted = {
+        receipt: clone(input.receipt),
+        body: clone(input.body),
+      };
+      this.acceptedSubmissions.set(lease.leaseId, persisted);
+      if (lease.assignment.kind === "ordinary") {
+        const key = cycleKey(lease.jobId, lease.collectionCycle);
+        const attempts = this.attempts.get(key);
+        const worker = this.workers.get(lease.holder);
+        if (attempts === undefined || worker === undefined) {
+          throw new Error(`missing accepted-replica state for ${lease.leaseId}`);
+        }
+        this.attempts.set(key, {
+          ...attempts,
+          acceptedWorkerIds: [...attempts.acceptedWorkerIds, lease.holder],
+          acceptedDiversity: [
+            ...attempts.acceptedDiversity,
+            {
+              workerId: lease.holder,
+              axes: {
+                slot: String(worker.slot),
+                provider: worker.capabilities.providerSurface,
+                accountCluster: worker.accountCluster,
+                language: [...worker.capabilities.languages].sort().join(","),
+              },
+            },
+          ],
+        });
+      }
+      this.persistEvidence(input.reputationEvidence);
+      return clone({ kind: "accepted", receipt: persisted.receipt });
+    });
+  }
+
+  rejectSubmission(
+    input: Parameters<Store["rejectSubmission"]>[0],
+  ): Promise<RejectSubmissionOutcome> {
+    return this.atomicInput(input, (input) => {
+      const lease = this.leases.get(input.leaseId);
+      if (lease === undefined || lease.holder !== input.workerId) {
+        return { kind: "refused", error: "lease_not_held" };
+      }
+      if (this.acceptedSubmissions.has(input.leaseId)) return { kind: "conflict" };
+      const history = this.rejectionHistory.get(input.leaseId);
+      const inputKey = fingerprint(input);
+      if (history !== undefined) {
+        return history.input === inputKey
+          ? { kind: "replayed" }
+          : { kind: "conflict" };
+      }
+      if (!lease.open) return { kind: "refused", error: "lease_not_held" };
+      if (
+        input.reputationEvidence !== undefined &&
+        (
+          input.reputationEvidence.workerId !== lease.holder ||
+          input.reputationEvidence.job === undefined ||
+          input.reputationEvidence.job.jobId !== lease.jobId ||
+          input.reputationEvidence.job.collectionCycle !== lease.collectionCycle
+        )
+      ) return { kind: "evidence_conflict" };
+      if (this.evidenceConflict(input.reputationEvidence)) {
+        return { kind: "evidence_conflict" };
+      }
+      this.closeLeaseAttempt(
+        lease,
+        !FAIR_ATTEMPT_TABLE[input.classification].countsForContribution,
+      );
+      this.persistEvidence(input.reputationEvidence);
+      const outcome: RejectSubmissionOutcome = { kind: "recorded" };
+      this.rejectionHistory.set(input.leaseId, { input: inputKey, outcome });
+      return outcome;
+    });
   }
 
   getAcceptedSubmission(
-    _leaseId: string,
+    leaseId: string,
   ): ReturnType<Store["getAcceptedSubmission"]> {
-    return this.unsupported("getAcceptedSubmission");
+    return this.atomic(() => clone(this.acceptedSubmissions.get(leaseId) ?? null));
   }
 
   listAcceptedReplicas(
-    _jobId: string,
-    _collectionCycle: number,
+    jobId: string,
+    collectionCycle: number,
   ): ReturnType<Store["listAcceptedReplicas"]> {
-    return this.unsupported("listAcceptedReplicas");
+    return this.atomic(() => clone(this.acceptedReplicasFor(jobId, collectionCycle)));
+  }
+
+  markResultSplit(
+    input: Parameters<Store["markResultSplit"]>[0],
+  ): Promise<MarkResultSplitOutcome> {
+    return this.atomicInput(input, (input) => {
+      const key = cycleKey(input.jobId, input.collectionCycle);
+      const actual = this.resultStates.get(key) ?? null;
+      const job = this.jobCycles.get(key);
+      const attempts = this.attempts.get(key);
+      if (actual !== "collecting" || job?.inputHash !== input.inputHash || attempts === undefined) {
+        return { kind: "conflict", actual };
+      }
+      const expected = [...input.evidence].sort((left, right) =>
+        compareWireIds(left.leaseId, right.leaseId)
+      );
+      const inputKey = fingerprint({
+        jobId: input.jobId,
+        collectionCycle: input.collectionCycle,
+        inputHash: input.inputHash,
+        evidence: expected,
+      });
+      if (attempts.splitObserved) {
+        return this.splitHistory.get(key) === inputKey
+          ? { kind: "replayed" }
+          : { kind: "conflict", actual };
+      }
+      const evidence = this.acceptedReplicasFor(
+        input.jobId,
+        input.collectionCycle,
+      ).map((replica) => replica.evidence);
+      if (expected.length < 2 || !equal(evidence, expected)) {
+        return { kind: "conflict", actual };
+      }
+      this.attempts.set(key, { ...attempts, splitObserved: true });
+      this.splitHistory.set(key, inputKey);
+      this.candidateRevisions.set(
+        key,
+        (this.candidateRevisions.get(key) ?? 0) + 1,
+      );
+      return { kind: "recorded" };
+    });
   }
 
   recordDecisionResult(
-    _input: Parameters<Store["recordDecisionResult"]>[0],
+    input: Parameters<Store["recordDecisionResult"]>[0],
   ): ReturnType<Store["recordDecisionResult"]> {
-    return this.unsupported("recordDecisionResult");
+    return this.atomicInput(input, (input) => {
+      const existing = this.decisions.get(input.decision.decisionResultHash);
+      if (existing !== undefined) {
+        return equal(existing, input.decision)
+          ? { ok: true }
+          : { ok: false, actual: this.resultStates.get(cycleKey(
+              input.decision.jobId,
+              input.decision.collectionCycle,
+            )) ?? "collecting" };
+      }
+      const key = cycleKey(
+        input.decision.jobId,
+        input.decision.collectionCycle,
+      );
+      const actual = this.resultStates.get(key) ?? null;
+      const job = this.jobCycles.get(key);
+      const attempts = this.attempts.get(key);
+      const evidence = this.acceptedReplicasFor(
+        input.decision.jobId,
+        input.decision.collectionCycle,
+      ).map((replica) => replica.evidence);
+      const expectedEvidence = [...input.decision.evidence].sort((left, right) =>
+        compareWireIds(left.leaseId, right.leaseId)
+      );
+      if (
+        actual !== input.transition.from ||
+        job === undefined ||
+        attempts === undefined ||
+        attempts.splitObserved ||
+        attempts.openLeaseIds.length > 0 ||
+        input.decision.inputHash !== job.inputHash ||
+        input.decision.contractVersion !== job.contractVersion ||
+        input.decision.permitEpoch !== job.permitEpoch ||
+        !equal(evidence, expectedEvidence)
+      ) {
+        return { ok: false, actual: actual ?? input.transition.from };
+      }
+      this.decisions.set(
+        input.decision.decisionResultHash,
+        clone(input.decision),
+      );
+      this.resultStates.set(key, "verified");
+      return { ok: true };
+    });
   }
 
   getDecisionResult(

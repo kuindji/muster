@@ -20,6 +20,26 @@
     "description": "A different input or result hash for a lease with an accepted row conflicts and cannot overwrite that row."
   },
   {
+    "id": "invalid-submission-settlement-atomic",
+    "description": "Rejecting an invalid unaccepted submission closes and requeues the lease, releases the current-window contribution occurrence, and persists any qualifying reputation evidence in one transaction."
+  },
+  {
+    "id": "contract-expiry-settlement-atomic",
+    "description": "A submission racing a contract cutoff either accepts before the cutoff or returns contract_expired while closing and requeueing the lease with coordinator-fault contribution accounting in the same transaction."
+  },
+  {
+    "id": "split-marker-evidence-fenced",
+    "description": "The first absorbing-split marker compares the complete accepted same-cycle evidence set atomically; stale evidence cannot open split-only rerouting or permit an automatic decision."
+  },
+  {
+    "id": "decision-evidence-snapshot-atomic",
+    "description": "Automatic decision persistence compares the complete accepted same-cycle evidence set and absence of open leases atomically; stale, fabricated, or mixed evidence changes nothing."
+  },
+  {
+    "id": "canary-submission-excluded-from-replicas",
+    "description": "An accepted canary receipt remains replayable and may commit worker evidence, but its body and result hash never enter the ordinary job cycle's accepted-replica projection."
+  },
+  {
     "id": "expiry-requeue-atomic",
     "description": "Lease expiry and same-cycle requeue are one transaction with no observable expired-but-not-requeued interval."
   },

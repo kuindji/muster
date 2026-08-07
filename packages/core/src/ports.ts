@@ -5,6 +5,7 @@ import type {
   ActionAdjudicationVerdict,
   ActionAuthorization,
   AdjudicationCapacity,
+  AttemptOutcome,
   AuthorizationDenialReason,
   AuthorizationInitialReceipt,
   AuthorizationInvalidationReason,
@@ -311,6 +312,8 @@ export interface JobCycleAttemptSnapshot {
   readonly openLeaseIds: readonly string[];
   readonly acceptedWorkerIds: readonly WorkerId[];
   readonly acceptedDiversity: readonly AcceptedDiversityFact[];
+  /** Persisted only after core proves a non-unanimous target evidence set. */
+  readonly splitObserved: boolean;
 }
 
 /** Immutable Store read. Core ranks these records; Store does not. */
@@ -558,7 +561,25 @@ export type SubmitOutcome =
   | { kind: "accepted"; receipt: SubmissionReceipt }
   | { kind: "replayed"; receipt: SubmissionReceipt }
   | { kind: "conflict" }
+  | { kind: "evidence_conflict" }
+  | {
+      kind: "refused";
+      error: "lease_not_held" | "contract_expired";
+    };
+
+export type SubmissionAttemptClassification = Extract<
+  AttemptOutcome,
+  "rejected_invalid" | "coordinator_fault" | "lease_expired_no_fault"
+>;
+
+export type RejectSubmissionOutcome =
+  | { kind: "recorded" | "replayed" }
+  | { kind: "conflict" | "evidence_conflict" }
   | { kind: "refused"; error: "lease_not_held" };
+
+export type MarkResultSplitOutcome =
+  | { kind: "recorded" | "replayed" }
+  | { kind: "conflict"; actual: ResultState | null };
 
 export type AuthorizeIntentOutcome =
   | {
@@ -701,7 +722,20 @@ export interface Store {
     resultHash: string;
     body: CanonicalJsonValue;
     receipt: SubmissionReceipt;
+    /** Optional checked-success or failure evidence committed with acceptance. */
+    reputationEvidence?: ReputationEvidenceRecord;
   }): Promise<SubmitOutcome>;
+  /**
+   * Atomically closes and requeues an unaccepted lease attempt, applies the
+   * fair-attempt contribution rule, and records optional reputation evidence.
+   */
+  rejectSubmission(input: {
+    workerId: WorkerId;
+    leaseId: string;
+    classification: SubmissionAttemptClassification;
+    at: Timestamp;
+    reputationEvidence?: ReputationEvidenceRecord;
+  }): Promise<RejectSubmissionOutcome>;
   getAcceptedSubmission(leaseId: string): Promise<{
     receipt: SubmissionReceipt;
     body: CanonicalJsonValue;
@@ -719,6 +753,13 @@ export interface Store {
     jobId: string,
     collectionCycle: number,
   ): Promise<ResultState | null>;
+  /** Atomically fences the evidence set that first made a split absorbing. */
+  markResultSplit(input: {
+    jobId: string;
+    collectionCycle: number;
+    inputHash: string;
+    evidence: SubmissionEvidence[];
+  }): Promise<MarkResultSplitOutcome>;
   transitionResult(input: {
     jobId: string;
     collectionCycle: number;

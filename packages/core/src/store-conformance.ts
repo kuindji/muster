@@ -129,6 +129,28 @@ const preparedLease = (
   open: true,
 });
 
+const submissionInput = (
+  lease: LeaseRecord,
+  resultHash = `result-${lease.leaseId}`,
+) => ({
+  workerId: lease.holder,
+  leaseId: lease.leaseId,
+  inputHash: lease.inputHash,
+  resultHash,
+  body: { answer: lease.leaseId },
+  receipt: {
+    leaseId: lease.leaseId,
+    jobId: lease.jobId,
+    collectionCycle: lease.collectionCycle,
+    inputHash: lease.inputHash,
+    resultHash,
+    contractVersion: lease.contractVersion,
+    permitEpoch: lease.permitEpoch,
+    outcome: "accepted" as const,
+    acceptedAt: NOW,
+  },
+});
+
 const initializeClass = async (store: Store): Promise<ClassHealthSnapshot> => {
   const registered = await store.registerClassVersion({
     classId: "class-1",
@@ -877,6 +899,13 @@ const stickyEpochRequeueCase: StoreConformanceCase = {
       preparedPayload: { instruction: "process job-1" },
     });
     assert(claimed.kind === "claimed", "abandonment lease must claim");
+    const advancedEpoch = await store.transitionPermitEpoch({
+      classId: "class-1",
+      fromEpoch: "epoch-1",
+      toEpoch: "epoch-2",
+      at: LATER,
+    });
+    assert(advancedEpoch.kind === "applied", "current epoch must advance");
     const wrongEpoch = await store.abandonLease({
       workerId: worker.workerId,
       leaseId: lease.leaseId,
@@ -900,6 +929,446 @@ const stickyEpochRequeueCase: StoreConformanceCase = {
     assert(
       routing?.contributionUsed === 1,
       "provider failure must retain its fair-attempt contribution",
+    );
+
+    const expiryStore = await factory();
+    await initializeClass(expiryStore);
+    const expiryWorker = await initializeWorker(expiryStore);
+    const expiryCandidate = await enqueue(expiryStore);
+    const expiryLease = preparedLease(
+      expiryCandidate,
+      expiryWorker,
+      "lease-old-epoch-expiry",
+    );
+    await expiryStore.compareAndClaimLease({
+      expectedCandidate: expiryCandidate,
+      expectedWorker: expiryWorker,
+      preparedLease: expiryLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    await expiryStore.transitionPermitEpoch({
+      classId: "class-1",
+      fromEpoch: "epoch-1",
+      toEpoch: "epoch-2",
+      at: LATER,
+    });
+    await expiryStore.expireAndRequeue(expiryLease.leaseId, {
+      sameCyclePermitEpoch: "epoch-1",
+    });
+    assert(
+      (await expiryStore.getLease(expiryLease.leaseId))?.open === false,
+      "expiry must settle under the lease-stamped epoch after current epoch advances",
+    );
+  },
+};
+
+const submissionIdempotencyCase: StoreConformanceCase = {
+  id: "submit-idempotency-exact-triple",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-submit");
+    const claimed = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    assert(claimed.kind === "claimed", "submission lease must claim");
+    const input = {
+      ...submissionInput(lease),
+      reputationEvidence: {
+        evidenceId: "evidence-submit",
+        workerId: worker.workerId,
+        at: NOW,
+        job: { jobId: lease.jobId, collectionCycle: lease.collectionCycle },
+        source: "checked_success" as const,
+        impact: "positive" as const,
+      },
+    };
+    const [first, replay] = await Promise.all([
+      store.acceptOrReplaySubmission(input),
+      store.acceptOrReplaySubmission(input),
+    ]);
+    assert(first.kind === "accepted", "first submission must accept");
+    assert(replay.kind === "replayed", "exact concurrent submit must replay");
+    assert(
+      JSON.stringify(first.receipt) === JSON.stringify(replay.receipt),
+      "submission replay receipt must be byte-identical",
+    );
+    const persisted = await store.getAcceptedSubmission(lease.leaseId);
+    assert(
+      JSON.stringify(persisted) === JSON.stringify({
+        receipt: input.receipt,
+        body: input.body,
+      }),
+      "accepted body and receipt must persist together",
+    );
+    const replicas = await store.listAcceptedReplicas(lease.jobId, 1);
+    assert(replicas.length === 1, "ordinary acceptance must add one replica");
+    assert(
+      (await store.getWorkerRoutingSnapshot(worker.workerId))?.contributionUsed === 1,
+      "successful submission must retain its contribution occurrence",
+    );
+    assert(
+      (await store.listReputationEvidence(worker.workerId)).length === 1,
+      "checked evidence must commit with acceptance",
+    );
+  },
+};
+
+const conflictingSubmissionCase: StoreConformanceCase = {
+  id: "conflicting-retry-preserves-accepted-row",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-conflict");
+    await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    const input = submissionInput(lease);
+    const accepted = await store.acceptOrReplaySubmission(input);
+    assert(accepted.kind === "accepted", "baseline submission must accept");
+    const conflict = await store.acceptOrReplaySubmission({
+      ...input,
+      resultHash: "different-result",
+      receipt: { ...input.receipt, resultHash: "different-result" },
+    });
+    assert(conflict.kind === "conflict", "different result must conflict");
+    assert(
+      (await store.getAcceptedSubmission(lease.leaseId))?.receipt.resultHash ===
+        input.resultHash,
+      "conflict must preserve the accepted row",
+    );
+    const wrongHolder = await store.acceptOrReplaySubmission({
+      ...input,
+      workerId: "worker-other",
+    });
+    assert(
+      wrongHolder.kind === "refused" && wrongHolder.error === "lease_not_held",
+      "holder binding must precede replay disclosure",
+    );
+  },
+};
+
+const invalidSubmissionSettlementCase: StoreConformanceCase = {
+  id: "invalid-submission-settlement-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-invalid");
+    await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    const rejection = {
+      workerId: worker.workerId,
+      leaseId: lease.leaseId,
+      classification: "rejected_invalid" as const,
+      at: LATER,
+      reputationEvidence: {
+        evidenceId: "evidence-invalid",
+        workerId: worker.workerId,
+        at: LATER,
+        job: { jobId: lease.jobId, collectionCycle: lease.collectionCycle },
+        source: "structural_failure" as const,
+        impact: "negative" as const,
+      },
+    };
+    const recorded = await store.rejectSubmission(rejection);
+    assert(recorded.kind === "recorded", "invalid submission must settle");
+    assert(
+      (await store.getLease(lease.leaseId))?.open === false,
+      "invalid settlement must close the lease",
+    );
+    assert(
+      (await store.getWorkerRoutingSnapshot(worker.workerId))?.contributionUsed === 0,
+      "invalid settlement must release current-window contribution",
+    );
+    assert(
+      (await store.listReputationEvidence(worker.workerId))[0]?.source ===
+        "structural_failure",
+      "invalid evidence must commit with lease settlement",
+    );
+    assert(
+      (await store.rejectSubmission(rejection)).kind === "replayed",
+      "exact invalid settlement must replay",
+    );
+    assert(
+      (await store.acceptOrReplaySubmission(submissionInput(lease))).kind ===
+        "refused",
+      "settled invalid lease must not later accept",
+    );
+  },
+};
+
+const canarySubmissionProjectionCase: StoreConformanceCase = {
+  id: "canary-submission-excluded-from-replicas",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease: LeaseRecord = {
+      ...preparedLease(candidate, worker, "lease-canary-submit"),
+      inputHash: "input-canary-submit",
+      payloadRef: "lease-canary-submit",
+      assignment: {
+        kind: "canary",
+        canaryKind: "probation",
+        canaryId: "canary-submit",
+        sourceJobId: "resolved-source",
+        sourceContractVersion: candidate.job.contractVersion,
+        expectedResultHash: "result-canary-expected",
+      },
+    };
+    const claim = await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "canary" },
+    });
+    assert(claim.kind === "claimed", "canary submission lease must claim");
+    const accepted = await store.acceptOrReplaySubmission({
+      ...submissionInput(lease, "result-canary-actual"),
+      reputationEvidence: {
+        evidenceId: "evidence-canary",
+        workerId: worker.workerId,
+        at: NOW,
+        job: { jobId: lease.jobId, collectionCycle: lease.collectionCycle },
+        source: "held_out_canary",
+        impact: "negative",
+      },
+    });
+    assert(accepted.kind === "accepted", "canary receipt must accept");
+    assert(
+      (await store.listAcceptedReplicas(lease.jobId, lease.collectionCycle)).length === 0,
+      "canary must not enter ordinary accepted replicas",
+    );
+    assert(
+      (await store.getAcceptedSubmission(lease.leaseId))?.receipt.resultHash ===
+        "result-canary-actual",
+      "canary receipt must remain replayable",
+    );
+    const current = (await store.listLeaseCandidates({ classIds: [lease.classId] }))[0];
+    assert(
+      current?.attempts.acceptedWorkerIds.length === 0,
+      "canary worker must remain eligible for the displaced ordinary job",
+    );
+  },
+};
+
+const contractExpirySettlementCase: StoreConformanceCase = {
+  id: "contract-expiry-settlement-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-contract-expired");
+    await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    const draining = await store.transitionClassVersion({
+      classId: lease.classId,
+      contractVersion: lease.contractVersion,
+      from: "active",
+      to: "draining",
+      at: NOW,
+      leaseDisabledAt: NOW,
+      acceptedUntil: NOW,
+    });
+    assert(draining.kind === "applied", "class must begin draining");
+    const input = submissionInput(lease);
+    const expired = await store.acceptOrReplaySubmission({
+      ...input,
+      receipt: { ...input.receipt, acceptedAt: LATER },
+    });
+    assert(
+      expired.kind === "refused" && expired.error === "contract_expired",
+      "acceptance must observe contract expiry in its transaction",
+    );
+    assert(
+      (await store.getLease(lease.leaseId))?.open === false,
+      "contract expiry must settle the lease atomically",
+    );
+    assert(
+      (await store.getWorkerRoutingSnapshot(worker.workerId))?.contributionUsed === 1,
+      "coordinator fault must retain contribution",
+    );
+  },
+};
+
+const splitEvidenceFenceCase: StoreConformanceCase = {
+  id: "split-marker-evidence-fenced",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const firstWorker = await initializeWorker(store, "worker-1", 1);
+    const firstCandidate = await enqueue(store);
+    const firstLease = preparedLease(firstCandidate, firstWorker, "lease-split-1");
+    await store.compareAndClaimLease({
+      expectedCandidate: firstCandidate,
+      expectedWorker: firstWorker,
+      preparedLease: firstLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    await store.acceptOrReplaySubmission(submissionInput(firstLease, "result-a"));
+
+    const secondWorker = await initializeWorker(store, "worker-2", 2);
+    const candidates = await store.listLeaseCandidates({ classIds: ["class-1"] });
+    const secondCandidate = candidates[0];
+    assert(secondCandidate !== undefined, "second replica candidate must exist");
+    const secondLease = preparedLease(secondCandidate, secondWorker, "lease-split-2");
+    await store.compareAndClaimLease({
+      expectedCandidate: secondCandidate,
+      expectedWorker: secondWorker,
+      preparedLease: secondLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    await store.acceptOrReplaySubmission(submissionInput(secondLease, "result-b"));
+    const evidence = (await store.listAcceptedReplicas("job-1", 1))
+      .map((replica) => replica.evidence);
+    const marked = await store.markResultSplit({
+      jobId: "job-1",
+      collectionCycle: 1,
+      inputHash: firstCandidate.job.inputHash,
+      evidence,
+    });
+    assert(marked.kind === "recorded", "complete split evidence must mark");
+    const replay = await store.markResultSplit({
+      jobId: "job-1",
+      collectionCycle: 1,
+      inputHash: firstCandidate.job.inputHash,
+      evidence: [...evidence].reverse(),
+    });
+    assert(replay.kind === "replayed", "canonical split evidence must replay");
+    const changed = await store.markResultSplit({
+      jobId: "job-1",
+      collectionCycle: 1,
+      inputHash: firstCandidate.job.inputHash,
+      evidence: evidence.map((item, index) =>
+        index === 0 ? { ...item, resultHash: "changed-result" } : item
+      ),
+    });
+    assert(changed.kind === "conflict", "changed split evidence must conflict");
+    const current = (await store.listLeaseCandidates({ classIds: ["class-1"] }))[0];
+    assert(current?.attempts.splitObserved, "split marker must be durable");
+    const decision = await store.recordDecisionResult({
+      decision: {
+        decisionResultHash: "decision-after-split",
+        jobId: "job-1",
+        collectionCycle: 1,
+        inputHash: firstCandidate.job.inputHash,
+        result: { answer: "must not verify" },
+        evidence,
+        achievedStrength: "structural_only",
+        contractVersion: firstCandidate.job.contractVersion,
+        permitEpoch: firstCandidate.job.permitEpoch,
+        verifiedAt: LATER,
+      },
+      transition: { from: "collecting", at: LATER },
+    });
+    assert(!decision.ok, "absorbing split must fence automatic decision");
+  },
+};
+
+const decisionEvidenceSnapshotCase: StoreConformanceCase = {
+  id: "decision-evidence-snapshot-atomic",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const worker = await initializeWorker(store);
+    const candidate = await enqueue(store);
+    const lease = preparedLease(candidate, worker, "lease-decision");
+    await store.compareAndClaimLease({
+      expectedCandidate: candidate,
+      expectedWorker: worker,
+      preparedLease: lease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    await store.acceptOrReplaySubmission(submissionInput(lease));
+    const evidence = (await store.listAcceptedReplicas("job-1", 1))
+      .map((replica) => replica.evidence);
+    const decision = {
+      decisionResultHash: "decision-1",
+      jobId: "job-1",
+      collectionCycle: 1,
+      inputHash: candidate.job.inputHash,
+      result: { answer: "lease-decision" },
+      evidence,
+      achievedStrength: "structural_only" as const,
+      contractVersion: candidate.job.contractVersion,
+      permitEpoch: candidate.job.permitEpoch,
+      verifiedAt: LATER,
+    };
+    const recorded = await store.recordDecisionResult({
+      decision,
+      transition: { from: "collecting", at: LATER },
+    });
+    assert(recorded.ok, "exact current evidence must record a decision");
+    assert(
+      await store.getResultState("job-1", 1) === "verified",
+      "decision and verified state must publish together",
+    );
+    assert(
+      JSON.stringify(await store.getDecisionResult("decision-1")) ===
+        JSON.stringify(decision),
+      "decision must be retrievable by its content hash",
+    );
+
+    const staleStore = await factory();
+    await initializeClass(staleStore);
+    const staleWorker = await initializeWorker(staleStore);
+    const staleCandidate = await enqueue(staleStore);
+    const staleLease = preparedLease(
+      staleCandidate,
+      staleWorker,
+      "lease-stale-decision",
+    );
+    await staleStore.compareAndClaimLease({
+      expectedCandidate: staleCandidate,
+      expectedWorker: staleWorker,
+      preparedLease: staleLease,
+      preparedPayload: { instruction: "process job-1" },
+    });
+    await staleStore.acceptOrReplaySubmission(submissionInput(staleLease));
+    const staleEvidence = (await staleStore.listAcceptedReplicas("job-1", 1))
+      .map((replica) => replica.evidence);
+    const refused = await staleStore.recordDecisionResult({
+      decision: {
+        ...decision,
+        decisionResultHash: "decision-stale",
+        evidence: [
+          ...staleEvidence,
+          {
+            leaseId: "lease-fabricated",
+            collectionCycle: 1,
+            resultHash: "result-fabricated",
+            workerId: "worker-fabricated",
+          },
+        ],
+      },
+      transition: { from: "collecting", at: LATER },
+    });
+    assert(!refused.ok, "stale or fabricated evidence must conflict");
+    assert(
+      await staleStore.getResultState("job-1", 1) === "collecting",
+      "evidence conflict must preserve the collecting state",
     );
   },
 };
@@ -984,6 +1453,18 @@ export const TASK4_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     stickyEpochRequeueCase,
   ]);
 
+export const TASK5_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
+  Object.freeze([
+    ...TASK4_STORE_CONFORMANCE_CASES,
+    submissionIdempotencyCase,
+    conflictingSubmissionCase,
+    invalidSubmissionSettlementCase,
+    canarySubmissionProjectionCase,
+    contractExpirySettlementCase,
+    splitEvidenceFenceCase,
+    decisionEvidenceSnapshotCase,
+  ]);
+
 export async function runTask1StoreConformance(
   factory: StoreFactory,
 ): Promise<readonly string[]> {
@@ -1005,6 +1486,22 @@ export async function runTask4StoreConformance(
 ): Promise<readonly string[]> {
   const passed: string[] = [];
   for (const testCase of TASK4_STORE_CONFORMANCE_CASES) {
+    try {
+      await testCase.run(factory);
+      passed.push(testCase.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${testCase.id}: ${detail}`, { cause: error });
+    }
+  }
+  return Object.freeze(passed);
+}
+
+export async function runTask5StoreConformance(
+  factory: StoreFactory,
+): Promise<readonly string[]> {
+  const passed: string[] = [];
+  for (const testCase of TASK5_STORE_CONFORMANCE_CASES) {
     try {
       await testCase.run(factory);
       passed.push(testCase.id);
