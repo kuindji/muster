@@ -1,11 +1,11 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 24)
+**Date:** 2026-08-04 (revision 25)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 13 defines
-the queue-wide emergency batch boundary and is independently reviewed and
-corrected. The reviewed boundary is tagged locally as `contract-freeze-13`;
+The platform gate passed on 2026-08-06. Contract-freeze amendment 14 defines
+the class-health live-version policy-set boundary and is independently reviewed
+and corrected. The reviewed boundary is tagged locally as `contract-freeze-14`;
 Task 8 runtime work resumes in a separate implementation unit.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
@@ -263,6 +263,15 @@ set and accepts one canonical whole-class invalidation batch per listed class.
 A missing, duplicate, extra, non-class, or racing class scope conflicts before
 mutation. This is a contract correction only; revision 24 implements no Task-8
 operations service and does not change the worker wire.
+
+Revision 25 closes the class-health policy ownership gap found by the health
+runtime trace. Adjudication policy is versioned while health and capacity are
+class-wide, and active plus draining versions may coexist. Store now lists and
+atomically compares the complete durable class-version set during health
+refresh. Core sums live-version demand and restoration rates and uses the
+strictest dwell and freshness bounds. This is a contract correction only;
+revision 25 implements no Task-8 health service and does not change the worker
+wire.
 
 ## 1. What Muster is
 
@@ -1719,6 +1728,15 @@ Automatic refresh never replaces an operator-owned admission/emergency halt
 and never restores `adjudication_starved`. Explicit restoration uses the same
 atomic comparison and the higher `restoreAbovePerWeek` threshold.
 
+Health policy is derived from every durable `active` or `draining` version of
+the class, never a caller-selected version. `requiredRatePerWeek` and
+`restoreAbovePerWeek` sum across those live versions; `starvationDwell` and
+`capacityMaxAge` use the minimum. A live version with no adjudication policy
+contributes zero and cannot weaken another live version. Core loads and
+schema-checks every live runtime entry before refresh. Store compares the
+complete `listClassVersions(classId)` result atomically with load and health, so
+registration or lifecycle changes fence a prepared decision.
+
 | Dimension | Meaning and intake effect |
 |---|---|
 | `operating: 'ready'` | Normal for the operating dimension |
@@ -2065,6 +2083,11 @@ class-qualified invalidation to a canonical array containing exactly one
 whole-class scope for every current class-health snapshot. The applied or
 conflict outcome returns the same class-qualified array. No new record or field
 enters the worker wire.
+
+Revision 25 adds `listClassVersions(classId)` and includes its complete result
+in `refreshClassHealth.expectedClassVersions`. Store compares that set in the
+same transaction as health and adjudication load. No new record or field enters
+the worker wire.
 
 ### 6.7 `OracleSpec`
 
@@ -2661,6 +2684,9 @@ correction and is independently reviewed, corrected, and tagged
 Revision 24 implements the queue-wide emergency batch correction and is
 independently reviewed, corrected, and tagged `contract-freeze-13`.
 
+Revision 25 implements the class-health policy-set correction and is
+independently reviewed, corrected, and tagged `contract-freeze-14`.
+
 ### 11.2 Contract-freeze amendment 2
 
 Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
@@ -2891,7 +2917,19 @@ scope in class-ID order. The amendment changes only the internal Store/core
 boundary, leaves the worker wire at `1.1.0`, and is reviewed before the local
 `contract-freeze-13` tag.
 
-### 11.14 Open
+### 11.14 Contract-freeze amendment 14: class-health policy set
+
+Revision 25 is complete only when Store lists the complete durable version set
+for a class and atomically compares it during health refresh. Core must load
+every active or draining version, fail closed on absent or schema-incompatible
+runtime data, sum required and restoration rates, and use the minimum dwell and
+capacity-freshness bounds. Versions without adjudication policy contribute zero
+without weakening versions that have one. Any registration or lifecycle race
+conflicts without publishing stale health. The amendment changes only internal
+Store/core contracts, leaves the worker wire at `1.1.0`, and is reviewed before
+the local `contract-freeze-14` tag.
+
+### 11.15 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

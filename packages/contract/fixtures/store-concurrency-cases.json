@@ -226,5 +226,9 @@
   {
     "id": "emergency-new-class-race-fails-closed",
     "description": "A class-health snapshot created after emergency inspection makes the queue-wide batch conflict without halting the queue or invalidating any prepared class."
+  },
+  {
+    "id": "health-refresh-version-race-fails-closed",
+    "description": "A class-version registration or lifecycle transition after policy inspection makes health refresh conflict without publishing a stale starvation decision."
   }
 ]

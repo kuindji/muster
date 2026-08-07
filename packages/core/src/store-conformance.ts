@@ -1855,9 +1855,11 @@ const healthRefreshLoadRaceCase: StoreConformanceCase = {
       classId: "class-1",
       windowStartsAt: NOW,
     });
+    const classVersions = await store.listClassVersions("class-1");
     const stale = await store.refreshClassHealth({
       expectedHealth: health,
       expectedLoad: { ...load, revision: load.revision + 1 },
+      expectedClassVersions: classVersions,
       next: {
         health: { operating: "adjudication_starved" },
         updatedAt: LATER,
@@ -1874,6 +1876,7 @@ const healthRefreshLoadRaceCase: StoreConformanceCase = {
     const marked = await store.refreshClassHealth({
       expectedHealth: health,
       expectedLoad: load,
+      expectedClassVersions: classVersions,
       next: {
         health: { operating: "ready" },
         updatedAt: LATER,
@@ -2005,6 +2008,42 @@ const emergencyNewClassRaceCase: StoreConformanceCase = {
   },
 };
 
+const healthRefreshVersionRaceCase: StoreConformanceCase = {
+  id: "health-refresh-version-race-fails-closed",
+  run: async (factory) => {
+    const store = await factory();
+    const health = await initializeClass(store);
+    const load = await store.inspectAdjudicationLoad({
+      classId: "class-1",
+      windowStartsAt: NOW,
+    });
+    const versions = await store.listClassVersions("class-1");
+    const transitioned = await store.transitionClassVersion({
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      from: "active",
+      to: "draining",
+      at: LATER,
+      leaseDisabledAt: LATER,
+      acceptedUntil: "2026-08-06T17:00:00.000Z",
+    });
+    assert(transitioned.kind === "applied", "version transition must apply");
+    const stale = await store.refreshClassHealth({
+      expectedHealth: health,
+      expectedLoad: load,
+      expectedClassVersions: versions,
+      next: {
+        health: { operating: "adjudication_starved" },
+        updatedAt: LATER,
+        source: "automatic",
+        adjudicationUnsafeSince: NOW,
+      },
+    });
+    assert(stale.kind === "conflict", "stale policy set must conflict");
+    assert(stale.health.health.operating === "ready", "health must remain ready");
+  },
+};
+
 export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
   Object.freeze([
     classLifecycleAndEpoch,
@@ -2057,6 +2096,7 @@ export const TASK8_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     healthRefreshLoadRaceCase,
     privacyLedgerCase,
     emergencyNewClassRaceCase,
+    healthRefreshVersionRaceCase,
   ]);
 
 export async function runTask1StoreConformance(

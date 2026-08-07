@@ -520,7 +520,7 @@
     "description": "Pending adjudication reads preserve openedAt so oldest-backlog dwell can fail closed.",
     "setup": { "result-adjudication:rr-70": { "state": "pending_result_adjudication", "openedAt": "2026-08-06T00:00:00.000Z" } },
     "conditions": ["adjudication_starved"],
-    "steps": [{ "command": "advanceTime", "args": { "seconds": 3601 }, "expect": { "now": "2026-08-06T01:00:01.000Z" } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
+    "steps": [{ "command": "advanceTime", "args": { "seconds": 3601 }, "expect": { "now": "2026-08-06T01:00:01.000Z" } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "expectedClassVersions": ["v1"], "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
     "expectFinal": { "states": { "class-health:c1": "adjudication_starved" } }
   },
   {
@@ -1089,7 +1089,7 @@
     "description": "Continuous under-capacity time is retained until starvation dwell elapses.",
     "setup": { "class-health:c1": { "operating": "ready", "revision": 1 }, "adjudication-load:c1": { "revision": 1, "admittedDemand": 2 } },
     "conditions": ["adjudication_starved"],
-    "steps": [{ "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "starvationDwell": 3600 }, "expect": { "operating": "ready", "unsafeSince": "set" } }, { "command": "advanceTime", "args": { "seconds": 3601 } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 2, "expectedLoadRevision": 1, "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
+    "steps": [{ "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "expectedClassVersions": ["v1"], "starvationDwell": 3600 }, "expect": { "operating": "ready", "unsafeSince": "set" } }, { "command": "advanceTime", "args": { "seconds": 3601 } }, { "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 2, "expectedLoadRevision": 1, "expectedClassVersions": ["v1"], "starvationDwell": 3600 }, "expect": { "operating": "adjudication_starved" } }],
     "expectFinal": { "states": { "class-health:c1": "adjudication_starved" } }
   },
   {
@@ -1099,7 +1099,7 @@
     "description": "Starvation remains sticky until an operator restores it above the higher threshold.",
     "setup": { "class-health:c1": { "operating": "adjudication_starved", "revision": 2 }, "adjudication-load:c1": { "revision": 2, "admittedDemand": 0 } },
     "conditions": ["adjudication_starved"],
-    "steps": [{ "command": "restoreClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 2, "expectedLoadRevision": 2, "restoreAbovePerWeek": 3 }, "expect": { "kind": "applied", "operating": "ready" } }],
+    "steps": [{ "command": "restoreClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 2, "expectedLoadRevision": 2, "expectedClassVersions": ["v1"], "restoreAbovePerWeek": 3 }, "expect": { "kind": "applied", "operating": "ready" } }],
     "expectFinal": { "states": { "class-health:c1": "ready" } }
   },
   {
@@ -1131,5 +1131,15 @@
     "conditions": ["emergency_halted"],
     "steps": [{ "command": "enterEmergencyHalt", "args": { "expectedQueueRevision": 1, "classIds": ["c1", "c2"], "invalidationClassIds": ["c1", "c2"], "at": "2026-08-07T15:00:00.000Z" }, "expect": { "kind": "applied", "invalidationCount": 2 } }],
     "expectFinal": { "states": { "queue": "emergency_halted", "class-health:c1": "emergency_halted", "class-health:c2": "emergency_halted" } }
+  },
+  {
+    "id": "class-health-live-version-policy-aggregate",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Class-wide health sums live-version rates and uses the strictest dwell and freshness values.",
+    "setup": { "class-version:c1:v1": { "state": "draining", "requiredRatePerWeek": 2 }, "class-version:c1:v2": { "state": "active", "requiredRatePerWeek": 3 }, "class-health:c1": { "operating": "ready", "revision": 1 } },
+    "conditions": ["adjudication_starved"],
+    "steps": [{ "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "expectedClassVersions": ["v1", "v2"], "starvationDwell": 60 }, "expect": { "requiredRatePerWeek": 5, "operating": "ready" } }],
+    "expectFinal": { "states": { "class-health:c1": "ready" } }
   }
 ]

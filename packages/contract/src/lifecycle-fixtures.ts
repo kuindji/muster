@@ -355,20 +355,32 @@ export const REVISION_23_COMMAND_ARGUMENT_KEYS = deepFreeze({
     allowed: ["expectedRevision", "at"],
   },
   refreshClassHealth: {
-    required: ["classId", "expectedHealthRevision", "expectedLoadRevision"],
+    required: [
+      "classId",
+      "expectedHealthRevision",
+      "expectedLoadRevision",
+      "expectedClassVersions",
+    ],
     allowed: [
       "classId",
       "expectedHealthRevision",
       "expectedLoadRevision",
+      "expectedClassVersions",
       "starvationDwell",
     ],
   },
   restoreClassHealth: {
-    required: ["classId", "expectedHealthRevision", "expectedLoadRevision"],
+    required: [
+      "classId",
+      "expectedHealthRevision",
+      "expectedLoadRevision",
+      "expectedClassVersions",
+    ],
     allowed: [
       "classId",
       "expectedHealthRevision",
       "expectedLoadRevision",
+      "expectedClassVersions",
       "restoreAbovePerWeek",
     ],
   },
@@ -492,6 +504,7 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "health-refresh-load-race-fails-closed",
   "privacy-ledger-rejects-sensitive-body",
   "emergency-new-class-race-fails-closed",
+  "health-refresh-version-race-fails-closed",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -607,6 +620,7 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "privacy-ledger-sensitive-is-hash-only",
   "audit-contract-transition-detail-is-hash-only",
   "emergency-halt-multi-class-atomic",
+  "class-health-live-version-policy-aggregate",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

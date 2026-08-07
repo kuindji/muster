@@ -522,6 +522,15 @@ export class InMemoryStore implements Store {
     );
   }
 
+  listClassVersions(classId: string): ReturnType<Store["listClassVersions"]> {
+    return this.atomic(() => clone([...this.classVersions.values()]
+      .filter((record) => record.classId === classId)
+      .sort((left, right) => compareWireIds(
+        left.contractVersion,
+        right.contractVersion,
+      ))));
+  }
+
   transitionClassVersion(
     input: Parameters<Store["transitionClassVersion"]>[0],
   ): Promise<ContractTransitionOutcome> {
@@ -1117,9 +1126,16 @@ export class InMemoryStore implements Store {
         input.expectedLoad.classId,
         input.expectedLoad.windowStartsAt,
       );
+      const classVersions = [...this.classVersions.values()]
+        .filter((record) => record.classId === current.classId)
+        .sort((left, right) => compareWireIds(
+          left.contractVersion,
+          right.contractVersion,
+        ));
       if (
         !equal(current, input.expectedHealth) ||
         !equal(load, input.expectedLoad) ||
+        !equal(classVersions, input.expectedClassVersions) ||
         current.classId !== load.classId
       ) {
         return clone({ kind: "conflict", health: current, load });

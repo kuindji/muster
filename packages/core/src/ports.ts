@@ -895,6 +895,7 @@ export interface Store {
     classId: string,
     contractVersion: string,
   ): Promise<ClassVersionRecord | null>;
+  listClassVersions(classId: string): Promise<ClassVersionRecord[]>;
   transitionClassVersion(input: {
     classId: string;
     contractVersion: string;
@@ -1169,6 +1170,7 @@ export interface Store {
   refreshClassHealth(input: {
     expectedHealth: ClassHealthSnapshot;
     expectedLoad: AdjudicationLoadSnapshot;
+    expectedClassVersions: ClassVersionRecord[];
     next: Pick<
       ClassHealthSnapshot,
       "updatedAt" | "source" | "adjudicationUnsafeSince"

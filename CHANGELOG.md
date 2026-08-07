@@ -1,5 +1,17 @@
 # Changelog
 
+## contract-freeze-14 — reviewed and tagged 2026-08-07
+
+Revision 25 amendment discovered by the Task-8 class-health runtime trace.
+`listClassVersions` now exposes the complete durable policy set and
+`refreshClassHealth` compares it atomically with adjudication load and health.
+Core sums required and restoration rates across every active or draining
+version and uses the strictest dwell and capacity-freshness bounds; missing or
+schema-incompatible live runtime entries fail closed. Version registration or
+lifecycle races change no health state. Lifecycle, concurrency, compile-time,
+and reference Store coverage accompany the change. Wire contract version
+remains `1.1.0`; Task 8 runtime remains separate.
+
 ## contract-freeze-13 — reviewed and tagged 2026-08-07
 
 Revision 24 amendment discovered by the Task-8 emergency runtime trace.
