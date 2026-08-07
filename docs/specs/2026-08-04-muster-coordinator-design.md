@@ -6,7 +6,7 @@
 The platform gate passed on 2026-08-06. Contract-freeze amendment 14 defines
 the class-health live-version policy-set boundary and is independently reviewed
 and corrected. The reviewed boundary is tagged locally as `contract-freeze-14`;
-Task 8 runtime work resumes in a separate implementation unit.
+Milestone 2 Task 8 is implemented against it.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -2342,8 +2342,10 @@ inputs fail closed rather than producing `NaN`, infinity, or negative capacity.
 A deployment-owned `OperationsSource` returns one timestamped closed
 observation containing those four inputs, the minimum effective-capacity
 threshold, the oldest already-breached SLA timestamp if any, and a closed slot
-window with per-provider expected and observed arrivals. Core derives
-`degraded` for an SLA breach or below-threshold projection. It derives
+window with per-provider expected and observed arrivals. `observedAt` and the
+window end equal the explicit `Clock.now()` captured for that refresh, so a
+stale observation cannot silently restore or degrade current queue state. Core
+derives `degraded` for an SLA breach or below-threshold projection. It derives
 pool-offline `admission_halted` only after the observation window closed, at
 least one arrival was expected, and none arrived. A queue snapshot retains the
 cause. Automatic refresh cannot overwrite an operator or emergency cause, and

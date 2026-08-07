@@ -14,7 +14,7 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Milestone 2 Task 7 is complete.** The real-provider unattended platform gate
+**Milestone 2 Task 8 is complete.** The real-provider unattended platform gate
 passed. Revision 25 is independently reviewed, corrected, and tagged locally
 as `contract-freeze-14`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
@@ -31,11 +31,14 @@ reserve, processing-time, and early verdict-replay coverage. M2 now also
 implements descriptor-bound all-actions authorization, projected automatic
 effect derivation, per-action support and completeness gates, mixed human-only
 review binding, atomic authorization reserve selection, immutable initial
-receipt replay, and live authorization-status reads. Capacity, health,
-observability, and privacy integration remain the next bounded runtime unit.
-The Task-8 boundary now has explicit queue observations and causes, atomic
-adjudication-load/health comparison, persistent starvation dwell, and
-privacy-safe ledger records.
+receipt replay, and live authorization-status reads. M2 now also implements
+finite effective-capacity projection, automatic degraded and truthful
+pool-offline modes, explicit admission restoration, conservative live-version
+adjudication-policy aggregation, persistent starvation dwell, higher-threshold
+operator restoration, queue-wide atomic emergency halt, operational ledger
+records, privacy-safe ledger/notification content preparation, and finite-only
+reputation routing priority. Tasks 9–10 (protocol conformance and final review)
+are the next bounded units.
 
 ## Specs
 

@@ -4,6 +4,8 @@ export * from "./control-plane.js";
 export * from "./events.js";
 export * from "./lease-service.js";
 export * from "./memory-store.js";
+export * from "./operations-service.js";
+export * from "./privacy.js";
 export * from "./ports.js";
 export * from "./registration.js";
 export * from "./store-conformance.js";

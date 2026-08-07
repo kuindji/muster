@@ -285,7 +285,7 @@ cover each rejection family and durable replay/conflict behavior.
 - Expose live authorization status so later invalidation cannot be mistaken for
   a still-valid initial receipt.
 
-## Task 8: Capacity, class health, observability, and privacy
+## Task 8: Capacity, class health, observability, and privacy (complete 2026-08-07)
 
 - Implement capacity projection, queue modes, multidimensional class health,
   starvation dwell, provider-offline signals, and the frozen precedence between

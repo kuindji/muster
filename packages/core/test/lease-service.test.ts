@@ -396,6 +396,13 @@ describe("M2 Task 4 routing and claim", () => {
     await reputation.service.leaseJob("worker-1");
     expect(await reputation.store.getWorkerRoutingSnapshot("worker-1"))
       .toMatchObject({ contributionUsed: 1 });
+
+    const nonFinite = await setup({
+      reputation: { assess: () => ({ eligible: true, priority: Number.NaN }) },
+    });
+    await enqueue(nonFinite.service);
+    await expect(nonFinite.service.leaseJob("worker-1"))
+      .resolves.toEqual({ outcome: "no_work" });
   });
 
   it("binds a probation canary's distinct payload and expected-result hash", async () => {

@@ -1,5 +1,20 @@
 # Changelog
 
+## Milestone 2 Task 8 — 2026-08-07
+
+Implemented finite effective-capacity projection, closed queue observation
+validation, degraded/SLA/pool-offline derivation, durable queue causes, manual
+admission restoration, and provider-offline signals. Class health now aggregates
+every active and draining version conservatively, compares the version/load/
+health set atomically, persists continuous unsafe dwell, enters starvation on
+capacity or backlog age, and restores only through the explicit higher
+threshold. Queue-wide emergency halt publishes all class health and
+class-qualified invalidations in one transaction. Operations append correlated
+hash-only ledger records, reusable privacy helpers enforce public/internal/
+sensitive body and descriptor visibility, and non-finite reputation priority
+continues to fail routing closed. Focused operations and privacy coverage joins
+the Task-8 Store conformance suite.
+
 ## contract-freeze-14 — reviewed and tagged 2026-08-07
 
 Revision 25 amendment discovered by the Task-8 class-health runtime trace.
