@@ -98,6 +98,16 @@ Revision 20 and the separate
 those minimal boundaries. Independent review, correction, and the local
 `contract-freeze-9` tag are complete.
 
+The first Task-6 runtime trace then found that reserve charges had no
+authoritative durable policy/window lifecycle, could not publish accounting and
+reserve-health saturation atomically, and lacked typed stale-policy,
+charge-key-conflict, and result-adjudication identity-collision outcomes. The
+separate
+`2026-08-07-muster-contract-freeze-10-reserve-accounting.md` amendment plan
+defines the required boundary. Task 6 is paused until that amendment is
+independently reviewed, corrected, implemented, and tagged locally as
+`contract-freeze-10`.
+
 ## Global constraints
 
 - Revision 20 is the active reviewed normative boundary, tagged locally as
@@ -214,7 +224,7 @@ cover each rejection family and durable replay/conflict behavior.
   absorbing splits per collection cycle. Persist verified decisions and hashes
   atomically; isolate old-cycle evidence after result requeues.
 
-## Task 6: Escalation, adjudication, and invalidation
+## Task 6: Escalation, adjudication, and invalidation (blocked on contract-freeze-10)
 
 - Charge reserves idempotently by lane and enforce urgent fail-closed behavior,
   reserve floors, adjudication capacity, and dispute-requeue caps.

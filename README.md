@@ -19,8 +19,9 @@ passed, and revision 20 is tagged locally as `contract-freeze-9`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
 registry and registration validator, class/permit/worker control plane,
 enqueue/routing/lease lifecycle, and the submission plus cycle-scoped automatic
-verification pipeline. Task 6 escalation, adjudication, and invalidation is
-next.
+verification pipeline. The first Task 6 trace found a frozen reserve-accounting
+boundary gap; escalation, adjudication, and invalidation are paused on the
+proposed `contract-freeze-10` amendment and its independent review.
 
 ## Specs
 
@@ -63,6 +64,9 @@ is implemented and tagged locally; that boundary authorized M2 Task 4.
 The [freeze-9 submission-settlement amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-9-submission-settlement.md)
 is independently reviewed, corrected, and tagged; M2 Task 5 is complete against
 that boundary.
+The proposed [freeze-10 reserve-accounting amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-10-reserve-accounting.md)
+records the first Task-6 trace findings. It authorizes no runtime work until it
+is independently reviewed, implemented, and tagged.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 
