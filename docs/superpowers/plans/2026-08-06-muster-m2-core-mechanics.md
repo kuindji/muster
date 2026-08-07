@@ -1,8 +1,8 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 23 and the reviewed, tagged
-`contract-freeze-12` boundary, including an in-memory Store and reusable
+`@kuindji/muster-core` against revision 24 and the reviewed, tagged
+`contract-freeze-13` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -130,10 +130,17 @@ separate `2026-08-07-muster-contract-freeze-12-operations-observability.md`
 amendment add those minimal boundaries. Task 8 resumes only after independent
 review and the local `contract-freeze-12` tag.
 
+The first emergency-path trace then found that queue-wide refusal compared many
+class-health snapshots but carried only one class-qualified invalidation.
+Revision 24 and the separate
+`2026-08-07-muster-contract-freeze-13-emergency-batch.md` amendment add a
+complete canonical multi-class batch. Task 8 resumes only after independent
+review and the local `contract-freeze-13` tag.
+
 ## Global constraints
 
-- Revision 23 is the active reviewed normative boundary, tagged locally as
-  `contract-freeze-12`. The
+- Revision 24 is the active reviewed normative boundary, tagged locally as
+  `contract-freeze-13`. The
   worker wire version is unchanged. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only after review.
 - `muster-core` keeps exactly one runtime dependency and references no network,

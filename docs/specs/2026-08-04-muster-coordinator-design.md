@@ -1,13 +1,12 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 23)
+**Date:** 2026-08-04 (revision 24)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 12 defines
-the Task-8 operations-observation, starvation, queue-cause, and privacy-safe
-ledger boundary and is independently reviewed and corrected. The reviewed
-boundary is tagged locally as `contract-freeze-12`; Task 8 runtime work resumes
-in a separate implementation unit.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 13 defines
+the queue-wide emergency batch boundary and is independently reviewed and
+corrected. The reviewed boundary is tagged locally as `contract-freeze-13`;
+Task 8 runtime work resumes in a separate implementation unit.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -255,6 +254,15 @@ cannot race a newly opened or resolved request. Finally, ledger entries are
 closed, privacy-qualified records, and audit contract transitions carry only a
 detail hash. These are contract corrections only; revision 23 implements no
 Task-8 runtime service, retention deletion, or worker-wire change.
+
+Revision 24 closes the remaining Task-8 emergency atomicity gap. The existing
+queue-wide halt compared many class-health snapshots but carried only one
+class-qualified invalidation, so multi-class cancellation could not publish in
+the same transaction as queue refusal. Store now lists the complete class-health
+set and accepts one canonical whole-class invalidation batch per listed class.
+A missing, duplicate, extra, non-class, or racing class scope conflicts before
+mutation. This is a contract correction only; revision 24 implements no Task-8
+operations service and does not change the worker wire.
 
 ## 1. What Muster is
 
@@ -1683,9 +1691,11 @@ a stale refresh cannot overwrite a newer operator halt.
 
 An emergency halt is one Store domain command. It compares the expected queue
 and affected class-health snapshots, publishes `emergency_halted` replacements,
-and applies the complete inspected invalidation target/requeue snapshot and
-authorization-validity changes in the same transaction. A conflict changes
-nothing and returns the current operational and invalidation snapshots. Thus
+and applies the complete canonical array of whole-class inspected invalidation
+target/requeue snapshots and authorization-validity changes in the same
+transaction. `listClassHealth()` supplies the complete comparison set; a class
+created after inspection fences the batch. A conflict changes nothing and
+returns the current operational and class-qualified invalidation snapshots. Thus
 refusal of new work is never observable before or after the cancellation policy
 it requires. Queue mode owns queue-wide intake/in-flight behavior; per-class
 health owns class admission, adjudication, and reserve dimensions. The frozen
@@ -2049,6 +2059,12 @@ accounting-owned. `QueueModeSnapshot.cause` is mandatory. `appendLedger`
 rejects privacy-invalid body or descriptor retention and `listLedger` returns
 immutable records for conformance and adapter export. No new field enters an
 MCP message or wire hash.
+
+Revision 24 adds `listClassHealth()` and changes `enterEmergencyHalt` from one
+class-qualified invalidation to a canonical array containing exactly one
+whole-class scope for every current class-health snapshot. The applied or
+conflict outcome returns the same class-qualified array. No new record or field
+enters the worker wire.
 
 ### 6.7 `OracleSpec`
 
@@ -2642,6 +2658,9 @@ Revision 23 implements the Task-8 operations and observability boundary
 correction and is independently reviewed, corrected, and tagged
 `contract-freeze-12`.
 
+Revision 24 implements the queue-wide emergency batch correction and is
+independently reviewed, corrected, and tagged `contract-freeze-13`.
+
 ### 11.2 Contract-freeze amendment 2
 
 Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
@@ -2859,7 +2878,20 @@ descriptor-free; contract transition detail is hash-only. The amendment changes
 only internal core/Store/events/fixtures, leaves the worker wire at `1.1.0`,
 and is reviewed before the local `contract-freeze-12` tag.
 
-### 11.13 Open
+### 11.13 Contract-freeze amendment 13: queue-wide emergency batch
+
+Revision 24 is complete only when core can list the complete class-health set
+and `enterEmergencyHalt` compares that set with the queue plus exactly one
+canonical whole-class invalidation scope per class. Every target and requeue
+plan must preflight before mutation. A new class, missing or duplicate scope,
+non-class scope, changed target, or changed operational revision conflicts with
+no partial queue, health, lease, result, authorization, epoch, or cycle change.
+Applied and conflict outcomes retain one class-qualified invalidation result per
+scope in class-ID order. The amendment changes only the internal Store/core
+boundary, leaves the worker wire at `1.1.0`, and is reviewed before the local
+`contract-freeze-13` tag.
+
+### 11.14 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

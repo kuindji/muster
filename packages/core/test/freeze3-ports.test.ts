@@ -236,11 +236,11 @@ describe("revision-14 M2-entry port freeze", () => {
           operating: "emergency_halted",
         },
       }],
-      invalidation: {
+      invalidations: [{
         scope: { kind: "class", classId: "class-1" },
         expectedTargets: [],
         requeuePlans: [],
-      },
+      }],
       at: now,
     };
     expect(halt.nextQueue.mode).toBe("emergency_halted");

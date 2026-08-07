@@ -1511,15 +1511,18 @@ const emergencyCase: StoreConformanceCase = {
         updatedAt: LATER,
         source: "operator",
       }],
-      invalidation: {
+      invalidations: [{
         scope: { kind: "class", classId: "class-1" },
         expectedTargets: invalidation.targets,
         requeuePlans: [],
-      },
+      }],
       at: LATER,
     });
     assert(halt.kind === "applied", "emergency halt must apply atomically");
-    assert(halt.invalidation.resultTransitions.length === 1, "halt must invalidate result");
+    assert(
+      halt.invalidations[0]?.resultTransitions.length === 1,
+      "halt must invalidate result",
+    );
     assert(
       await store.getResultState("job-before-halt", 1) === "cancelled",
       "halted result must be cancelled",
@@ -1917,6 +1920,91 @@ const privacyLedgerCase: StoreConformanceCase = {
   },
 };
 
+const emergencyNewClassRaceCase: StoreConformanceCase = {
+  id: "emergency-new-class-race-fails-closed",
+  run: async (factory) => {
+    const store = await factory();
+    await initializeClass(store);
+    const queue = await store.getQueueMode();
+    const preparedHealth = await store.listClassHealth();
+    const class1Invalidation = await store.inspectInvalidationScope({
+      kind: "class",
+      classId: "class-1",
+    });
+    const registered = await store.registerClassVersion({
+      classId: "class-2",
+      contractVersion: "1.0.0",
+      payloadSchemaHash: "payload-schema-2",
+      outputSchemaHash: "output-schema-2",
+      registeredAt: NOW,
+    });
+    assert(registered.kind === "registered", "second class must register");
+    const initialized = await store.initializeClassHealth({
+      initial: {
+        classId: "class-2",
+        health: readyHealth(),
+        updatedAt: NOW,
+        source: "automatic",
+      },
+    });
+    assert(initialized.kind === "initialized", "second health must initialize");
+
+    const stale = await store.enterEmergencyHalt({
+      expectedQueue: queue,
+      nextQueue: { mode: "emergency_halted", cause: "emergency", updatedAt: LATER },
+      expectedClassHealth: preparedHealth,
+      nextClassHealth: preparedHealth.map((entry) => ({
+        classId: entry.classId,
+        health: { operating: "emergency_halted" as const },
+        updatedAt: LATER,
+        source: "operator" as const,
+      })),
+      invalidations: [{
+        scope: { kind: "class", classId: "class-1" },
+        expectedTargets: class1Invalidation.targets,
+        requeuePlans: [],
+      }],
+      at: LATER,
+    });
+    assert(stale.kind === "conflict", "new class must fence emergency batch");
+    assert((await store.getQueueMode()).mode === "normal", "conflict must keep queue");
+
+    const health = await store.listClassHealth();
+    const invalidations = await Promise.all(health.map(async (entry) => {
+      const snapshot = await store.inspectInvalidationScope({
+        kind: "class",
+        classId: entry.classId,
+      });
+      return {
+        scope: { kind: "class" as const, classId: entry.classId },
+        expectedTargets: snapshot.targets,
+        requeuePlans: [],
+      };
+    }));
+    const applied = await store.enterEmergencyHalt({
+      expectedQueue: queue,
+      nextQueue: { mode: "emergency_halted", cause: "emergency", updatedAt: LATER },
+      expectedClassHealth: health,
+      nextClassHealth: health.map((entry) => ({
+        classId: entry.classId,
+        health: { operating: "emergency_halted" as const },
+        updatedAt: LATER,
+        source: "operator" as const,
+      })),
+      invalidations,
+      at: LATER,
+    });
+    assert(applied.kind === "applied", "complete emergency batch must apply");
+    assert(applied.invalidations.length === 2, "every class must invalidate");
+    assert(
+      applied.classHealth.every((entry) =>
+        entry.health.operating === "emergency_halted"
+      ),
+      "every class health must halt",
+    );
+  },
+};
+
 export const TASK1_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
   Object.freeze([
     classLifecycleAndEpoch,
@@ -1968,6 +2056,7 @@ export const TASK8_STORE_CONFORMANCE_CASES: readonly StoreConformanceCase[] =
     ...TASK6_STORE_CONFORMANCE_CASES,
     healthRefreshLoadRaceCase,
     privacyLedgerCase,
+    emergencyNewClassRaceCase,
   ]);
 
 export async function runTask1StoreConformance(

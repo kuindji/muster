@@ -45,6 +45,7 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "applyActionAdjudicationVerdict",
   "contractExpire",
   "emergencyHalt",
+  "enterEmergencyHalt",
   "emergencyWithdrawEpoch",
   "operatorCancel",
   "advanceTime",
@@ -385,6 +386,24 @@ export const REVISION_23_COMMAND_ARGUMENT_KEYS = deepFreeze({
   },
 } as const);
 
+/** Closed lifecycle command shape added by revision 24. */
+export const REVISION_24_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  enterEmergencyHalt: {
+    required: [
+      "expectedQueueRevision",
+      "classIds",
+      "invalidationClassIds",
+      "at",
+    ],
+    allowed: [
+      "expectedQueueRevision",
+      "classIds",
+      "invalidationClassIds",
+      "at",
+    ],
+  },
+} as const);
+
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
 );
@@ -472,6 +491,7 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "result-verdict-cutoff-retires-before-transition",
   "health-refresh-load-race-fails-closed",
   "privacy-ledger-rejects-sensitive-body",
+  "emergency-new-class-race-fails-closed",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -586,6 +606,7 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "adjudication-starvation-restore-is-explicit",
   "privacy-ledger-sensitive-is-hash-only",
   "audit-contract-transition-detail-is-hash-only",
+  "emergency-halt-multi-class-atomic",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -681,6 +702,11 @@ export function isLifecycleFixture(
     if (!isRecord(step.args)) return false;
     const args = step.args;
     const closedShape = (
+      REVISION_24_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
       REVISION_23_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];

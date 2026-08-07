@@ -222,5 +222,9 @@
   {
     "id": "privacy-ledger-rejects-sensitive-body",
     "description": "A sensitive ledger append carrying a body or descriptor persists no partial record while a hash-only append succeeds."
+  },
+  {
+    "id": "emergency-new-class-race-fails-closed",
+    "description": "A class-health snapshot created after emergency inspection makes the queue-wide batch conflict without halting the queue or invalidating any prepared class."
   }
 ]

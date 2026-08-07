@@ -1154,6 +1154,7 @@ export interface Store {
     initial: Omit<ClassHealthSnapshot, "revision">;
   }): Promise<InitializeClassHealthOutcome>;
   getClassHealth(classId: string): Promise<ClassHealthSnapshot | null>;
+  listClassHealth(): Promise<ClassHealthSnapshot[]>;
   transitionClassHealth(input: {
     expected: ClassHealthSnapshot;
     next: Pick<ClassHealthSnapshot, "updatedAt" | "source"> & {
@@ -1201,24 +1202,24 @@ export interface Store {
         };
       }
     >;
-    invalidation: {
-      scope: InvalidationScope;
+    invalidations: Array<{
+      scope: Extract<InvalidationScope, { kind: "class" }>;
       expectedTargets: InvalidationTarget[];
       requeuePlans: CycleRequeuePlan[];
-    };
+    }>;
     at: Timestamp;
   }): Promise<
     | {
         kind: "applied";
         queue: QueueModeSnapshot;
         classHealth: ClassHealthSnapshot[];
-        invalidation: AppliedInvalidationOutcome;
+        invalidations: AppliedInvalidationOutcome[];
       }
     | {
         kind: "conflict";
         queue: QueueModeSnapshot;
         classHealth: ClassHealthSnapshot[];
-        invalidation: InvalidationSnapshot;
+        invalidations: InvalidationSnapshot[];
       }
   >;
   getReservePolicy(input: {

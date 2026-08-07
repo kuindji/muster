@@ -1047,6 +1047,12 @@ export class InMemoryStore implements Store {
     return this.atomic(() => clone(this.classHealth.get(classId) ?? null));
   }
 
+  listClassHealth(): ReturnType<Store["listClassHealth"]> {
+    return this.atomic(() => clone([...this.classHealth.values()].sort(
+      (left, right) => compareWireIds(left.classId, right.classId),
+    )));
+  }
+
   transitionClassHealth(
     input: Parameters<Store["transitionClassHealth"]>[0],
   ): Promise<OperationalTransitionOutcome<ClassHealthSnapshot>> {
@@ -1149,43 +1155,59 @@ export class InMemoryStore implements Store {
       const historyKey = fingerprint(input);
       const prior = this.emergencyHistory.get(historyKey);
       if (prior !== undefined) return clone(prior);
-      const currentHealth = input.expectedClassHealth
-        .map((expected) => this.classHealth.get(expected.classId))
-        .filter((snapshot): snapshot is ClassHealthSnapshot => snapshot !== undefined);
-      const currentInvalidation = this.currentInvalidationSnapshot(
-        input.invalidation.scope,
+      const currentHealth = [...this.classHealth.values()].sort((left, right) =>
+        compareWireIds(left.classId, right.classId)
+      );
+      const currentInvalidations = input.invalidations.map((entry) =>
+        this.currentInvalidationSnapshot(entry.scope)
       );
       const healthMatches =
         currentHealth.length === input.expectedClassHealth.length &&
-        input.expectedClassHealth.every((expected) =>
-          currentHealth.some((current) => equal(current, expected)),
+        equal(currentHealth, [...input.expectedClassHealth].sort((left, right) =>
+          compareWireIds(left.classId, right.classId)
+        ));
+      const expectedClassIds = currentHealth.map((entry) => entry.classId);
+      const nextClassIds = input.nextClassHealth.map((next) => next.classId);
+      const invalidationClassIds = input.invalidations.map((entry) =>
+        entry.scope.classId
+      );
+      const invalidationsMatch =
+        equal(invalidationClassIds, [...invalidationClassIds].sort(compareWireIds)) &&
+        equal(invalidationClassIds, expectedClassIds) &&
+        input.invalidations.every((entry, index) =>
+          equal(
+            currentInvalidations[index]?.targets,
+            sortTargets(entry.expectedTargets),
+          )
         );
-      const nextClassIds = new Set(input.nextClassHealth.map((next) => next.classId));
       if (
         !equal(this.queue, input.expectedQueue) ||
         !healthMatches ||
-        nextClassIds.size !== input.expectedClassHealth.length ||
-        !input.expectedClassHealth.every((expected) => nextClassIds.has(expected.classId)) ||
-        !equal(currentInvalidation.targets, sortTargets(input.invalidation.expectedTargets))
+        !equal(nextClassIds, expectedClassIds) ||
+        !invalidationsMatch
       ) {
         return clone({
           kind: "conflict",
           queue: this.queue,
           classHealth: currentHealth,
-          invalidation: currentInvalidation,
+          invalidations: currentInvalidations,
         });
       }
 
-      this.validateRequeuePlans(
-        input.invalidation.requeuePlans,
-        currentInvalidation.targets,
-      );
+      for (let index = 0; index < input.invalidations.length; index += 1) {
+        this.validateRequeuePlans(
+          input.invalidations[index]!.requeuePlans,
+          currentInvalidations[index]!.targets,
+        );
+      }
 
-      const invalidation = this.applyInvalidation(
-        currentInvalidation,
-        "emergency_halted",
-        input.invalidation.requeuePlans,
-        input.at,
+      const invalidations = input.invalidations.map((entry, index) =>
+        this.applyInvalidation(
+          currentInvalidations[index]!,
+          "emergency_halted",
+          entry.requeuePlans,
+          input.at,
+        )
       );
       this.queue = {
         revision: this.queue.revision + 1,
@@ -1216,7 +1238,7 @@ export class InMemoryStore implements Store {
         kind: "applied",
         queue: this.queue,
         classHealth: nextHealth,
-        invalidation,
+        invalidations,
       };
       this.emergencyHistory.set(historyKey, clone(outcome));
       return clone(outcome);

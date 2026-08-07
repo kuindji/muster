@@ -1121,5 +1121,15 @@
     "conditions": [],
     "steps": [{ "command": "transitionClassVersion", "args": { "classId": "c1", "contractVersion": "v1", "from": "active", "to": "draining" }, "expect": { "event": "contract_transition", "detailHash": "present" } }],
     "expectFinal": { "events": ["contract_transition"] }
+  },
+  {
+    "id": "emergency-halt-multi-class-atomic",
+    "version": 1,
+    "area": "operations_observability",
+    "description": "Queue refusal, every class-health replacement, and every whole-class invalidation publish in one emergency transaction.",
+    "setup": { "queue": { "mode": "normal", "revision": 1 }, "class-health:c1": { "operating": "ready", "revision": 1 }, "class-health:c2": { "operating": "ready", "revision": 1 } },
+    "conditions": ["emergency_halted"],
+    "steps": [{ "command": "enterEmergencyHalt", "args": { "expectedQueueRevision": 1, "classIds": ["c1", "c2"], "invalidationClassIds": ["c1", "c2"], "at": "2026-08-07T15:00:00.000Z" }, "expect": { "kind": "applied", "invalidationCount": 2 } }],
+    "expectFinal": { "states": { "queue": "emergency_halted", "class-health:c1": "emergency_halted", "class-health:c2": "emergency_halted" } }
   }
 ]

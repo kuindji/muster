@@ -1,5 +1,17 @@
 # Changelog
 
+## contract-freeze-13 — reviewed and tagged 2026-08-07
+
+Revision 24 amendment discovered by the Task-8 emergency runtime trace.
+`listClassHealth` now exposes the complete queue-wide comparison set and
+`enterEmergencyHalt` accepts exactly one canonical whole-class invalidation per
+current class. Store preflights every operational snapshot, target, and requeue
+plan before publishing queue refusal, all class-health replacements, and all
+class-qualified invalidations together. Missing, duplicate, extra, non-class,
+or newly raced class scopes change nothing. Multi-class lifecycle,
+concurrency, compile-time, and reference Store coverage accompany the change.
+Wire contract version remains `1.1.0`; Task 8 runtime remains separate.
+
 ## contract-freeze-12 — reviewed and tagged 2026-08-07
 
 Revision 23 amendment discovered by the first Milestone 2 Task-8 trace. A
