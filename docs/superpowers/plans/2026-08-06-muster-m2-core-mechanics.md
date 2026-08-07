@@ -300,7 +300,7 @@ cover each rejection family and durable replay/conflict behavior.
 - Keep reputation evidence idempotent and ordered; validate policy priority is
   finite and use it only as a routing tiebreaker.
 
-## Task 9: Protocol conformance kit
+## Task 9: Protocol conformance kit (complete 2026-08-07)
 
 Export a reusable suite that drives the public core operations through:
 
@@ -334,7 +334,9 @@ bypass live validity.
 2. Tasks 4-5: one-shot lease/result path and its Store slices are
    conformance-backed.
 3. Tasks 6-8: safety, authorization, and operations are complete.
-4. Tasks 9-10: M2 is independently reviewed and ready for separate Postgres and
+4. Task 9: public-operation protocol expectations are Store-parametric and pass
+   against the reference in-memory adapter.
+5. Task 10: M2 is independently reviewed and ready for separate Postgres and
    MCP plans.
 
 No checkpoint authorizes npm publication, a remote push, Postgres work, MCP

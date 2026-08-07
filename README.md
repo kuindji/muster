@@ -14,7 +14,7 @@ the consumer to obey those authorizations.
 
 ## Status
 
-**Milestone 2 Task 8 is complete.** The real-provider unattended platform gate
+**Milestone 2 Task 9 is complete.** The real-provider unattended platform gate
 passed. Revision 25 is independently reviewed, corrected, and tagged locally
 as `contract-freeze-14`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
@@ -37,8 +37,12 @@ pool-offline modes, explicit admission restoration, conservative live-version
 adjudication-policy aggregation, persistent starvation dwell, higher-threshold
 operator restoration, queue-wide atomic emergency halt, operational ledger
 records, privacy-safe ledger/notification content preparation, and finite-only
-reputation routing priority. Tasks 9–10 (protocol conformance and final review)
-are the next bounded units.
+reputation routing priority. M2 now also exports a Store-parametric protocol
+conformance kit that drives public operations through frozen lifecycle,
+registration-fixture, lease-disclosure, adjudication, invalidation,
+cross-cycle, deterministic-event, and prompt-injection expectations against the
+reference in-memory Store. Task 10 (full validation and independent review) is
+the next bounded unit.
 
 ## Specs
 

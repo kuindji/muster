@@ -1,5 +1,18 @@
 # Changelog
 
+## Milestone 2 Task 9 — 2026-08-07
+
+Exported a Store-parametric protocol conformance kit that exercises real core
+services through lifecycle and exact-retry behavior, identifier collisions and
+admission races, registration schema/oracle/agreement/effect/absence fixtures,
+lease terminal-state disclosure safety, authenticated result and action
+adjudication, live invalidation, and collection-cycle isolation. The suite
+accepts the published schema and prompt-injection corpora explicitly, verifies
+all required injection IDs and categories, treats their text byte-for-byte as
+untrusted payload/result data, and uses deterministic clocks, identities, and
+event assertions. All seven cases pass against the reference in-memory Store;
+future Store and MCP adapters can reuse the same exported expectations.
+
 ## Milestone 2 Task 8 — 2026-08-07
 
 Implemented finite effective-capacity projection, closed queue observation
