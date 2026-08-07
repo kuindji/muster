@@ -1,7 +1,7 @@
 # Muster contract-freeze-9 submission-settlement amendment plan
 
 **Status:** Implemented as coordinator revision 20, independently reviewed,
-and corrected. It is not tagged; M2 Task 5 remains blocked.
+corrected, and tagged locally as `contract-freeze-9`.
 
 **Goal:** Amend revision 19 into revision 20 so submission rejection,
 contract-cutoff settlement, checked reputation evidence, and absorbing-split
@@ -73,9 +73,9 @@ Run frozen install, invariants, contract/core typechecks and tests, builds,
 fixture checks, package-content inspection, Markdown fence/local-link checks,
 and `git diff --check`. Independently trace acceptance/rejection races,
 same-cycle epoch stickiness, canary-versus-ordinary replica projection, and the
-split marker through claim eligibility and decision persistence. Only the
-reviewed and corrected commit may be tagged `contract-freeze-9`; that tag
-authorizes M2 Task 5.
+split marker through claim eligibility and decision persistence. The reviewed
+and corrected commit is tagged `contract-freeze-9`; that tag authorizes M2
+Task 5.
 
 Wire version `1.1.0`, MCP schemas, hash envelopes, audit-event schemas, class,
 job, lease, and worker records, and worker-visible error vocabulary remain

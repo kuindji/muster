@@ -1,6 +1,15 @@
 # Changelog
 
-## contract-freeze-9 — reviewed, tag pending 2026-08-07
+## Milestone 2 Task 5 — 2026-08-07
+
+Implemented holder-bound submission settlement with immutable accepted replay,
+coarse worker errors, structural/validator/oracle checks, atomic qualifying
+reputation evidence, held-out canary scoring, unanimous equivalence and resolved
+output revalidation, diversity checks, cycle-scoped decision hashing, and
+durable absorbing splits. Routing now admits only the configured bounded extra
+evidence after a split. Result escalation and adjudication remain Task 6.
+
+## contract-freeze-9 — reviewed and tagged 2026-08-07
 
 Proposed revision 20 amendment discovered by the first Milestone 2 Task-5
 runtime trace. Submission acceptance now commits optional checked reputation
@@ -13,7 +22,7 @@ set and refuse split-marked cycles. Wire contract version remains `1.1.0`.
 Independent review additionally removed a current-epoch claim fence that
 stranded replacement leases stamped under an earlier ordinary epoch, and added
 abandonment, expiry, and rejected-submission reclaim coverage. The
-`contract-freeze-9` tag is still required before Task 5 runtime work.
+reviewed boundary is tagged locally as `contract-freeze-9`.
 
 ## Milestone 2 Task 4 — 2026-08-07
 
@@ -22,7 +31,7 @@ lease preparation, quantized TTL/deadline snapshots, coarse no-work accounting,
 holder-bound extension and abandonment, and same-cycle expiry requeue. The
 reference Store conformance suite now covers lease holder binding, atomic
 expiry/requeue, sticky cycle epochs, fair-attempt contribution release, and
-provider-failure retention. Task 5 (submission and verification) remains next.
+provider-failure retention. Task 5 (submission and verification) is complete.
 
 ## contract-freeze-8 — reviewed and tagged 2026-08-07
 

@@ -680,8 +680,14 @@ export class LeaseService {
       candidate.job.classId,
       candidate.job.contractVersion,
     );
+    const acceptedLimit = entry === null
+      ? 0
+      : entry.jobClass.replication.target +
+        (candidate.attempts.splitObserved
+          ? entry.jobClass.replication.maxSplitEvidenceReroutes
+          : 0);
     return entry !== null &&
-      candidate.attempts.acceptedWorkerIds.length < entry.jobClass.replication.target &&
+      candidate.attempts.acceptedWorkerIds.length < acceptedLimit &&
       capabilityMatches(worker, entry.jobClass) &&
       diversityFeasible(worker, candidate, entry.jobClass);
   }

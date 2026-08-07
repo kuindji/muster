@@ -1,7 +1,7 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 20 and the reviewed, untagged
+`@kuindji/muster-core` against revision 20 and the reviewed, tagged
 `contract-freeze-9` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
@@ -22,7 +22,7 @@ are deterministic for an ordered sequence of explicit port outputs; core never
 reads entropy or clocks directly. The in-memory Store is the reference adapter,
 not a second source of policy.
 
-## Entry gate: contract-freeze-9 (reviewed; tag pending)
+## Entry gate: contract-freeze-9 (reviewed and tagged)
 
 Planning against the executable revision-13 ports found that M2 could not
 start without making routing policy adapter-owned or inventing unspecified
@@ -95,13 +95,13 @@ settlement, contract-cutoff races, checked evidence atomicity, and durable
 absorbing-split routing were not representable through the frozen Store.
 Revision 20 and the separate
 `2026-08-07-muster-contract-freeze-9-submission-settlement.md` amendment add
-those minimal boundaries. Independent review and correction are complete; Task
-5 may begin only after the local `contract-freeze-9` tag.
+those minimal boundaries. Independent review, correction, and the local
+`contract-freeze-9` tag are complete.
 
 ## Global constraints
 
-- Revision 20 is the active reviewed normative boundary. Its
-  `contract-freeze-9` tag is pending, so Task 5 runtime work is blocked. The
+- Revision 20 is the active reviewed normative boundary, tagged locally as
+  `contract-freeze-9`. The
   worker wire version is unchanged. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only after review.
 - `muster-core` keeps exactly one runtime dependency and references no network,
@@ -199,7 +199,7 @@ cover each rejection family and durable replay/conflict behavior.
   in-flight deadlines, extension caps, lease snapshots, abandon classifications,
   expiry, and same-cycle requeue semantics.
 
-## Task 5: Submission and cycle-scoped verification pipeline
+## Task 5: Submission and cycle-scoped verification pipeline (complete 2026-08-07)
 
 - Collapse unknown, closed, wrong-holder, and expired lease disclosure to the
   frozen worker-wire refusal while retaining honest audit identity.
