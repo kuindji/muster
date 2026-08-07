@@ -45,8 +45,10 @@ registration-fixture, lease-disclosure, adjudication, invalidation,
 cross-cycle, deterministic-event, and prompt-injection expectations against the
 reference in-memory Store. The Task-10 semantic-review corrections also fence
 cross-class emergency epoch changes and unproven diversity adjudication. The
-final independent review passed; separate PostgreSQL and MCP plans are the next
-planning boundary.
+final independent review passed. The
+[PostgreSQL Store implementation plan](docs/superpowers/plans/2026-08-07-muster-store-postgres.md)
+is now drafted against that boundary; its independent plan review is the next
+bounded unit. MCP planning remains separate.
 
 ## Specs
 
