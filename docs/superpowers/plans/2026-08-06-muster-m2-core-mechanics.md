@@ -113,11 +113,13 @@ implemented, and tagged locally as `contract-freeze-10`; Task 6 may resume.
 The first Task-7 runtime trace then found that authorization persistence did
 not atomically compare the decision result's live state, composite intents
 could require several non-borrowable reserve lanes while the Store accepted
-only one charge, and exact verdict replay was reachable only after mutable
-runtime and freshness checks. The separate
+only one charge, first result verdicts could pass an unmaterialized time cutoff,
+human `decidedAt` was conflated with coordinator processing time, and exact
+verdict replay was reachable only after mutable runtime and freshness checks.
+The separate
 `2026-08-07-muster-contract-freeze-11-action-authorization.md` amendment plan
-defines the required boundary. Task 7 is paused until that amendment is
-independently reviewed, corrected, implemented, and tagged locally as
+defines the required boundary and is independently reviewed and corrected.
+Task 7 is paused until that amendment is implemented and tagged locally as
 `contract-freeze-11`.
 
 ## Global constraints
