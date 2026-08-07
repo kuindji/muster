@@ -1,8 +1,8 @@
 # Muster contract-freeze-11 action-authorization amendment plan
 
-**Status:** Independently reviewed and corrected after the first M2 Task-7
-runtime trace. Action-gate evaluation and authorization remain paused until this
-amendment is implemented and tagged locally as `contract-freeze-11`.
+**Status:** Independently reviewed, corrected, and implemented as revision 22
+after the first M2 Task-7 runtime trace. The reviewed checkpoint is tagged
+locally as `contract-freeze-11`; M2 Task 7 may resume in a separate unit.
 
 **Goal:** Amend revision 21 so a new effect intent can be authorized only while
 its exact decision result remains live, every reserve lane used by a composite

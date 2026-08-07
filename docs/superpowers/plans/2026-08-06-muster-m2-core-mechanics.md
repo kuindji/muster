@@ -1,8 +1,8 @@
 # Muster Milestone 2 core mechanics implementation plan
 
 **Goal:** Implement the complete one-shot coordinator engine in
-`@kuindji/muster-core` against revision 21 and the reviewed, tagged
-`contract-freeze-10` boundary, including an in-memory Store and reusable
+`@kuindji/muster-core` against revision 22 and the reviewed, tagged
+`contract-freeze-11` boundary, including an in-memory Store and reusable
 Store/protocol conformance suites.
 
 **Scope:** Core mechanics only. This plan does not implement PostgreSQL, OAuth,
@@ -118,14 +118,14 @@ human `decidedAt` was conflated with coordinator processing time, and exact
 verdict replay was reachable only after mutable runtime and freshness checks.
 The separate
 `2026-08-07-muster-contract-freeze-11-action-authorization.md` amendment plan
-defines the required boundary and is independently reviewed and corrected.
-Task 7 is paused until that amendment is implemented and tagged locally as
-`contract-freeze-11`.
+defines the required boundary and is independently reviewed, corrected, and
+implemented as revision 22 and tagged locally as `contract-freeze-11`. Task 7
+may resume in a separate unit.
 
 ## Global constraints
 
-- Revision 21 is the active reviewed normative boundary, tagged locally as
-  `contract-freeze-10`. The
+- Revision 22 is the active reviewed normative boundary, tagged locally as
+  `contract-freeze-11`. The
   worker wire version is unchanged. Frozen exported types, tables, state
   machines, schemas, and fixtures are read-only after review.
 - `muster-core` keeps exactly one runtime dependency and references no network,

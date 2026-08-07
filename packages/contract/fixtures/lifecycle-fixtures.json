@@ -902,5 +902,154 @@
       { "command": "transitionClassHealth", "args": { "classId": "c9", "expectedRevision": 2, "operating": "admission_halted", "source": "operator" }, "expect": { "kind": "applied", "revision": 3, "urgent": "saturated" } }
     ],
     "expectFinal": { "states": { "class-health:c9:operating": "admission_halted", "class-health:c9:urgent": "saturated" } }
+  },
+  {
+    "id": "authorization-vs-invalidation-single-winner",
+    "version": 1,
+    "area": "invalidation",
+    "description": "A new intent and invalidation publish only a precedence-consistent terminal result.",
+    "setup": { "result:j22:1": { "state": "verified" }, "decision:d22": { "state": "live" } },
+    "conditions": [],
+    "steps": [
+      { "command": "authorizeActions", "args": { "decisionResultHash": "d22", "effectIntentId": "i22" }, "barrier": "race" },
+      { "command": "operatorCancel", "args": { "classId": "c22", "jobId": "j22", "collectionCycle": 1 }, "barrier": "race" }
+    ],
+    "expectFinal": { "states": { "authorization:i22": "terminal" } },
+    "expectOneOf": [
+      { "states": { "result:j22:1": "cancelled", "authorization:i22": "invalid" } },
+      { "states": { "result:j22:1": "cancelled", "authorization:i22": "absent" } }
+    ]
+  },
+  {
+    "id": "authorization-context-change-fails-closed",
+    "version": 1,
+    "area": "authorization_retry",
+    "description": "A stale authorization context changes no identity, reserve, receipt, or pending request.",
+    "setup": { "result:j23:1": { "state": "superseded" }, "decision:d23": { "state": "historical" } },
+    "conditions": [],
+    "steps": [
+      { "command": "authorizeActions", "args": { "decisionResultHash": "d23", "effectIntentId": "i23" }, "expect": { "kind": "authorization_context_conflict" } }
+    ],
+    "expectFinal": { "states": { "authorization:i23": "absent" }, "charges": { "urgent": 0 } }
+  },
+  {
+    "id": "composite-reserve-charges-atomic",
+    "version": 1,
+    "area": "reserve_policy",
+    "description": "A composite intent settles each distinct lane once in canonical order and publishes one final health snapshot.",
+    "setup": { "result:j24:1": { "state": "verified" }, "decision:d24": { "state": "live" } },
+    "conditions": [],
+    "steps": [
+      { "command": "authorizeActions", "args": { "decisionResultHash": "d24", "effectIntentId": "i24", "lanes": ["lowCost", "urgent", "splitAndAdjudication"] }, "expect": { "kind": "applied", "outcome": "pending_adjudication" } }
+    ],
+    "expectFinal": { "states": { "authorization:i24": "pending_adjudication" }, "charges": { "lowCost": 1, "urgent": 1, "splitAndAdjudication": 1 } }
+  },
+  {
+    "id": "composite-reserve-exhaustion-no-partial-debit",
+    "version": 1,
+    "area": "urgent_saturation",
+    "description": "Fail-closed exhaustion denies the intent without debiting another available lane.",
+    "setup": { "result:j25:1": { "state": "verified" }, "reserve:c25:urgent": { "state": "saturated" } },
+    "conditions": [],
+    "steps": [
+      { "command": "authorizeActions", "args": { "decisionResultHash": "d25", "effectIntentId": "i25", "lanes": ["lowCost", "urgent", "splitAndAdjudication"] }, "expect": { "outcome": "denied", "denialReason": "escalation_budget_exhausted" } }
+    ],
+    "expectFinal": { "states": { "authorization:i25": "denied" }, "charges": { "lowCost": 0, "urgent": 0, "splitAndAdjudication": 0 } }
+  },
+  {
+    "id": "mixed-action-intent-binds-human-subset",
+    "version": 1,
+    "area": "authorization_retry",
+    "description": "A mixed request binds only human-only reviews while an approval authorizes all actions or none.",
+    "setup": { "authorization:a26": { "state": "pending_adjudication", "actions": ["routeToHumanLowCost", "suppress"] } },
+    "conditions": [],
+    "steps": [
+      { "command": "applyActionAdjudicationVerdict", "args": { "authorizationRequestId": "a26", "decision": "approve", "humanReviews": ["suppress"] }, "expect": { "kind": "applied" } }
+    ],
+    "expectFinal": { "states": { "authorization:a26": "authorized" } }
+  },
+  {
+    "id": "action-verdict-vs-invalidation-single-winner",
+    "version": 1,
+    "area": "invalidation",
+    "description": "An action verdict racing invalidation cannot resurrect a terminal request.",
+    "setup": { "authorization:a27": { "state": "pending_adjudication" } },
+    "conditions": [],
+    "steps": [
+      { "command": "applyActionAdjudicationVerdict", "args": { "authorizationRequestId": "a27", "decision": "approve" }, "barrier": "race" },
+      { "command": "operatorCancel", "args": { "classId": "c27", "jobId": "j27", "collectionCycle": 1 }, "barrier": "race" }
+    ],
+    "expectFinal": { "states": { "authorization:a27": "terminal" } },
+    "expectOneOf": [
+      { "states": { "authorization:a27": "invalid" } },
+      { "states": { "authorization:a27": "cancelled" } }
+    ]
+  },
+  {
+    "id": "result-verdict-vs-invalidation-single-winner",
+    "version": 1,
+    "area": "invalidation",
+    "description": "A result verdict racing invalidation cannot transition the old cycle after invalidation wins.",
+    "setup": { "result:j28:1": { "state": "pending_result_adjudication" } },
+    "conditions": [],
+    "steps": [
+      { "command": "applyResultAdjudicationVerdict", "args": { "requestId": "r28", "decision": "reject" }, "barrier": "race" },
+      { "command": "operatorCancel", "args": { "classId": "c28", "jobId": "j28", "collectionCycle": 1 }, "barrier": "race" }
+    ],
+    "expectFinal": { "states": { "result:j28:1": "terminal" } },
+    "expectOneOf": [
+      { "states": { "result:j28:1": "rejected" } },
+      { "states": { "result:j28:1": "cancelled" } }
+    ]
+  },
+  {
+    "id": "result-verdict-cutoff-retires-before-transition",
+    "version": 1,
+    "area": "retirement",
+    "description": "An overdue first result verdict materializes retirement before it can resolve or requeue.",
+    "setup": { "result:j29:1": { "state": "pending_result_adjudication" } },
+    "conditions": [],
+    "steps": [
+      { "command": "advanceTime", "args": { "to": "maximum-lifetime" } },
+      { "command": "applyResultAdjudicationVerdict", "args": { "requestId": "r29", "decision": "resolve" }, "expect": { "kind": "freshness_conflict" } }
+    ],
+    "expectFinal": { "states": { "result:j29:1": "expired" } }
+  },
+  {
+    "id": "verdict-replay-precedes-runtime-and-freshness",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "An authenticated exact verdict retry returns its immutable receipt after runtime unload and invalidation.",
+    "setup": { "verdict:v30": { "state": "applied" }, "runtime:c30:v1": { "state": "unloaded" } },
+    "conditions": [],
+    "steps": [
+      { "command": "applyActionAdjudicationVerdict", "args": { "authorizationRequestId": "a30", "verdictHash": "v30" }, "expect": { "kind": "replayed" } }
+    ],
+    "expectFinal": { "receipts": { "verdict:v30": "byte_identical" } }
+  },
+  {
+    "id": "authorization-cutoff-retires-before-new-intent",
+    "version": 1,
+    "area": "retirement",
+    "description": "A contract or maximum-lifetime cutoff invalidates the result before refusing a new intent.",
+    "setup": { "result:j31:1": { "state": "verified" } },
+    "conditions": [],
+    "steps": [
+      { "command": "advanceTime", "args": { "to": "maximum-lifetime" } },
+      { "command": "authorizeActions", "args": { "decisionResultHash": "d31", "effectIntentId": "i31" }, "expect": { "kind": "intent_invalid" } }
+    ],
+    "expectFinal": { "states": { "result:j31:1": "expired", "authorization:i31": "absent" } }
+  },
+  {
+    "id": "verdict-processing-time-cannot-be-backdated",
+    "version": 1,
+    "area": "verdict_retry",
+    "description": "Signed decision time remains in the receipt while coordinator processing time controls freshness and transitions.",
+    "setup": { "result:j32:1": { "state": "pending_result_adjudication" } },
+    "conditions": [],
+    "steps": [
+      { "command": "applyResultAdjudicationVerdict", "args": { "requestId": "r32", "decidedAt": "2026-08-07T12:00:00.000Z", "processedAt": "2026-08-07T13:00:00.000Z" }, "expect": { "kind": "freshness_conflict" } }
+    ],
+    "expectFinal": { "states": { "result:j32:1": "expired" } }
   }
 ]

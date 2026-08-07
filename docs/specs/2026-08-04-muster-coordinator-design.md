@@ -1,12 +1,13 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 21)
+**Date:** 2026-08-04 (revision 22)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 10 implements
-the authoritative reserve-accounting boundary and is independently reviewed,
-corrected, and tagged locally as `contract-freeze-10`; Milestone 2 Task 6 is
-authorized to resume.
+The platform gate passed on 2026-08-06. Contract-freeze amendment 11 implements
+the live authorization-context, atomic composite-reserve, processing-time, and
+early verdict-replay boundary and is independently reviewed and corrected.
+The reviewed boundary is tagged locally as `contract-freeze-11`; Milestone 2
+Task 7 may resume in a separate implementation unit.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -229,6 +230,19 @@ have distinct no-change outcomes. Generic health transitions cannot overwrite
 accounting-owned reserve lanes. These are contract corrections only; revision
 21 implements no escalation, adjudication, or invalidation service and does not
 change the worker wire.
+
+Revision 22 closes the authorization and verdict-atomicity gaps found by the
+first Task-7 trace and corrected by independent boundary review. A first effect
+intent now compares one complete live decision, job-cycle, current-job,
+result-state, class-version, and core-computed lifetime snapshot in the same
+transaction that claims identities, settles every applicable reserve lane,
+and persists its receipt. Composite action reserves settle in canonical lane
+order as one batch with no partial debit. Both human-verdict commands carry a
+core-owned `processedAt` distinct from signed `decidedAt`, and verdict history
+is readable before runtime, freshness, and terminal-state checks so an exact
+lost-response retry remains byte-identical. These are contract corrections;
+revision 22 does not implement the Task-7 action-gate evaluator or change the
+worker wire.
 
 ## 1. What Muster is
 
@@ -1253,6 +1267,25 @@ and resulting class-health snapshot; they never collapse policy conflict,
 charge conflict, charged, and exhausted into one boolean. Exact domain replay
 precedes current policy and health checks and does not charge twice.
 
+An action request may use several non-borrowable lanes. Its authorization-owned
+lanes are always ordered `lowCost`, `urgent`, `splitAndAdjudication`; each
+applicable lane appears at most once and uses
+`<authorizationRequestId>:<lane>` as its charge key. Store validates every
+policy and existing charge key before mutation, then publishes the ordered
+settlements, skipped lanes, one final class-health snapshot, the intent
+identity, request identity, request or authorization state, and immutable
+initial receipt in one transaction. Missing or stale policy and changed charge
+input change nothing. Low-cost or urgent exhaustion records every applicable
+exhausted fail-closed disposition and the terminal
+`escalation_budget_exhausted` receipt, skips every otherwise available or split
+lane, records no successful charge, and opens no request. Only when both
+fail-closed lanes have capacity may they charge; split-and-adjudication
+exhaustion then opens the existing uncovered pending request. Exact intent
+replay returns the original aggregate without settling again. Automatic results
+attribute low-cost and urgent lanes to sorted unique evidence workers;
+human-resolved results leave those worker sets empty. Split charges are never
+worker-qualified.
+
 A worker exceeding either quota has further escalations in that lane denied and
 its suspicion raised — flooding costs the flooder first. Low-cost work never
 spends a worker's urgent quota. Exhausting the low-cost reserve sets
@@ -1586,6 +1619,42 @@ withdrawal, halt, or cancellation may later move the parent result to
 `expired`, `superseded`, or `cancelled` for future intents without changing its
 decision hash or the historical state of an authorization already issued from
 it.
+
+A new effect intent is eligible only against one immutable
+`AuthorizationContextSnapshot`: the exact decision result, its historical
+cycle record, the logical job's current cycle record, live `verified` state,
+class-version record, and the absolute maximum-in-flight deadline core computed
+from the stored `cycleStartedAt` and loaded class policy. Store compares that
+snapshot atomically with identity claims, reserve settlement, status, backlog,
+and receipt persistence. The current logical job must still name the decision's
+cycle. Active versions are eligible; draining versions are eligible through
+`processedAt <= acceptedUntil`; draft and retired versions are not. Maximum
+lifetime is half-open, so equality with the deadline is already expired. Exact
+effect-intent replay precedes every current comparison. A stale new intent
+returns the existing consumer-visible `intent_invalid` refusal while Store
+retains a precise no-change context-conflict reason for audit.
+
+Both human-verdict commands separate the authenticated verdict's `decidedAt`
+from core-owned `processedAt`. `decidedAt` remains in the canonical verdict
+hash and immutable receipt. After authentication, canonicalization, hashing,
+and an early verdict-history lookup establish that this is a first verdict,
+core captures `Clock.now()` exactly once. That `processedAt` controls freshness,
+state transitions, `verifiedAt`, replacement-cycle `cycleStartedAt`, and audit
+event time. A backdated human assertion cannot cross a later contract or
+maximum-lifetime cutoff.
+
+Verdict history is a read-only Store surface keyed by request ID and returns the
+request kind, verdict hash, complete canonical verdict, and immutable receipt.
+An exact result or action verdict replays from that history before registry,
+parent-state, cutoff, clock, or gate checks; any changed verdict or request kind
+is `verdict_conflict`. A first result verdict compares its complete pending
+request, historical and current job cycle, result state, and class version. A
+first action verdict compares its persisted authorization context and pending
+status. When a cutoff is due, core first applies the existing class-qualified
+invalidation command, and the overdue verdict cannot resolve, reject, requeue,
+authorize, or replace the terminal state. An action rejection uses the
+persisted context and deadline without loading consumer functions while it is
+fresh; if due invalidation requires unavailable runtime data, it fails closed.
 
 `getQueueMode()` returns the deployment-bootstrapped durable queue snapshot.
 `getClassHealth(classId)` returns `null` until core has created the class's
@@ -1932,6 +2001,22 @@ outcomes, and makes `getClassHealth` nullable before initialization. Class
 registration initializes health before activation. Every deployment bootstraps
 one explicit queue snapshot when constructing or migrating its Store; adapters
 must not invent a default on first read.
+
+Revision 22 adds `AuthorizationContextSnapshot`,
+`ResultVerdictContextSnapshot`, `ActionVerdictContextSnapshot`,
+`AuthorizationReserveLane`, the canonical
+`AUTHORIZATION_RESERVE_LANE_ORDER`, `AuthorizationReserveSettlement`,
+`AuthorizationReserveBatchResult`, and `VerdictHistoryRecord` to the frozen
+core boundary. `inspectAuthorizationContext` and
+`inspectResultVerdictContext` return atomic preflight snapshots; core adds the
+policy-derived deadline before compare-and-apply. Pending action requests retain
+that full context, exposed by `getPendingAuthorizationContext`.
+`authorizeOrReplayIntent` requires the expected context and an ordered charge
+set rather than one optional charge. Both first-verdict commands require
+`processedAt` and their complete expected context. `getVerdictHistory` is
+read-only. Context, reserve-policy, reserve-key, and freshness conflicts are
+typed no-change outcomes. No new field enters an MCP message, effect intent,
+verdict, receipt, or authorization hash.
 
 ### 6.7 `OracleSpec`
 
@@ -2333,6 +2418,14 @@ epoch transition; and exact-evidence fencing of the durable absorbing-split
 marker and automatic decision. A Store adapter passes without reclassifying an
 invalid result as abandonment or deriving agreement policy.
 
+Revision-22 conformance additionally proves authorization-context and
+invalidation single-winner behavior; canonical multi-lane reserve settlement
+and fail-closed no-partial-debit outcomes; first result- and action-verdict
+fencing; processing-time cutoff invalidation; and exact verdict replay from
+history after runtime unload or terminal state. A Store adapter passes without
+loading consumer functions, deriving policy time, or treating signed decision
+time as coordinator time.
+
 ### 8.2 Protocol conformance
 
 Golden `input_hash` over the exact canonical sanitized payload and both frozen
@@ -2365,6 +2458,11 @@ changed in revision 14; only the internal core/Store package contract changed.
 Revision-15 fixtures additionally pin atomic worker/routing registration,
 routing-period comparison, worker-state claim fencing, and class-health
 initialization. Wire version `1.1.0` remains unchanged.
+Revision-22 fixtures additionally pin live authorization contexts, composite
+reserve batches, mixed human/automatic action requests, early verdict replay,
+first-verdict invalidation races, contract-cutoff equality, half-open maximum
+lifetime, and distinct signed decision versus processing timestamps. Wire
+version `1.1.0` remains unchanged.
 
 ### 8.3 The invariant
 
@@ -2435,7 +2533,11 @@ minimum:
 `ReservePolicySnapshot`, `ReservePolicyRecord`, `ReserveWorkerUsage`,
 `InitializeReservePolicyOutcome`, `TransitionReservePolicyOutcome`,
 `ReserveChargeRecord`, `ReserveMutation`, `ReserveMutationConflict`,
-`ReserveChargeOutcome`, `OracleNegativeFixture`,
+`ReserveChargeOutcome`, `AuthorizationContextSnapshot`,
+`ResultVerdictContextSnapshot`, `ActionVerdictContextSnapshot`,
+`AuthorizationReserveLane`,
+`AuthorizationReserveSettlement`, `AuthorizationReserveBatchResult`,
+`AuthorizationReserveBatchConflict`, `VerdictHistoryRecord`, `OracleNegativeFixture`,
 `OracleNegativeFixtureCategory`.
 
 **Tables and state machines.** The worker state machine (3.1); the action gate
@@ -2482,6 +2584,9 @@ independently reviewed, corrected, and tagged `contract-freeze-9`.
 
 Revision 21 implements the Task-6 reserve-accounting boundary correction and is
 independently reviewed, corrected, and tagged `contract-freeze-10`.
+
+Revision 22 implements the Task-7 authorization boundary correction and is
+independently reviewed, corrected, and tagged `contract-freeze-11`.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2646,7 +2751,36 @@ Wire version `1.1.0`, MCP schemas, hash envelopes, events, and durable
 job/lease/worker records remain unchanged. M2 Task 6 resumes only from an
 independently reviewed commit tagged `contract-freeze-10`.
 
-### 11.11 Open
+### 11.11 Contract-freeze amendment 11: action authorization and verdict freshness
+
+Revision 22 is complete only when a first new intent atomically compares its
+decision, historical and current job cycle, live result state, class version,
+and core-computed maximum-lifetime deadline with every identity, reserve,
+receipt, status, and backlog write. Exact intent replay precedes that comparison.
+Authorization reserve charges form one canonical low-cost, urgent, then
+split-and-adjudication batch with lane-qualified keys, preflighted policy and
+key conflicts, deterministic fail-closed exhaustion, ordered settlements and
+skips, and one final health snapshot.
+
+Both first-verdict commands carry a core-owned `processedAt` distinct from
+signed `decidedAt`, compare their complete live context, and materialize a due
+invalidation before any result or action transition. Read-only verdict history
+must replay an authenticated exact result or action verdict before clock,
+runtime, parent-state, cutoff, or gate checks. Pending action requests persist
+the authorization context and deadline so a fresh rejection needs no consumer
+function, while an overdue rejection still fails closed if invalidation cannot
+be prepared. Fixtures and conformance coverage include both invalidation races,
+composite reserve success and exhaustion, mixed permit modes, both verdict
+paths, early replay, contract-cutoff equality, half-open maximum lifetime, and
+decision time versus processing time.
+
+The amendment changes only internal core/Store records, commands, outcomes,
+fixtures, and audit timing. Wire version `1.1.0`, MCP schemas, hash envelopes,
+effect-intent and verdict shapes, action tables, consumer error codes, and the
+trusted-consumer effect boundary remain unchanged. M2 Task 7 resumes only from
+an independently reviewed commit tagged `contract-freeze-11`.
+
+### 11.12 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

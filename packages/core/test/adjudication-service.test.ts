@@ -68,17 +68,33 @@ const definition = (replicationTarget = 2): JobClass<Payload, Result> => ({
       expected: "split",
     }],
   } }),
-  permits: [{
-    action: "suppress",
-    mode: "human_only",
-    effectSchema: objectSchema("reason"),
-    reviewRequirement: {
-      predicate: "human-reviewed",
-      requiredPayloadPaths: [],
-      requiredResultPaths: [],
-      requiredEffectPaths: ["$.reason"],
+  permits: [
+    {
+      action: "routeToHumanLowCost",
+      mode: "automatic",
+      effectSchema: objectSchema("reason"),
+      effectInput: { payloadPaths: [], resultPaths: ["$.answer"] },
+      deriveEffect: ({ result }) => ({ reason: (result as Result).answer }),
+      effectFixtures: [{
+        input: {
+          payload: { instruction: "answer" },
+          result: { answer: "approved" },
+        },
+        expectedDescriptor: { reason: "approved" },
+      }],
     },
-  }],
+    {
+      action: "suppress",
+      mode: "human_only",
+      effectSchema: objectSchema("reason"),
+      reviewRequirement: {
+        predicate: "human-reviewed",
+        requiredPayloadPaths: [],
+        requiredResultPaths: [],
+        requiredEffectPaths: ["$.reason"],
+      },
+    },
+  ],
   consequence: "low",
   surface: "unbounded",
   evidenceRequirements: [],
@@ -320,19 +336,26 @@ describe("M2 Task 6 adjudication service", () => {
       permitEpoch: request.permitEpoch,
       adjudicatorId: "human-1",
       decision: { kind: "reject" },
-      decidedAt: LATER,
+      decidedAt: NOW,
     };
     const applied = await service.applyResultVerdict(verdict);
     expect(applied).toMatchObject({
       kind: "applied",
-      receipt: { outcome: "rejected", rejectOutcome: "requeued" },
+      receipt: {
+        decidedAt: NOW,
+        outcome: "rejected",
+        rejectOutcome: "requeued",
+      },
     });
     await expect(service.applyResultVerdict(verdict)).resolves.toMatchObject({
       kind: "replayed",
       receipt: { outcome: "rejected", rejectOutcome: "requeued" },
     });
     expect(await store.getResultState("job-1", 1)).toBe("rejected");
-    expect((await store.getJob("job-1"))?.collectionCycle).toBe(2);
+    expect(await store.getJob("job-1")).toMatchObject({
+      collectionCycle: 2,
+      cycleStartedAt: LATER,
+    });
     expect(events.all().filter((event) => event.type === "verdict"))
       .toHaveLength(2);
   });
@@ -388,6 +411,61 @@ describe("M2 Task 6 adjudication service", () => {
       .toBe("pending_result_adjudication");
   });
 
+  it("uses processing time to invalidate an overdue first result verdict", async () => {
+    const { clock, events, ids, leases, registry, store, submissions } = await setup();
+    await createSplit(leases, submissions);
+    await store.initializeReservePolicy({
+      policy: {
+        classId: "class-1",
+        contractVersion: "1.0.0",
+        policyVersion: "reserves-1",
+        windowId: "2026-W32",
+        windowStartsAt: "2026-08-03T00:00:00.000Z",
+        windowEndsAt: "2026-08-10T00:00:00.000Z",
+        lane: "splitAndAdjudication",
+        laneLimit: 1,
+      },
+      at: NOW,
+    });
+    const service = new AdjudicationService({
+      store,
+      registry,
+      clock,
+      ids,
+      source: adjudicationSource,
+      events,
+    });
+    await service.openResult({
+      jobId: "job-1",
+      collectionCycle: 1,
+      reason: "split_exhausted",
+    });
+    const request = (await store.listPendingResultAdjudications("class-1"))[0]!
+      .request;
+    clock.set("2026-08-07T12:30:01.000Z");
+    await expect(service.applyResultVerdict({
+      kind: "human",
+      resultAdjudicationRequestId: request.id,
+      reason: request.reason,
+      jobId: request.jobId,
+      collectionCycle: request.collectionCycle,
+      inputHash: request.inputHash,
+      candidateResultHashes: request.candidateResultHashes,
+      evidence: request.evidence,
+      contractVersion: request.contractVersion,
+      permitEpoch: request.permitEpoch,
+      adjudicatorId: "human-1",
+      decision: { kind: "reject" },
+      decidedAt: NOW,
+    })).resolves.toEqual({ kind: "freshness_conflict" });
+    expect(await store.getResultState("job-1", 1)).toBe("expired");
+    expect(await store.getJob("job-1")).toMatchObject({
+      collectionCycle: 2,
+      cycleStartedAt: "2026-08-07T12:30:01.000Z",
+    });
+    expect(await store.getVerdictHistory(request.id)).toBeNull();
+  });
+
   it("applies and exactly replays an authenticated action verdict", async () => {
     const state = await setup(1);
     const lease = await claim(state.leases, "worker-1");
@@ -414,13 +492,39 @@ describe("M2 Task 6 adjudication service", () => {
       lane: "splitAndAdjudication" as const,
       laneLimit: 1,
     };
+    const lowCostPolicy = {
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      policyVersion: "low-cost-reserves-1",
+      windowId: "2026-W32",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane: "lowCost" as const,
+      laneLimit: 2,
+      perWorkerLimit: 2,
+    };
+    await state.store.initializeReservePolicy({ policy: lowCostPolicy, at: NOW });
     await state.store.initializeReservePolicy({ policy, at: NOW });
     const effectIntent: EffectIntent = {
       id: "effect-intent-1",
-      effects: [{ action: "suppress" as const, descriptor: { reason: "unsafe" } }],
+      effects: [
+        {
+          action: "routeToHumanLowCost" as const,
+          descriptor: { reason: "approved" },
+        },
+        { action: "suppress" as const, descriptor: { reason: "unsafe" } },
+      ],
     };
     const effectIntentHash = await computeEffectIntentHash(effectIntent);
     const authorizationRequestId = state.ids.next("authorization_request");
+    const inspectedContext = await state.store.inspectAuthorizationContext(
+      decisionResultHash,
+    );
+    expect(inspectedContext).not.toBeNull();
+    const expectedContext = {
+      ...inspectedContext!,
+      maxInFlightDeadline: "2026-08-07T12:30:01.000Z",
+    };
     const request: ActionAdjudicationRequest = {
       authorizationRequestId,
       jobId: "job-1",
@@ -445,15 +549,24 @@ describe("M2 Task 6 adjudication service", () => {
       effectIntent,
       effectIntentHash,
       decisionResultHash,
+      expectedContext,
       decision: {
         kind: "pend",
         request,
-        charge: {
-          chargeKey: `${authorizationRequestId}:splitAndAdjudication`,
-          workerIds: [],
-          policy,
-          at: NOW,
-        },
+        charges: [
+          {
+            chargeKey: `${authorizationRequestId}:lowCost`,
+            workerIds: ["worker-1", "worker-2"],
+            policy: lowCostPolicy,
+            at: NOW,
+          },
+          {
+            chargeKey: `${authorizationRequestId}:splitAndAdjudication`,
+            workerIds: [],
+            policy,
+            at: NOW,
+          },
+        ],
       },
       at: NOW,
     })).resolves.toMatchObject({
@@ -477,7 +590,7 @@ describe("M2 Task 6 adjudication service", () => {
       authorizationRequestId,
       effectIntentId: effectIntent.id,
       effectIntentHash,
-      actions: ["suppress" as const],
+      actions: ["routeToHumanLowCost" as const, "suppress" as const],
       inputHash: lease.inputHash,
       decisionResultHash,
       evidence: replicas.map((replica) => replica.evidence),
@@ -501,7 +614,7 @@ describe("M2 Task 6 adjudication service", () => {
       .toMatchObject({
         authorizationRequestId,
         actionAdjudicationVerdictHash: expect.any(String),
-        actions: ["suppress"],
+        actions: ["routeToHumanLowCost", "suppress"],
       });
 
     const urgentPolicy = {
@@ -527,6 +640,7 @@ describe("M2 Task 6 adjudication service", () => {
       effectIntent: urgentIntent,
       effectIntentHash: urgentIntentHash,
       decisionResultHash,
+      expectedContext,
       decision: {
         kind: "authorize",
         authorization: {
@@ -542,12 +656,20 @@ describe("M2 Task 6 adjudication service", () => {
           permitEpoch: "epoch-1",
           actions: ["routeToUrgent"],
         },
-        charge: {
-          chargeKey: `${urgentRequestId}:urgent`,
-          workerIds: ["worker-1"],
-          policy: urgentPolicy,
-          at: LATER,
-        },
+        charges: [
+          {
+            chargeKey: `${urgentRequestId}:lowCost`,
+            workerIds: ["worker-1"],
+            policy: lowCostPolicy,
+            at: LATER,
+          },
+          {
+            chargeKey: `${urgentRequestId}:urgent`,
+            workerIds: ["worker-1"],
+            policy: urgentPolicy,
+            at: LATER,
+          },
+        ],
       },
       at: LATER,
     })).resolves.toMatchObject({
@@ -556,9 +678,17 @@ describe("M2 Task 6 adjudication service", () => {
         outcome: "denied",
         denialReason: "escalation_budget_exhausted",
       },
-      reserve: { charge: { outcome: "exhausted" } },
+      reserveBatch: {
+        settlements: [{ charge: { outcome: "exhausted" } }],
+        skippedLanes: ["lowCost"],
+      },
     });
     expect(await state.store.getAuthorization(urgentRequestId)).toBeNull();
+    expect(await state.store.getReservePolicy({
+      classId: "class-1",
+      contractVersion: "1.0.0",
+      lane: "lowCost",
+    })).toMatchObject({ used: 1 });
 
     const invalidation = new InvalidationService({
       store: state.store,
@@ -590,6 +720,12 @@ describe("M2 Task 6 adjudication service", () => {
       authorizationRequestId,
       reason: "operator_cancelled",
     }));
+    state.registry.unload("class-1", "1.0.0");
+    state.clock.set("2026-08-08T12:00:00.000Z");
+    await expect(service.applyActionVerdict(verdict)).resolves.toMatchObject({
+      kind: "replayed",
+      receipt: { outcome: "approved" },
+    });
   });
 });
 

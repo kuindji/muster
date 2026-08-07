@@ -296,6 +296,27 @@ export interface ReserveChargeRecord {
   readonly outcome: "charged" | "exhausted";
 }
 
+export const AUTHORIZATION_RESERVE_LANE_ORDER = deepFreeze([
+  "lowCost",
+  "urgent",
+  "splitAndAdjudication",
+] as const);
+
+export type AuthorizationReserveLane =
+  (typeof AUTHORIZATION_RESERVE_LANE_ORDER)[number];
+
+export interface AuthorizationReserveSettlement {
+  readonly lane: AuthorizationReserveLane;
+  readonly charge: ReserveChargeRecord;
+  readonly currentPolicy: ReservePolicyRecord;
+}
+
+export interface AuthorizationReserveBatchResult {
+  readonly settlements: readonly AuthorizationReserveSettlement[];
+  readonly skippedLanes: readonly AuthorizationReserveLane[];
+  readonly classHealth: ClassHealthSnapshot;
+}
+
 export interface ReserveMutation<
   Outcome extends ReserveChargeRecord["outcome"] = ReserveChargeRecord["outcome"],
 > {
@@ -312,6 +333,29 @@ export type ReserveMutationConflict =
   | {
       kind: "reserve_policy_conflict";
       currentPolicy: ReservePolicyRecord | null;
+    };
+
+export type AuthorizationReserveBatchConflict =
+  | {
+      kind: "reserve_charge_conflict";
+      lane: AuthorizationReserveLane;
+      existingCharge: ReserveChargeRecord;
+    }
+  | {
+      kind: "reserve_policy_conflict";
+      lane: AuthorizationReserveLane;
+      currentPolicy: ReservePolicyRecord | null;
+    }
+  | {
+      kind: "reserve_batch_invalid";
+      reason:
+        | "lane_order"
+        | "duplicate_lane"
+        | "charge_key"
+        | "extraneous_lane"
+        | "context_mismatch"
+        | "worker_order"
+        | "decision_mismatch";
     };
 
 export type ReserveChargeOutcome =
@@ -501,6 +545,33 @@ export interface ClassVersionRecord {
   acceptedUntil?: Timestamp;
 }
 
+/** Complete immutable comparison used by a first authorization attempt. */
+export interface AuthorizationContextSnapshot {
+  readonly decision: DecisionResultRecord;
+  readonly jobCycle: JobRecord;
+  readonly currentJob: JobRecord;
+  readonly resultState: ResultState;
+  readonly classVersion: ClassVersionRecord;
+  /** Core-computed operational cutoff; never enters a wire hash or receipt. */
+  readonly maxInFlightDeadline: Timestamp;
+}
+
+/** Complete immutable comparison used by a first result verdict. */
+export interface ResultVerdictContextSnapshot {
+  readonly request: ResultAdjudicationRequest;
+  readonly jobCycle: JobRecord;
+  readonly currentJob: JobRecord;
+  readonly resultState: ResultState;
+  readonly classVersion: ClassVersionRecord;
+  readonly maxInFlightDeadline: Timestamp;
+}
+
+/** Persisted request binding plus the independently inspected live parent state. */
+export interface ActionVerdictContextSnapshot {
+  readonly persisted: AuthorizationContextSnapshot;
+  readonly current: Omit<AuthorizationContextSnapshot, "maxInFlightDeadline">;
+}
+
 export interface ClassVersionRegistration {
   classId: string;
   contractVersion: string;
@@ -668,40 +739,21 @@ export type MarkResultSplitOutcome =
 
 export type AuthorizeIntentOutcome =
   | {
-      kind: "applied";
-      initialReceipt: Exclude<
-        AuthorizationInitialReceipt,
-        Extract<
-          AuthorizationInitialReceipt,
-          { outcome: "pending_adjudication" }
-        >
-      >;
-      reserve?: never;
+      kind: "applied" | "replayed";
+      initialReceipt: AuthorizationInitialReceipt;
+      reserveBatch?: AuthorizationReserveBatchResult;
     }
-  | {
-      kind: "applied";
-      initialReceipt: Extract<
-        AuthorizationInitialReceipt,
-        { outcome: "authorized" | "pending_adjudication" }
-      >;
-      reserve: ReserveMutation<"charged">;
-    }
-  | {
-      kind: "applied";
-      initialReceipt:
-        | Extract<
-            AuthorizationInitialReceipt,
-            { outcome: "pending_adjudication" }
-          >
-        | (Omit<
-            Extract<AuthorizationInitialReceipt, { outcome: "denied" }>,
-            "denialReason"
-          > & { denialReason: "escalation_budget_exhausted" });
-      reserve: ReserveMutation<"exhausted">;
-    }
-  | { kind: "replayed"; initialReceipt: AuthorizationInitialReceipt }
   | { kind: "conflict" }
-  | ReserveMutationConflict;
+  | {
+      kind: "authorization_context_conflict";
+      reason:
+        | "decision_changed"
+        | "job_cycle_changed"
+        | "current_cycle_changed"
+        | "result_not_verified"
+        | "class_version_ineligible";
+    }
+  | AuthorizationReserveBatchConflict;
 
 interface VerdictReceiptBase {
   requestId: string;
@@ -722,7 +774,16 @@ export type VerdictOutcome =
   | { kind: "applied"; receipt: VerdictReceipt }
   | { kind: "replayed"; receipt: VerdictReceipt }
   | { kind: "conflict" }
+  | { kind: "freshness_conflict" }
   | { kind: "terminal" };
+
+export interface VerdictHistoryRecord {
+  readonly kind: "result" | "action";
+  readonly requestId: string;
+  readonly verdictHash: string;
+  readonly verdict: ResultAdjudicationVerdict | ActionAdjudicationVerdict;
+  readonly receipt: VerdictReceipt;
+}
 
 export type OpenAdjudicationOutcome =
   | ({ kind: "opened_charged"; openedAt: Timestamp } &
@@ -905,23 +966,27 @@ export interface Store {
   getDecisionResult(
     decisionResultHash: string,
   ): Promise<DecisionResultRecord | null>;
+  inspectAuthorizationContext(
+    decisionResultHash: string,
+  ): Promise<Omit<AuthorizationContextSnapshot, "maxInFlightDeadline"> | null>;
 
   authorizeOrReplayIntent(input: {
     authorizationRequestId: string;
     effectIntent: EffectIntent;
     effectIntentHash: string;
     decisionResultHash: string;
+    expectedContext: AuthorizationContextSnapshot;
     decision:
       | {
           kind: "authorize";
           authorization: ActionAuthorization;
-          charge?: ReserveCharge;
+          charges?: readonly ReserveCharge[];
         }
       | { kind: "deny"; reason: AuthorizationDenialReason }
       | {
           kind: "pend";
           request: ActionAdjudicationRequest;
-          charge?: ReserveCharge;
+          charges: readonly ReserveCharge[];
         };
     at: Timestamp;
   }): Promise<AuthorizeIntentOutcome>;
@@ -970,13 +1035,17 @@ export interface Store {
   getResultAdjudicationRequest(
     id: string,
   ): Promise<ResultAdjudicationRequest | null>;
+  inspectResultVerdictContext(
+    id: string,
+  ): Promise<Omit<ResultVerdictContextSnapshot, "maxInFlightDeadline"> | null>;
   listPendingResultAdjudications(
     classId: string,
   ): Promise<Array<PendingAdjudication<ResultAdjudicationRequest>>>;
   applyResultAdjudicationVerdict(input: {
     verdict: ResultAdjudicationVerdict;
     verdictHash: string;
-    at: Timestamp;
+    processedAt: Timestamp;
+    expectedContext: ResultVerdictContextSnapshot;
   } & (
     | { decision: "resolve"; resolved: DecisionResultRecord }
     | {
@@ -992,13 +1061,18 @@ export interface Store {
   getActionAdjudicationRequest(
     authorizationRequestId: string,
   ): Promise<ActionAdjudicationRequest | null>;
+  getPendingAuthorizationContext(
+    authorizationRequestId: string,
+  ): Promise<AuthorizationContextSnapshot | null>;
   listPendingActionAdjudications(
     classId: string,
   ): Promise<Array<PendingAdjudication<ActionAdjudicationRequest>>>;
+  getVerdictHistory(requestId: string): Promise<VerdictHistoryRecord | null>;
   applyActionAdjudicationVerdict(input: {
     verdict: ActionAdjudicationVerdict;
     verdictHash: string;
-    at: Timestamp;
+    processedAt: Timestamp;
+    expectedContext: ActionVerdictContextSnapshot;
   } & (
     | { decision: "approve"; authorization: ActionAuthorization }
     | { decision: "reject" }

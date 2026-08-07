@@ -276,6 +276,50 @@ export const REVISION_21_COMMAND_ARGUMENT_KEYS = deepFreeze({
   },
 } as const);
 
+/** Closed lifecycle command shapes amended by revision 22. */
+export const REVISION_22_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  authorizeActions: {
+    required: ["effectIntentId"],
+    allowed: [
+      "effectIntentId",
+      "effectIntentHash",
+      "decisionResultHash",
+      "actions",
+      "lanes",
+      "laneLimit",
+      "perWorkerLimit",
+      "reservePolicyVersion",
+      "reserveWindowId",
+    ],
+  },
+  applyResultAdjudicationVerdict: {
+    required: ["requestId"],
+    allowed: [
+      "requestId",
+      "verdictHash",
+      "decision",
+      "collectionCycle",
+      "evidenceCycles",
+      "cap",
+      "newCycleEpoch",
+      "newCycleInputHash",
+      "decidedAt",
+      "processedAt",
+    ],
+  },
+  applyActionAdjudicationVerdict: {
+    required: ["authorizationRequestId"],
+    allowed: [
+      "authorizationRequestId",
+      "verdictHash",
+      "decision",
+      "humanReviews",
+      "decidedAt",
+      "processedAt",
+    ],
+  },
+} as const);
+
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
 );
@@ -354,6 +398,13 @@ export const REQUIRED_CONCURRENCY_CASE_IDS: readonly string[] = deepFreeze([
   "class-health-initialization-replay-conflict",
   "no-work-contribution-single-winner",
   "canary-payload-claim-atomic",
+  "authorization-vs-invalidation-single-winner",
+  "authorization-context-change-fails-closed",
+  "composite-reserve-charges-atomic",
+  "composite-reserve-exhaustion-no-partial-debit",
+  "action-verdict-vs-invalidation-single-winner",
+  "result-verdict-vs-invalidation-single-winner",
+  "result-verdict-cutoff-retires-before-transition",
 ]);
 
 export const REQUIRED_INJECTION_CATEGORIES: readonly string[] = deepFreeze([
@@ -450,6 +501,17 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "ordinary-claim-payload-mismatch-refused",
   "canary-claim-binds-operational-payload",
   "no-work-attempt-advances-contribution-once",
+  "authorization-vs-invalidation-single-winner",
+  "authorization-context-change-fails-closed",
+  "composite-reserve-charges-atomic",
+  "composite-reserve-exhaustion-no-partial-debit",
+  "mixed-action-intent-binds-human-subset",
+  "action-verdict-vs-invalidation-single-winner",
+  "result-verdict-vs-invalidation-single-winner",
+  "result-verdict-cutoff-retires-before-transition",
+  "verdict-replay-precedes-runtime-and-freshness",
+  "authorization-cutoff-retires-before-new-intent",
+  "verdict-processing-time-cannot-be-backdated",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -545,6 +607,11 @@ export function isLifecycleFixture(
     if (!isRecord(step.args)) return false;
     const args = step.args;
     const closedShape = (
+      REVISION_22_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
       REVISION_21_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];

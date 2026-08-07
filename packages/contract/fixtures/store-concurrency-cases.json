@@ -186,5 +186,33 @@
   {
     "id": "reserve-retirement-health-recompute-atomic",
     "description": "Retiring a class version excludes its policy records and recomputes only affected reserve-health lanes in the same class-version transition."
+  },
+  {
+    "id": "authorization-vs-invalidation-single-winner",
+    "description": "Authorization and invalidation compare one live result context so either authorization wins and is invalidated or the new authorization changes nothing."
+  },
+  {
+    "id": "authorization-context-change-fails-closed",
+    "description": "A cycle, result-state, or class-version change racing a first intent prevents every identity, charge, receipt, and request mutation."
+  },
+  {
+    "id": "composite-reserve-charges-atomic",
+    "description": "Every applicable authorization reserve lane settles in canonical order with one final class-health snapshot or the whole batch changes nothing."
+  },
+  {
+    "id": "composite-reserve-exhaustion-no-partial-debit",
+    "description": "Fail-closed lane exhaustion records only applicable exhausted dispositions and a terminal denial while successful and split lanes remain uncharged."
+  },
+  {
+    "id": "action-verdict-vs-invalidation-single-winner",
+    "description": "A first action verdict and invalidation have one terminal winner and can never restore a stale pending authorization request."
+  },
+  {
+    "id": "result-verdict-vs-invalidation-single-winner",
+    "description": "A first result verdict and invalidation have one terminal winner under the compared pending-result context."
+  },
+  {
+    "id": "result-verdict-cutoff-retires-before-transition",
+    "description": "A processing-time cutoff materializes invalidation before an overdue first result verdict can resolve, reject, or requeue its cycle."
   }
 ]

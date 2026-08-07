@@ -15,7 +15,8 @@ the consumer to obey those authorizations.
 ## Status
 
 **Milestone 2 Task 6 is complete.** The real-provider unattended platform gate
-passed, and revision 21 is tagged locally as `contract-freeze-10`. M2 now
+passed. Revision 22 is independently reviewed, corrected, and tagged locally
+as `contract-freeze-11`. M2 now
 includes the reference in-memory Store through that boundary, runtime class
 registry and registration validator, class/permit/worker control plane,
 enqueue/routing/lease lifecycle, and the submission plus cycle-scoped automatic
@@ -25,15 +26,15 @@ result and human-only action adjudication with exact verdict replay, bounded
 dispute requeues, and class-qualified invalidation with live authorization
 validity. The first Task 7 trace found frozen authorization-atomicity,
 composite-reserve, verdict-replay, and processing-time gaps. The
-`contract-freeze-11` amendment is independently reviewed and corrected;
-action-gate implementation remains paused until that amendment is implemented
-and tagged.
+`contract-freeze-11` amendment now has executable live-context, composite
+reserve, processing-time, and early verdict-replay coverage; action-gate
+implementation may resume as the next separate unit.
 
 ## Specs
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 21) | `oneshot` scope; tagged `contract-freeze-10` | What Muster does and does not guarantee, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 22) | `oneshot` scope; tagged `contract-freeze-11` | What Muster does and does not guarantee, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, class-qualified atomic invalidation, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -55,9 +56,9 @@ and tagged.
 ## Contract freeze
 
 The wire contract remains frozen at version `1.1.0`. The current tagged
-internal boundary is revision 21 at `contract-freeze-10`. The binding scope is
+internal boundary is revision 22 at `contract-freeze-11`. The binding scope is
 defined
-by [spec §11.1–11.9](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+by [spec §11.1–11.11](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
 the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
 the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md),
@@ -75,8 +76,8 @@ is independently reviewed, corrected, and tagged; M2 Task 6 is complete against
 that boundary.
 The independently reviewed and corrected
 [freeze-11 action-authorization amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-11-action-authorization.md)
-records the first Task-7 trace findings. It authorizes no runtime work until it
-is implemented and tagged.
+records and implements the first Task-7 trace findings; the reviewed boundary
+is tagged locally.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

@@ -129,6 +129,16 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
           at: "2026-08-07T00:00:00.000Z", reason: "empty",
         } },
       ] }],
+      ["missing revision-22 request identity", { ...wellFormed, steps: [
+        { command: "applyResultAdjudicationVerdict", args: {
+          verdictHash: "v1", processedAt: "2026-08-07T13:00:00.000Z",
+        } },
+      ] }],
+      ["unknown revision-22 timing arg", { ...wellFormed, steps: [
+        { command: "applyActionAdjudicationVerdict", args: {
+          authorizationRequestId: "a1", processAt: "typo",
+        } },
+      ] }],
       ["non-finite charge", {
         ...wellFormed, expectFinal: { charges: { urgent: NaN } },
       }],

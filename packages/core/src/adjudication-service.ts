@@ -1,15 +1,19 @@
 import {
+  ACTION_GATE_TABLE,
+  absenceDomainCovers,
   canonicalVerdict,
   canonicalize,
   computeDecisionResultHash,
   computeInputHash,
   computeVerdictHash,
+  effectiveGateAction,
   isWireId,
   pathsCover,
   validateMusterValue,
   VerdictShapeError,
   type ActionAdjudicationVerdict,
   type ActionAuthorization,
+  type ActionPermit,
   type AutomaticVerificationStrength,
   type CanonicalJsonValue,
   type JobClass,
@@ -22,6 +26,8 @@ import {
 
 import type {
   AdjudicationSource,
+  ActionVerdictContextSnapshot,
+  AuthorizationContextSnapshot,
   Clock,
   CycleRequeuePlan,
   EventSink,
@@ -32,6 +38,7 @@ import type {
   ReserveChargeOutcome,
   ReservePolicyRecord,
   ReservePolicySnapshot,
+  ResultVerdictContextSnapshot,
   Store,
   VerdictOutcome,
 } from "./ports.js";
@@ -46,6 +53,25 @@ const sortedEvidence = (evidence: readonly SubmissionEvidence[]): SubmissionEvid
 
 const same = (left: unknown, right: unknown): boolean =>
   canonicalize(left) === canonicalize(right);
+
+const addSeconds = (at: Timestamp, seconds: number): Timestamp =>
+  new Date(Date.parse(at) + seconds * 1_000).toISOString();
+
+const cutoffReason = (
+  context: Pick<AuthorizationContextSnapshot, "classVersion" | "maxInFlightDeadline">,
+  processedAt: Timestamp,
+): "contract_expired" | "max_in_flight_exceeded" | null => {
+  if (context.classVersion.state === "retired" ||
+    context.classVersion.state === "draft" ||
+    (context.classVersion.state === "draining" &&
+      (context.classVersion.acceptedUntil === undefined ||
+        Date.parse(processedAt) > Date.parse(context.classVersion.acceptedUntil)))) {
+    return "contract_expired";
+  }
+  return Date.parse(processedAt) >= Date.parse(context.maxInFlightDeadline)
+    ? "max_in_flight_exceeded"
+    : null;
+};
 
 const requirementCovered = (
   requirement: NonNullable<JobClass<unknown, unknown>["resultEvidenceRequirement"]>,
@@ -98,6 +124,56 @@ const verifyAdjudicatedResult = (
     };
   } catch {
     return { ok: false };
+  }
+};
+
+const automaticPermitPasses = (
+  jobClass: JobClass<unknown, unknown>,
+  permit: Extract<ActionPermit, { mode: "automatic" }>,
+  payload: CanonicalJsonValue,
+  decision: Awaited<ReturnType<Store["getDecisionResult"]>> & {},
+  descriptor: CanonicalJsonValue,
+): boolean => {
+  const gate = ACTION_GATE_TABLE[
+    effectiveGateAction(permit.action, jobClass.surface)
+  ];
+  if (gate.automaticGate === "unavailable" ||
+    (gate.automaticGate === "deterministic_oracle" &&
+      decision.achievedStrength !== "deterministic_oracle")) return false;
+  try {
+    if (!validateMusterValue(permit.effectSchema, descriptor).ok ||
+      !same(permit.deriveEffect({ payload, result: decision.result }), descriptor)) {
+      return false;
+    }
+    if (gate.automaticGate === "deterministic_oracle") {
+      const requirement = jobClass.evidenceRequirements.find((entry) =>
+        entry.action === permit.action
+      );
+      if (requirement === undefined || !jobClass.oracles.some((oracle) =>
+        oracle.kind === "support" &&
+        oracle.predicates.includes(requirement.predicate) &&
+        pathsCover(oracle.coversPayloadPaths, requirement.requiredPayloadPaths) &&
+        pathsCover(oracle.coversResultPaths, requirement.requiredResultPaths) &&
+        oracle.run(payload, decision.result).kind === "pass"
+      )) return false;
+    }
+    if (gate.requiresCompletenessOracle) {
+      const requirement = jobClass.absenceRequirements.find((entry) =>
+        entry.action === permit.action
+      );
+      if (requirement === undefined || !jobClass.oracles.some((oracle) =>
+        oracle.kind === "completeness" &&
+        oracle.predicates.includes(requirement.predicate) &&
+        oracle.absenceDomain !== undefined &&
+        pathsCover(oracle.coversPayloadPaths, requirement.requiredPayloadPaths) &&
+        pathsCover(oracle.coversResultPaths, requirement.requiredResultPaths) &&
+        absenceDomainCovers(oracle.absenceDomain, requirement.requiredDomain) &&
+        oracle.run(payload, decision.result).kind === "pass"
+      )) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 };
 
@@ -186,7 +262,8 @@ export type ApplyVerdictResult =
         | "invalid_verdict"
         | "runtime_mismatch"
         | "verification_failed"
-        | "binding_conflict";
+        | "binding_conflict"
+        | "verdict_conflict";
     };
 
 /** Deterministic M2 Task-6 result/action adjudication coordinator. */
@@ -357,11 +434,39 @@ export class AdjudicationService {
       }
       throw error;
     }
+    const history = await this.options.store.getVerdictHistory(
+      canonical.resultAdjudicationRequestId,
+    );
+    if (history !== null) {
+      const exact = history.kind === "result" &&
+          history.verdictHash === verdictHash &&
+          same(history.verdict, canonical);
+      const auditJob = await this.options.store.getJob(canonical.jobId);
+      if (auditJob !== null) {
+        this.emitVerdict(
+          "result",
+          auditJob.classId,
+          canonical,
+          verdictHash,
+          exact
+            ? { kind: "replayed", receipt: history.receipt }
+            : { kind: "conflict" },
+        );
+      }
+      return exact
+        ? { kind: "replayed", receipt: history.receipt }
+        : { kind: "verdict_conflict" };
+    }
+    const processedAt = this.options.clock.now();
+    const inspected = await this.options.store.inspectResultVerdictContext(
+      canonical.resultAdjudicationRequestId,
+    );
+    if (inspected === null) return { kind: "not_found" };
     const request = await this.options.store.getResultAdjudicationRequest(
       canonical.resultAdjudicationRequestId,
     );
     if (request === null) return { kind: "not_found" };
-    const job = await this.options.store.getJob(request.jobId);
+    const job = inspected.currentJob;
     if (!this.resultVerdictMatches(request, canonical)) {
       if (job !== null) {
         this.emitVerdict(
@@ -370,19 +475,35 @@ export class AdjudicationService {
           canonical,
           verdictHash,
           { kind: "conflict" },
+          processedAt,
         );
       }
       return { kind: "binding_conflict" };
     }
-    if (job === null) {
-      return { kind: "binding_conflict" };
+    if (inspected.resultState !== "pending_result_adjudication" ||
+      inspected.currentJob.collectionCycle !== request.collectionCycle) {
+      return { kind: "terminal" };
     }
     const compatibility = await this.options.registry.compatibility(
       this.options.store,
-      job.classId,
-      job.contractVersion,
+      inspected.jobCycle.classId,
+      inspected.jobCycle.contractVersion,
     );
     if (!compatibility.ok) return { kind: "runtime_mismatch" };
+    const expectedContext: ResultVerdictContextSnapshot = {
+      ...inspected,
+      maxInFlightDeadline: addSeconds(
+        inspected.jobCycle.cycleStartedAt,
+        compatibility.entry.jobClass.cost.maxInFlightLifetime,
+      ),
+    };
+    const due = cutoffReason(expectedContext, processedAt);
+    if (due !== null) {
+      if (!await this.invalidateVerdictContext(expectedContext, due, processedAt)) {
+        return { kind: "runtime_mismatch" };
+      }
+      return { kind: "freshness_conflict" };
+    }
 
     let outcome: VerdictOutcome;
     if (canonical.decision.kind === "resolve") {
@@ -404,7 +525,8 @@ export class AdjudicationService {
       outcome = await this.options.store.applyResultAdjudicationVerdict({
         verdict: canonical,
         verdictHash,
-        at: canonical.decidedAt,
+        processedAt,
+        expectedContext,
         decision: "resolve",
         resolved: {
           decisionResultHash,
@@ -417,7 +539,7 @@ export class AdjudicationService {
           resultAdjudicationVerdictHash: verdictHash,
           contractVersion: request.contractVersion,
           permitEpoch: request.permitEpoch,
-          verifiedAt: canonical.decidedAt,
+          verifiedAt: processedAt,
         },
       });
     } else {
@@ -441,24 +563,25 @@ export class AdjudicationService {
       outcome = await this.options.store.applyResultAdjudicationVerdict({
         verdict: canonical,
         verdictHash,
-        at: canonical.decidedAt,
+        processedAt,
+        expectedContext,
         decision: "reject",
         onReject: {
           cap,
           newCycleEpoch: currentEpoch,
           newCycleInputHash,
-          cycleStartedAt: canonical.decidedAt,
+          cycleStartedAt: processedAt,
         },
       });
     }
-    this.emitVerdict("result", job.classId, canonical, verdictHash, outcome);
+    this.emitVerdict("result", job.classId, canonical, verdictHash, outcome, processedAt);
     if (outcome.kind === "applied") {
       const transition = outcome.receipt.outcome === "resolved"
         ? "resolved"
         : "rejected";
       this.options.events.emit({
         type: "adjudication",
-        at: canonical.decidedAt,
+        at: processedAt,
         classId: job.classId,
         jobId: request.jobId,
         collectionCycle: request.collectionCycle,
@@ -469,7 +592,7 @@ export class AdjudicationService {
       });
       this.options.events.emit({
         type: "state_change",
-        at: canonical.decidedAt,
+        at: processedAt,
         classId: job.classId,
         jobId: request.jobId,
         collectionCycle: request.collectionCycle,
@@ -484,7 +607,7 @@ export class AdjudicationService {
       ) {
         this.options.events.emit({
           type: "dispute_requeue_exhausted",
-          at: canonical.decidedAt,
+          at: processedAt,
           classId: job.classId,
           jobId: request.jobId,
           collectionCycle: request.collectionCycle,
@@ -508,11 +631,53 @@ export class AdjudicationService {
     } catch {
       return { kind: "invalid_verdict" };
     }
+    const history = await this.options.store.getVerdictHistory(
+      canonical.authorizationRequestId,
+    );
+    if (history !== null) {
+      const exact = history.kind === "action" &&
+          history.verdictHash === verdictHash &&
+          same(history.verdict, canonical);
+      const auditJob = await this.options.store.getJob(canonical.jobId);
+      if (auditJob !== null) {
+        this.emitVerdict(
+          "action",
+          auditJob.classId,
+          canonical,
+          verdictHash,
+          exact
+            ? { kind: "replayed", receipt: history.receipt }
+            : { kind: "conflict" },
+        );
+      }
+      return exact
+        ? { kind: "replayed", receipt: history.receipt }
+        : { kind: "verdict_conflict" };
+    }
+    const processedAt = this.options.clock.now();
     const request = await this.options.store.getActionAdjudicationRequest(
       canonical.authorizationRequestId,
     );
     if (request === null) return { kind: "not_found" };
-    const job = await this.options.store.getJob(request.jobId);
+    const persistedContext = await this.options.store.getPendingAuthorizationContext(
+      canonical.authorizationRequestId,
+    );
+    if (persistedContext === null) return { kind: "binding_conflict" };
+    const liveContext = await this.options.store.inspectAuthorizationContext(
+      request.decisionResultHash,
+    );
+    if (liveContext === null) return { kind: "terminal" };
+    const expectedContext: ActionVerdictContextSnapshot = {
+      persisted: persistedContext,
+      current: liveContext,
+    };
+    const currentStatus = await this.options.store.getAuthorizationStatus(
+      canonical.authorizationRequestId,
+    );
+    if (currentStatus?.state !== "pending_adjudication") {
+      return { kind: "terminal" };
+    }
+    const job = liveContext.currentJob;
     const expectedActions = request.effectIntent.effects.map((effect) => effect.action);
     if (
       canonical.effectIntentId !== request.effectIntent.id ||
@@ -527,20 +692,44 @@ export class AdjudicationService {
       !same(canonical.actions, expectedActions) ||
       !same(canonical.evidence, sortedEvidence(request.evidence))
     ) {
-      if (job !== null) {
-        this.emitVerdict(
-          "action",
-          job.classId,
-          canonical,
-          verdictHash,
-          { kind: "conflict" },
-        );
-      }
+      this.emitVerdict(
+        "action",
+        job.classId,
+        canonical,
+        verdictHash,
+        { kind: "conflict" },
+        processedAt,
+      );
       return { kind: "binding_conflict" };
     }
     const decision = await this.options.store.getDecisionResult(request.decisionResultHash);
-    if (decision === null || job === null) {
+    if (decision === null) {
       return { kind: "binding_conflict" };
+    }
+    const liveFullContext: AuthorizationContextSnapshot = {
+      ...liveContext,
+      maxInFlightDeadline: persistedContext.maxInFlightDeadline,
+    };
+    const due = cutoffReason(liveFullContext, processedAt);
+    if (due !== null) {
+      if (!await this.invalidateVerdictContext(liveFullContext, due, processedAt)) {
+        return { kind: "runtime_mismatch" };
+      }
+      return { kind: "freshness_conflict" };
+    }
+    if (canonical.decision === "reject") {
+      const outcome = await this.options.store.applyActionAdjudicationVerdict({
+        verdict: canonical,
+        verdictHash,
+        processedAt,
+        expectedContext,
+        decision: "reject",
+      });
+      this.emitVerdict("action", job.classId, canonical, verdictHash, outcome, processedAt);
+      if (outcome.kind === "applied") {
+        this.emitActionTransition(request, job.classId, processedAt, "denied");
+      }
+      return outcome;
     }
     const compatibility = await this.options.registry.compatibility(
       this.options.store,
@@ -548,13 +737,27 @@ export class AdjudicationService {
       request.contractVersion,
     );
     if (!compatibility.ok) return { kind: "runtime_mismatch" };
+    const payload = await this.options.store.getPayload(
+      liveContext.jobCycle.payloadRef,
+    );
+    if (payload === null) return { kind: "runtime_mismatch" };
     const humanReviews = [];
-    for (const action of expectedActions) {
+    for (const [index, action] of expectedActions.entries()) {
       const permit = compatibility.entry.jobClass.permits.find((candidate) =>
         candidate.action === action
       );
-      if (permit?.mode !== "human_only") return { kind: "binding_conflict" };
-      humanReviews.push({ action, ...permit.reviewRequirement });
+      if (permit === undefined) return { kind: "binding_conflict" };
+      if (permit.mode === "human_only") {
+        humanReviews.push({ action, ...permit.reviewRequirement });
+      } else if (!automaticPermitPasses(
+        compatibility.entry.jobClass,
+        permit,
+        payload,
+        decision,
+        request.effectIntent.effects[index]!.descriptor,
+      )) {
+        return { kind: "verification_failed" };
+      }
     }
     if (!same(request.humanReviews, humanReviews)) {
       return { kind: "binding_conflict" };
@@ -576,28 +779,22 @@ export class AdjudicationService {
       permitEpoch: request.permitEpoch,
       actions: [...canonical.actions],
     };
-    const outcome = canonical.decision === "approve"
-      ? await this.options.store.applyActionAdjudicationVerdict({
-          verdict: canonical,
-          verdictHash,
-          at: canonical.decidedAt,
-          decision: "approve",
-          authorization,
-        })
-      : await this.options.store.applyActionAdjudicationVerdict({
-          verdict: canonical,
-          verdictHash,
-          at: canonical.decidedAt,
-          decision: "reject",
-        });
-    this.emitVerdict("action", job.classId, canonical, verdictHash, outcome);
+    const outcome = await this.options.store.applyActionAdjudicationVerdict({
+      verdict: canonical,
+      verdictHash,
+      processedAt,
+      expectedContext,
+      decision: "approve",
+      authorization,
+    });
+    this.emitVerdict("action", job.classId, canonical, verdictHash, outcome, processedAt);
     if (outcome.kind === "applied") {
       const transition = outcome.receipt.outcome === "approved"
         ? "authorized"
         : "denied";
       this.options.events.emit({
         type: "adjudication",
-        at: canonical.decidedAt,
+        at: processedAt,
         classId: job.classId,
         jobId: request.jobId,
         collectionCycle: request.collectionCycle,
@@ -608,7 +805,7 @@ export class AdjudicationService {
       });
       this.options.events.emit({
         type: "state_change",
-        at: canonical.decidedAt,
+        at: processedAt,
         classId: job.classId,
         jobId: request.jobId,
         collectionCycle: request.collectionCycle,
@@ -619,6 +816,133 @@ export class AdjudicationService {
       });
     }
     return outcome;
+  }
+
+  private emitActionTransition(
+    request: NonNullable<Awaited<ReturnType<Store["getActionAdjudicationRequest"]>>>,
+    classId: string,
+    processedAt: Timestamp,
+    to: "authorized" | "denied",
+  ): void {
+    this.options.events.emit({
+      type: "adjudication",
+      at: processedAt,
+      classId,
+      jobId: request.jobId,
+      collectionCycle: request.collectionCycle,
+      requestId: request.authorizationRequestId,
+      contractVersion: request.contractVersion,
+      kind: "action",
+      transition: to,
+    });
+    this.options.events.emit({
+      type: "state_change",
+      at: processedAt,
+      classId,
+      jobId: request.jobId,
+      collectionCycle: request.collectionCycle,
+      subjectKind: "authorization_request",
+      authorizationRequestId: request.authorizationRequestId,
+      from: "pending_adjudication",
+      to,
+    });
+  }
+
+  private async invalidateVerdictContext(
+    context: AuthorizationContextSnapshot | ResultVerdictContextSnapshot,
+    reason: "contract_expired" | "max_in_flight_exceeded",
+    processedAt: Timestamp,
+  ): Promise<boolean> {
+    const job = context.jobCycle;
+    const scope: InvalidationScope = {
+      kind: "job_cycles",
+      classId: job.classId,
+      jobCycles: [{ jobId: job.jobId, collectionCycle: job.collectionCycle }],
+    };
+    const expectedTargets = [{
+      jobId: job.jobId,
+      collectionCycle: job.collectionCycle,
+      state: context.resultState,
+      inputHash: job.inputHash,
+      permitEpoch: job.permitEpoch,
+      contractVersion: job.contractVersion,
+    }];
+    const requeuePlans: CycleRequeuePlan[] = [];
+    if (reason === "max_in_flight_exceeded") {
+      const compatibility = await this.options.registry.compatibility(
+        this.options.store,
+        job.classId,
+        job.contractVersion,
+      );
+      const payload = await this.options.store.getPayload(job.payloadRef);
+      const currentEpoch = await this.options.store.getCurrentPermitEpoch(job.classId);
+      if (!compatibility.ok || payload === null || currentEpoch === null) return false;
+      requeuePlans.push({
+        jobId: job.jobId,
+        fromCollectionCycle: job.collectionCycle,
+        newCollectionCycle: job.collectionCycle + 1,
+        permitEpoch: currentEpoch,
+        inputHash: await computeInputHash({
+          payload,
+          payload_schema: compatibility.entry.jobClass.payloadSchema,
+          job_class_id: job.classId,
+          contract_version: job.contractVersion,
+          output_schema: compatibility.entry.jobClass.outputSchema,
+          policy_version: job.policyVersion,
+          permit_epoch: currentEpoch,
+        }),
+        cycleStartedAt: processedAt,
+      });
+    }
+    const outcome = await this.options.store.invalidateResultScope({
+      scope,
+      expectedTargets,
+      requeuePlans,
+      at: processedAt,
+      reason,
+    });
+    if (outcome.kind === "applied") {
+      for (const transition of outcome.resultTransitions) {
+        this.options.events.emit({
+          type: "state_change",
+          at: processedAt,
+          classId: job.classId,
+          jobId: transition.jobId,
+          collectionCycle: transition.collectionCycle,
+          subjectKind: "result",
+          contractVersion: job.contractVersion,
+          from: transition.from,
+          to: transition.to,
+        });
+      }
+      for (const transition of outcome.authorizationTransitions) {
+        this.options.events.emit({
+          type: "state_change",
+          at: processedAt,
+          classId: job.classId,
+          jobId: job.jobId,
+          collectionCycle: job.collectionCycle,
+          subjectKind: "authorization_request",
+          authorizationRequestId: transition.authorizationRequestId,
+          from: transition.from,
+          to: transition.to,
+        });
+      }
+      for (const transition of outcome.invalidatedAuthorizations) {
+        this.options.events.emit({
+          type: "authorization_validity_change",
+          at: processedAt,
+          classId: transition.classId,
+          jobId: transition.jobId,
+          collectionCycle: transition.collectionCycle,
+          authorizationRequestId: transition.authorizationRequestId,
+          from: "valid",
+          to: "invalid",
+          reason: transition.reason,
+        });
+      }
+    }
+    return true;
   }
 
   private resultVerdictMatches(
@@ -641,13 +965,14 @@ export class AdjudicationService {
     verdict: ResultAdjudicationVerdict | ActionAdjudicationVerdict,
     verdictHash: string,
     outcome: VerdictOutcome,
+    at: Timestamp = verdict.decidedAt,
   ): void {
     const requestId = kind === "result"
       ? (verdict as ResultAdjudicationVerdict).resultAdjudicationRequestId
       : (verdict as ActionAdjudicationVerdict).authorizationRequestId;
     this.options.events.emit({
       type: "verdict",
-      at: verdict.decidedAt,
+      at,
       classId,
       jobId: verdict.jobId,
       collectionCycle: verdict.collectionCycle,

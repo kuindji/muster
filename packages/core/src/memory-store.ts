@@ -19,6 +19,10 @@ import {
 
 import type {
   AppliedInvalidationOutcome,
+  AuthorizationContextSnapshot,
+  AuthorizationReserveBatchConflict,
+  AuthorizationReserveBatchResult,
+  AuthorizationReserveLane,
   ClassHealthSnapshot,
   ClassVersionRecord,
   ClaimLeaseOutcome,
@@ -46,6 +50,7 @@ import type {
   ReserveMutation,
   ReservePolicyRecord,
   ReservePolicySnapshot,
+  ResultVerdictContextSnapshot,
   ReputationEvidenceRecord,
   RejectSubmissionOutcome,
   RegisterClassVersionOutcome,
@@ -53,6 +58,7 @@ import type {
   Store,
   TransitionOutcome,
   VerdictOutcome,
+  VerdictHistoryRecord,
   WorkerRecord,
   WorkerRegistration,
   WorkerRoutingSnapshot,
@@ -157,7 +163,11 @@ export class InMemoryStore implements Store {
   private resultAdjudicationByCycle = new Map<string, string>();
   private actionAdjudications = new Map<
     string,
-    { request: ActionAdjudicationRequest; openedAt: Timestamp }
+    {
+      request: ActionAdjudicationRequest;
+      openedAt: Timestamp;
+      context: AuthorizationContextSnapshot;
+    }
   >();
   private authorizationStatuses = new Map<string, AuthorizationStatus>();
   private authorizations = new Map<string, ActionAuthorization>();
@@ -170,12 +180,14 @@ export class InMemoryStore implements Store {
       effectIntent: EffectIntent;
       effectIntentHash: string;
       decisionResultHash: string;
+      reserveBatch?: AuthorizationReserveBatchResult;
     }
   >();
   private verdictHistory = new Map<
     string,
     {
       input: string;
+      record: VerdictHistoryRecord;
       outcome: Extract<VerdictOutcome, { kind: "applied" }>;
     }
   >();
@@ -1243,6 +1255,209 @@ export class InMemoryStore implements Store {
     return clone({ kind: "exhausted", status: "applied", ...mutation });
   }
 
+  private settleAuthorizationReserves(
+    authorizationRequestId: string,
+    charges: readonly Parameters<Store["chargeReserve"]>[0][],
+    context: AuthorizationContextSnapshot,
+    at: Timestamp,
+  ): AuthorizationReserveBatchResult | AuthorizationReserveBatchConflict {
+    const order: readonly AuthorizationReserveLane[] = [
+      "lowCost",
+      "urgent",
+      "splitAndAdjudication",
+    ];
+    const lanes = charges.map((charge) => charge.policy.lane);
+    if (lanes.some((lane) => !order.includes(lane as AuthorizationReserveLane))) {
+      return { kind: "reserve_batch_invalid", reason: "extraneous_lane" };
+    }
+    if (new Set(lanes).size !== lanes.length) {
+      return { kind: "reserve_batch_invalid", reason: "duplicate_lane" };
+    }
+    const indexes = lanes.map((lane) => order.indexOf(lane as AuthorizationReserveLane));
+    if (indexes.some((index, position) => position > 0 &&
+      index <= indexes[position - 1]!)) {
+      return { kind: "reserve_batch_invalid", reason: "lane_order" };
+    }
+    for (const charge of charges) {
+      if (charge.chargeKey !==
+        `${authorizationRequestId}:${charge.policy.lane}`) {
+        return { kind: "reserve_batch_invalid", reason: "charge_key" };
+      }
+      if (charge.policy.classId !== context.jobCycle.classId ||
+        charge.policy.contractVersion !== context.jobCycle.contractVersion ||
+        charge.at !== at) {
+        return { kind: "reserve_batch_invalid", reason: "context_mismatch" };
+      }
+      if (charge.workerIds.some((workerId, index) =>
+        index > 0 && workerId <= charge.workerIds[index - 1]!
+      )) {
+        return { kind: "reserve_batch_invalid", reason: "worker_order" };
+      }
+    }
+
+    const preflight = charges.map((charge) => {
+      const lane = charge.policy.lane as AuthorizationReserveLane;
+      const existing = this.reserveCharges.get(charge.chargeKey);
+      if (existing !== undefined) {
+        if (!equal(existing.charge.charge.policy, charge.policy) ||
+          !equal(existing.charge.charge.workerIds, charge.workerIds)) {
+          return {
+            conflict: {
+              kind: "reserve_charge_conflict" as const,
+              lane,
+              existingCharge: clone(existing.charge),
+            },
+          };
+        }
+        return { outcome: existing.charge.outcome };
+      }
+      const current = this.reservePolicies.get(this.reservePolicyKey(charge.policy));
+      if (current === undefined || !equal(current.policy, charge.policy)) {
+        return {
+          conflict: {
+            kind: "reserve_policy_conflict" as const,
+            lane,
+            currentPolicy: clone(current ?? null),
+          },
+        };
+      }
+      const classCapacity = current.used < current.policy.laneLimit;
+      const perWorkerLimit = current.policy.perWorkerLimit;
+      const perWorkerCapacity = lane === "lowCost" || lane === "urgent"
+        ? charge.workerIds.every((workerId) =>
+            (current.workerUsage.find((usage) =>
+              usage.workerId === workerId
+            )?.used ?? 0) < perWorkerLimit!
+          )
+        : true;
+      return { outcome: classCapacity && perWorkerCapacity ? "charged" : "exhausted" };
+    });
+    for (const entry of preflight) {
+      if ("conflict" in entry) return entry.conflict;
+    }
+
+    const failClosed = charges.some((charge, index) =>
+      (charge.policy.lane === "lowCost" || charge.policy.lane === "urgent") &&
+      preflight[index]!.outcome === "exhausted"
+    );
+    const selected = charges.filter((charge, index) =>
+      !failClosed || (
+        (charge.policy.lane === "lowCost" || charge.policy.lane === "urgent") &&
+        preflight[index]!.outcome === "exhausted"
+      )
+    );
+    const skippedLanes = charges
+      .filter((charge) => !selected.includes(charge))
+      .map((charge) => charge.policy.lane as AuthorizationReserveLane);
+    const classId = charges[0]?.policy.classId;
+    if (classId === undefined) {
+      return { kind: "reserve_batch_invalid", reason: "extraneous_lane" };
+    }
+    const startingHealth = this.classHealth.get(classId);
+    if (startingHealth === undefined) {
+      return {
+        kind: "reserve_policy_conflict",
+        lane: charges[0]!.policy.lane as AuthorizationReserveLane,
+        currentPolicy: this.reservePolicies.get(
+          this.reservePolicyKey(charges[0]!.policy),
+        ) ?? null,
+      };
+    }
+    const results: Array<{
+      lane: AuthorizationReserveLane;
+      charge: ReserveChargeRecord;
+      currentPolicy: ReservePolicyRecord;
+      applied: boolean;
+    }> = [];
+    let finalHealth = clone(startingHealth);
+    for (const charge of selected) {
+      this.classHealth.set(classId, clone(startingHealth));
+      const settled = this.settleReserve(charge);
+      if (settled.kind === "reserve_charge_conflict" ||
+        settled.kind === "reserve_policy_conflict") {
+        throw new Error("authorization reserve preflight diverged");
+      }
+      if (settled.status === "applied") {
+        finalHealth = clone(settled.classHealth);
+      }
+      results.push({
+        lane: charge.policy.lane as AuthorizationReserveLane,
+        charge: clone(settled.charge),
+        currentPolicy: clone(settled.currentPolicy),
+        applied: settled.status === "applied",
+      });
+    }
+    this.classHealth.set(classId, clone(finalHealth));
+    for (const result of results) {
+      if (!result.applied) continue;
+      const mutation = this.reserveCharges.get(result.charge.charge.chargeKey);
+      if (mutation !== undefined) {
+        this.reserveCharges.set(result.charge.charge.chargeKey, {
+          ...mutation,
+          classHealth: clone(finalHealth),
+        });
+      }
+    }
+    return clone({
+      settlements: results.map(({ applied: _applied, ...result }) => result),
+      skippedLanes,
+      classHealth: finalHealth,
+    });
+  }
+
+  private currentAuthorizationContext(
+    decisionResultHash: string,
+  ): Omit<AuthorizationContextSnapshot, "maxInFlightDeadline"> | null {
+    const decision = this.decisions.get(decisionResultHash);
+    if (decision === undefined) return null;
+    const key = cycleKey(decision.jobId, decision.collectionCycle);
+    const jobCycle = this.jobCycles.get(key);
+    const currentJob = this.jobs.get(decision.jobId);
+    const resultState = this.resultStates.get(key);
+    const classVersion = this.classVersions.get(pairKey(
+      jobCycle?.classId ?? "",
+      decision.contractVersion,
+    ));
+    if (jobCycle === undefined || currentJob === undefined ||
+      resultState === undefined || classVersion === undefined) return null;
+    return { decision, jobCycle, currentJob, resultState, classVersion };
+  }
+
+  private currentResultVerdictContext(
+    requestId: string,
+  ): Omit<ResultVerdictContextSnapshot, "maxInFlightDeadline"> | null {
+    const adjudication = this.resultAdjudications.get(requestId);
+    if (adjudication === undefined) return null;
+    const request = adjudication.request;
+    const key = cycleKey(request.jobId, request.collectionCycle);
+    const jobCycle = this.jobCycles.get(key);
+    const currentJob = this.jobs.get(request.jobId);
+    const resultState = this.resultStates.get(key);
+    const classVersion = this.classVersions.get(pairKey(
+      jobCycle?.classId ?? "",
+      request.contractVersion,
+    ));
+    if (jobCycle === undefined || currentJob === undefined ||
+      resultState === undefined || classVersion === undefined) return null;
+    return { request, jobCycle, currentJob, resultState, classVersion };
+  }
+
+  private contextEligible(
+    classVersion: ClassVersionRecord,
+    processedAt: Timestamp,
+    maxInFlightDeadline: Timestamp,
+  ): boolean {
+    if (classVersion.state === "retired" || classVersion.state === "draft") {
+      return false;
+    }
+    if (classVersion.state === "draining" &&
+      (classVersion.acceptedUntil === undefined ||
+        Date.parse(processedAt) > Date.parse(classVersion.acceptedUntil))) {
+      return false;
+    }
+    return Date.parse(processedAt) < Date.parse(maxInFlightDeadline);
+  }
+
   private currentCandidate(jobId: string): LeaseCandidateSnapshot | null {
     const job = this.jobs.get(jobId);
     if (job === undefined) return null;
@@ -1862,6 +2077,14 @@ export class InMemoryStore implements Store {
     return this.atomic(() => clone(this.decisions.get(decisionResultHash) ?? null));
   }
 
+  inspectAuthorizationContext(
+    decisionResultHash: string,
+  ): ReturnType<Store["inspectAuthorizationContext"]> {
+    return this.atomic(() => clone(
+      this.currentAuthorizationContext(decisionResultHash),
+    ));
+  }
+
   authorizeOrReplayIntent(
     input: Parameters<Store["authorizeOrReplayIntent"]>[0],
   ): ReturnType<Store["authorizeOrReplayIntent"]> {
@@ -1875,13 +2098,13 @@ export class InMemoryStore implements Store {
           ? input.decision
           : {
               ...input.decision,
-              ...(input.decision.charge === undefined
+              ...(input.decision.charges === undefined
                 ? {}
                 : {
-                    charge: {
-                      ...input.decision.charge,
+                    charges: input.decision.charges.map((charge) => ({
+                      ...charge,
                       at: undefined,
-                    },
+                    })),
                   }),
             },
       };
@@ -1890,40 +2113,71 @@ export class InMemoryStore implements Store {
         const receipt = this.initialReceipts.get(input.effectIntent.id);
         if (receipt === undefined) throw new Error("missing initial receipt");
         return existing.input === fingerprint(semantic)
-          ? clone({ kind: "replayed", initialReceipt: receipt })
+          ? clone({
+              kind: "replayed",
+              initialReceipt: receipt,
+              ...(existing.reserveBatch === undefined
+                ? {}
+                : { reserveBatch: existing.reserveBatch }),
+            })
           : { kind: "conflict" };
       }
       if (this.coreIdentities.has(input.authorizationRequestId)) {
         return { kind: "conflict" };
       }
-      const durableDecision = this.decisions.get(input.decisionResultHash);
-      if (durableDecision === undefined) return { kind: "conflict" };
+      const currentContext = this.currentAuthorizationContext(
+        input.decisionResultHash,
+      );
+      if (currentContext === null ||
+        !equal(currentContext.decision, input.expectedContext.decision)) {
+        return { kind: "authorization_context_conflict", reason: "decision_changed" };
+      }
+      if (!equal(currentContext.jobCycle, input.expectedContext.jobCycle)) {
+        return { kind: "authorization_context_conflict", reason: "job_cycle_changed" };
+      }
+      if (!equal(currentContext.currentJob, input.expectedContext.currentJob) ||
+        currentContext.currentJob.collectionCycle !==
+          currentContext.jobCycle.collectionCycle) {
+        return { kind: "authorization_context_conflict", reason: "current_cycle_changed" };
+      }
+      if (currentContext.resultState !== "verified" ||
+        input.expectedContext.resultState !== "verified") {
+        return { kind: "authorization_context_conflict", reason: "result_not_verified" };
+      }
+      if (!equal(currentContext.classVersion, input.expectedContext.classVersion) ||
+        !this.contextEligible(
+          currentContext.classVersion,
+          input.at,
+          input.expectedContext.maxInFlightDeadline,
+        )) {
+        return {
+          kind: "authorization_context_conflict",
+          reason: "class_version_ineligible",
+        };
+      }
 
-      let reserve:
-        | ReserveMutation<"charged">
-        | ReserveMutation<"exhausted">
-        | undefined;
-      if (input.decision.kind !== "deny" && input.decision.charge !== undefined) {
-        const settlement = this.settleReserve(input.decision.charge);
-        if (
-          settlement.kind === "reserve_charge_conflict" ||
-          settlement.kind === "reserve_policy_conflict"
-        ) return settlement;
-        reserve = settlement.kind === "charged"
-          ? {
-              charge: settlement.charge,
-              currentPolicy: settlement.currentPolicy,
-              classHealth: settlement.classHealth,
-            }
-          : {
-              charge: settlement.charge,
-              currentPolicy: settlement.currentPolicy,
-              classHealth: settlement.classHealth,
-            };
+      const hasSplitLane = input.decision.kind !== "deny" &&
+        input.decision.charges?.some((charge) =>
+          charge.policy.lane === "splitAndAdjudication"
+        ) === true;
+      if ((input.decision.kind === "pend") !== hasSplitLane) {
+        return { kind: "reserve_batch_invalid", reason: "decision_mismatch" };
       }
-      if (input.decision.kind === "pend" && reserve === undefined) {
-        throw new Error("pending adjudication requires a reserve charge");
+      let reserveBatch: AuthorizationReserveBatchResult | undefined;
+      if (input.decision.kind !== "deny" && input.decision.charges !== undefined) {
+        const settlement = this.settleAuthorizationReserves(
+          input.authorizationRequestId,
+          input.decision.charges,
+          input.expectedContext,
+          input.at,
+        );
+        if ("kind" in settlement) return settlement;
+        reserveBatch = settlement;
       }
+      if (input.decision.kind === "pend" && reserveBatch === undefined) {
+        throw new Error("pending adjudication requires an authorization reserve batch");
+      }
+      const durableDecision = currentContext.decision;
 
       let receipt: AuthorizationInitialReceipt;
       if (input.decision.kind === "deny") {
@@ -1942,7 +2196,12 @@ export class InMemoryStore implements Store {
           state: "denied",
           reason: input.decision.reason,
         });
-      } else if (input.decision.kind === "authorize" && reserve?.charge.outcome === "exhausted") {
+      } else if (
+        reserveBatch?.settlements.some((entry) =>
+          (entry.lane === "lowCost" || entry.lane === "urgent") &&
+          entry.charge.outcome === "exhausted"
+        )
+      ) {
         receipt = {
           authorizationRequestId: input.authorizationRequestId,
           effectIntentId: input.effectIntent.id,
@@ -1995,6 +2254,7 @@ export class InMemoryStore implements Store {
         this.actionAdjudications.set(input.authorizationRequestId, {
           request: clone(input.decision.request),
           openedAt: input.at,
+          context: clone(input.expectedContext),
         });
       }
       this.coreIdentities.set(input.authorizationRequestId, "authorization_request");
@@ -2004,38 +2264,13 @@ export class InMemoryStore implements Store {
         effectIntent: clone(input.effectIntent),
         effectIntentHash: input.effectIntentHash,
         decisionResultHash: input.decisionResultHash,
+        ...(reserveBatch === undefined ? {} : { reserveBatch: clone(reserveBatch) }),
       });
       this.initialReceipts.set(input.effectIntent.id, clone(receipt));
-      if (reserve === undefined) {
-        return clone({
-          kind: "applied",
-          initialReceipt: receipt as Exclude<
-            AuthorizationInitialReceipt,
-            Extract<AuthorizationInitialReceipt, { outcome: "pending_adjudication" }>
-          >,
-        });
-      }
-      if (isChargedMutation(reserve)) {
-        const chargedReserve: ReserveMutation<"charged"> = reserve;
-        return clone({
-          kind: "applied",
-          initialReceipt: receipt as Extract<
-            AuthorizationInitialReceipt,
-            { outcome: "authorized" | "pending_adjudication" }
-          >,
-          reserve: chargedReserve,
-        });
-      }
-      const exhaustedReserve: ReserveMutation<"exhausted"> = reserve;
       return clone({
         kind: "applied",
-        initialReceipt: receipt as
-          | Extract<AuthorizationInitialReceipt, { outcome: "pending_adjudication" }>
-          | (Omit<
-              Extract<AuthorizationInitialReceipt, { outcome: "denied" }>,
-              "denialReason"
-            > & { denialReason: "escalation_budget_exhausted" }),
-        reserve: exhaustedReserve,
+        initialReceipt: receipt,
+        ...(reserveBatch === undefined ? {} : { reserveBatch }),
       });
     });
   }
@@ -2164,6 +2399,12 @@ export class InMemoryStore implements Store {
     return this.atomic(() => clone(this.resultAdjudications.get(id)?.request ?? null));
   }
 
+  inspectResultVerdictContext(
+    id: string,
+  ): ReturnType<Store["inspectResultVerdictContext"]> {
+    return this.atomic(() => clone(this.currentResultVerdictContext(id)));
+  }
+
   listPendingResultAdjudications(
     classId: string,
   ): ReturnType<Store["listPendingResultAdjudications"]> {
@@ -2191,7 +2432,6 @@ export class InMemoryStore implements Store {
       const verdictInput = fingerprint({
         verdict: input.verdict,
         verdictHash: input.verdictHash,
-        at: input.at,
       });
       const prior = this.verdictHistory.get(requestId);
       if (prior !== undefined) {
@@ -2214,10 +2454,28 @@ export class InMemoryStore implements Store {
         equal(input.verdict.evidence, request.evidence) &&
         input.verdict.contractVersion === request.contractVersion &&
         input.verdict.permitEpoch === request.permitEpoch &&
-        input.verdict.decidedAt === input.at &&
         input.verdict.decision.kind === input.decision;
       if (!verdictMatches) return { kind: "conflict" };
       const key = cycleKey(request.jobId, request.collectionCycle);
+      const currentContext = this.currentResultVerdictContext(requestId);
+      const expectedWithoutDeadline = {
+        request: input.expectedContext.request,
+        jobCycle: input.expectedContext.jobCycle,
+        currentJob: input.expectedContext.currentJob,
+        resultState: input.expectedContext.resultState,
+        classVersion: input.expectedContext.classVersion,
+      };
+      if (currentContext === null ||
+        !equal(currentContext, expectedWithoutDeadline) ||
+        currentContext.currentJob.collectionCycle !== request.collectionCycle ||
+        currentContext.resultState !== "pending_result_adjudication" ||
+        !this.contextEligible(
+          currentContext.classVersion,
+          input.processedAt,
+          input.expectedContext.maxInFlightDeadline,
+        )) {
+        return { kind: "freshness_conflict" };
+      }
       if (this.resultStates.get(key) !== "pending_result_adjudication") {
         return { kind: "terminal" };
       }
@@ -2232,6 +2490,7 @@ export class InMemoryStore implements Store {
           resolved.contractVersion !== request.contractVersion ||
           resolved.permitEpoch !== request.permitEpoch ||
           resolved.resultAdjudicationVerdictHash !== input.verdictHash ||
+          resolved.verifiedAt !== input.processedAt ||
           !equal(resolved.evidence, request.evidence) ||
           this.decisions.has(resolved.decisionResultHash)
         ) return { kind: "conflict" };
@@ -2241,7 +2500,7 @@ export class InMemoryStore implements Store {
         receipt = {
           requestId,
           verdictHash: input.verdictHash,
-          decidedAt: input.at,
+          decidedAt: input.verdict.decidedAt,
           outcome: "resolved",
         };
       } else {
@@ -2251,7 +2510,8 @@ export class InMemoryStore implements Store {
         if (requeue) {
           if (
             input.onReject.newCycleEpoch.length === 0 ||
-            input.onReject.newCycleInputHash.length === 0
+            input.onReject.newCycleInputHash.length === 0 ||
+            input.onReject.cycleStartedAt !== input.processedAt
           ) return { kind: "conflict" };
           const nextCycle = job.collectionCycle + 1;
           const nextKey = cycleKey(job.jobId, nextCycle);
@@ -2284,7 +2544,7 @@ export class InMemoryStore implements Store {
         receipt = {
           requestId,
           verdictHash: input.verdictHash,
-          decidedAt: input.at,
+          decidedAt: input.verdict.decidedAt,
           outcome: "rejected",
           rejectOutcome: requeue ? "requeued" : "cap_exhausted",
         };
@@ -2294,7 +2554,17 @@ export class InMemoryStore implements Store {
         receipt,
       };
       this.resultAdjudications.set(requestId, adjudication);
-      this.verdictHistory.set(requestId, { input: verdictInput, outcome: clone(outcome) });
+      this.verdictHistory.set(requestId, {
+        input: verdictInput,
+        record: {
+          kind: "result",
+          requestId,
+          verdictHash: input.verdictHash,
+          verdict: clone(input.verdict),
+          receipt: clone(receipt),
+        },
+        outcome: clone(outcome),
+      });
       return clone(outcome);
     });
   }
@@ -2304,6 +2574,14 @@ export class InMemoryStore implements Store {
   ): ReturnType<Store["getActionAdjudicationRequest"]> {
     return this.atomic(() => clone(
       this.actionAdjudications.get(authorizationRequestId)?.request ?? null,
+    ));
+  }
+
+  getPendingAuthorizationContext(
+    authorizationRequestId: string,
+  ): ReturnType<Store["getPendingAuthorizationContext"]> {
+    return this.atomic(() => clone(
+      this.actionAdjudications.get(authorizationRequestId)?.context ?? null,
     ));
   }
 
@@ -2330,6 +2608,12 @@ export class InMemoryStore implements Store {
       )));
   }
 
+  getVerdictHistory(
+    requestId: string,
+  ): ReturnType<Store["getVerdictHistory"]> {
+    return this.atomic(() => clone(this.verdictHistory.get(requestId)?.record ?? null));
+  }
+
   applyActionAdjudicationVerdict(
     input: Parameters<Store["applyActionAdjudicationVerdict"]>[0],
   ): ReturnType<Store["applyActionAdjudicationVerdict"]> {
@@ -2338,7 +2622,6 @@ export class InMemoryStore implements Store {
       const verdictInput = fingerprint({
         verdict: input.verdict,
         verdictHash: input.verdictHash,
-        at: input.at,
       });
       const prior = this.verdictHistory.get(requestId);
       if (prior !== undefined) {
@@ -2364,21 +2647,42 @@ export class InMemoryStore implements Store {
           request.resultAdjudicationVerdictHash &&
         input.verdict.contractVersion === request.contractVersion &&
         input.verdict.permitEpoch === request.permitEpoch &&
-        input.verdict.decidedAt === input.at &&
         input.verdict.decision === input.decision;
       if (!verdictMatches) return { kind: "conflict" };
+      const currentContext = this.currentAuthorizationContext(
+        request.decisionResultHash,
+      );
+      const expectedWithoutDeadline = {
+        decision: input.expectedContext.current.decision,
+        jobCycle: input.expectedContext.current.jobCycle,
+        currentJob: input.expectedContext.current.currentJob,
+        resultState: input.expectedContext.current.resultState,
+        classVersion: input.expectedContext.current.classVersion,
+      };
+      if (currentContext === null ||
+        !equal(pending.context, input.expectedContext.persisted) ||
+        !equal(currentContext, expectedWithoutDeadline) ||
+        currentContext.currentJob.collectionCycle !== request.collectionCycle ||
+        currentContext.resultState !== "verified" ||
+        !this.contextEligible(
+          currentContext.classVersion,
+          input.processedAt,
+          input.expectedContext.persisted.maxInFlightDeadline,
+        )) {
+        return { kind: "freshness_conflict" };
+      }
 
       const receipt = input.decision === "approve"
         ? {
             requestId,
             verdictHash: input.verdictHash,
-            decidedAt: input.at,
+            decidedAt: input.verdict.decidedAt,
             outcome: "approved" as const,
           }
         : {
             requestId,
             verdictHash: input.verdictHash,
-            decidedAt: input.at,
+            decidedAt: input.verdict.decidedAt,
             outcome: "denied" as const,
           };
       if (input.decision === "approve") {
@@ -2414,7 +2718,17 @@ export class InMemoryStore implements Store {
         kind: "applied",
         receipt,
       };
-      this.verdictHistory.set(requestId, { input: verdictInput, outcome: clone(outcome) });
+      this.verdictHistory.set(requestId, {
+        input: verdictInput,
+        record: {
+          kind: "action",
+          requestId,
+          verdictHash: input.verdictHash,
+          verdict: clone(input.verdict),
+          receipt: clone(receipt),
+        },
+        outcome: clone(outcome),
+      });
       return clone(outcome);
     });
   }

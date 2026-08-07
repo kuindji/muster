@@ -139,7 +139,12 @@ export type MusterAuditEvent =
       adjudicatorId: string;
       contractVersion: string;
       kind: "result" | "action";
-      outcome: "applied" | "replayed" | "conflict" | "terminal";
+      outcome:
+        | "applied"
+        | "replayed"
+        | "conflict"
+        | "freshness_conflict"
+        | "terminal";
     })
   | (JobCycleScoped<"gate_decision"> &
       {

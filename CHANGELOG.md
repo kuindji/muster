@@ -1,5 +1,20 @@
 # Changelog
 
+## contract-freeze-11 — reviewed and tagged 2026-08-07
+
+Revision 22 amendment discovered by the first Milestone 2 Task-7 trace. New
+effect intents now compare one live decision/job/result/class context in the
+same transaction as identity claims, canonical multi-lane reserve settlement,
+status, backlog, and immutable receipt persistence. Composite low-cost, urgent,
+and split-and-adjudication charges preflight atomically and publish ordered
+settlements, skipped lanes, and one final health snapshot without partial debit.
+Both first-verdict commands now distinguish signed `decidedAt` from core-owned
+`processedAt`, fence the complete current context, and expose verdict history
+for exact replay before runtime or freshness checks. Lifecycle, concurrency,
+compile-time, reference Store, and adjudication-service coverage accompany the
+change. Wire contract version remains `1.1.0`; Task 7 runtime action-gate work
+is a separate unit.
+
 ## Milestone 2 Task 6 — 2026-08-07
 
 Implemented authoritative reserve installation, transition, forward rollover,

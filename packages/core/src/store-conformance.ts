@@ -1726,6 +1726,12 @@ const resultAdjudicationCase: StoreConformanceCase = {
     const backlog = await store.listPendingResultAdjudications("class-1");
     assert(backlog.length === 1, "one result adjudication must be pending");
     assert(backlog[0]?.openedAt === NOW, "backlog must expose first openedAt");
+    const inspected = await store.inspectResultVerdictContext(request.id);
+    assert(inspected !== null, "pending verdict context must be inspectable");
+    const expectedContext = {
+      ...inspected,
+      maxInFlightDeadline: "2026-08-08T00:00:00.000Z",
+    };
 
     const verdict = {
       kind: "human" as const,
@@ -1745,7 +1751,8 @@ const resultAdjudicationCase: StoreConformanceCase = {
     const applied = await store.applyResultAdjudicationVerdict({
       verdict,
       verdictHash: "verdict-1",
-      at: LATER,
+      processedAt: LATER,
+      expectedContext,
       decision: "reject",
       onReject: {
         cap: 1,
@@ -1760,10 +1767,18 @@ const resultAdjudicationCase: StoreConformanceCase = {
         applied.receipt.rejectOutcome === "requeued",
       "rejected dispute below cap must requeue",
     );
+    const history = await store.getVerdictHistory(request.id);
+    assert(
+      history?.kind === "result" &&
+        history.verdictHash === "verdict-1" &&
+        history.receipt.decidedAt === verdict.decidedAt,
+      "verdict history must preserve kind, canonical verdict, and receipt",
+    );
     const exactVerdict = await store.applyResultAdjudicationVerdict({
       verdict,
       verdictHash: "verdict-1",
-      at: LATER,
+      processedAt: LATER,
+      expectedContext,
       decision: "reject",
       onReject: {
         cap: 1,
@@ -1776,7 +1791,8 @@ const resultAdjudicationCase: StoreConformanceCase = {
     const conflict = await store.applyResultAdjudicationVerdict({
       verdict: { ...verdict, adjudicatorId: "human-2" },
       verdictHash: "verdict-2",
-      at: LATER,
+      processedAt: LATER,
+      expectedContext,
       decision: "reject",
       onReject: {
         cap: 1,

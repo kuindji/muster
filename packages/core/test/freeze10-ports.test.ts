@@ -93,6 +93,7 @@ describe("revision-21 reserve-accounting port freeze", () => {
   it("keeps charge-key and policy conflicts distinct on every charge-bearing command", () => {
     const chargeConflict: AuthorizeIntentOutcome = {
       kind: "reserve_charge_conflict",
+      lane: "urgent",
       existingCharge: { charge, outcome: "charged" },
     };
     const policyConflict: OpenAdjudicationOutcome = {
@@ -165,8 +166,8 @@ describe("revision-21 reserve-accounting port freeze", () => {
     void invalid;
   });
 
-  it("cannot pair a charged reserve with a terminal budget denial", () => {
-    const invalid: AuthorizeIntentOutcome = {
+  it("publishes authorization reserve settlement as one aggregate batch", () => {
+    const outcome: AuthorizeIntentOutcome = {
       kind: "applied",
       initialReceipt: {
         authorizationRequestId: "authorization-1",
@@ -176,17 +177,32 @@ describe("revision-21 reserve-accounting port freeze", () => {
         collectionCycle: 1,
         decisionResultHash: "decision-1",
         at: now,
-        // @ts-expect-error charged action reserves authorize or pend; exhaustion denies
-        outcome: "denied",
-        denialReason: "escalation_budget_exhausted",
+        outcome: "authorized",
+        authorization: {
+          authorizationRequestId: "authorization-1",
+          effectIntentId: "intent-1",
+          effectIntentHash: "intent-hash",
+          jobId: "job-1",
+          collectionCycle: 1,
+          inputHash: "input-hash",
+          decisionResultHash: "decision-1",
+          evidence: [],
+          contractVersion: "1.0.0",
+          permitEpoch: "epoch-1",
+          actions: ["routeToUrgent"],
+        },
       },
-      reserve: {
-        charge: { charge, outcome: "charged" },
-        currentPolicy: record,
+      reserveBatch: {
+        settlements: [{
+          lane: "urgent",
+          charge: { charge, outcome: "charged" },
+          currentPolicy: record,
+        }],
+        skippedLanes: [],
         classHealth: health,
       },
     };
-    void invalid;
+    expect(outcome.reserveBatch?.settlements).toHaveLength(1);
   });
 
   it("removes the ambiguous chargeOk boolean from authorization outcomes", () => {
