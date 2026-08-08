@@ -123,7 +123,12 @@ coarse state, contract, skill hash, cap-usage bucket, and next-slot bucket;
 availability delegates only to the public core control-plane transition and
 projects every refusal through one non-probing error. The authenticated
 six-tool flow passes over both the in-memory and PostgreSQL Stores. Task 7's
-optional experimental skill Resource adapter is the next bounded unit.
+optional experimental skill Resource adapter is explicitly pending its external
+gate: SEP-2640 remains open and the pinned official TypeScript SDK has no
+accepted Skills Extension implementation. No draft capability or resource URI
+was added, hand installation remains normative, and the stable six-tool wire is
+unchanged. Task 8 cross-adapter conformance and side-channel review is the next
+bounded unit.
 
 ## PostgreSQL adapter verification
 

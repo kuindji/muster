@@ -417,7 +417,18 @@ mapping severance, token revocation, release mismatch/ambiguity, schema-exact
 results, and leakage. One authenticated six-tool suite passes unchanged over
 the reference in-memory and PostgreSQL Stores.
 
-## Task 7: Experimental skill Resource adapter
+## Task 7: Experimental skill Resource adapter (external gate recorded pending 2026-08-08)
+
+External-gate checkpoint: [SEP-2640] remains open and unmerged, and the pinned
+official TypeScript SDK v2 release exposes generic MCP Resources but no accepted
+Skills Extension implementation. The repository therefore keeps this adapter
+disabled and adds no experimental capability, resource index, resource URI, or
+stable-schema field. This is the plan's required explicit pending outcome; it
+does not authorize implementing the current draft shape. Re-evaluate the SEP,
+the selected SDK, and a real target client's discovery support before resuming
+this optional adapter.
+
+[SEP-2640]: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640
 
 Keep hand installation normative and implement the optional adapter separately:
 
