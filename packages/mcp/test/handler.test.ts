@@ -3,8 +3,9 @@ import {
   createMusterMcpConfig,
   createMusterMcpHandler,
   readMcpJson,
+  type CreateMusterMcpHandlerOptions,
 } from "../src/index.js";
-import { validConfigInput } from "./helpers.js";
+import { createTestAuthentication, validConfigInput } from "./helpers.js";
 
 const accept = "application/json, text/event-stream";
 
@@ -34,10 +35,24 @@ const legacyList = JSON.stringify({
   params: {},
 });
 
+async function authenticatedHandler(
+  options: Omit<CreateMusterMcpHandlerOptions, "authentication"> = {},
+) {
+  const config = createMusterMcpConfig(validConfigInput());
+  const auth = await createTestAuthentication(config);
+  return {
+    config,
+    handler: createMusterMcpHandler(config, {
+      ...options,
+      authentication: auth.authentication,
+    }),
+    authorizationHeader: auth.authorizationHeader,
+  };
+}
+
 describe("framework-neutral MCP handler gates", () => {
   it("serves both exact protected-resource metadata routes", async () => {
-    const config = createMusterMcpConfig(validConfigInput());
-    const handler = createMusterMcpHandler(config);
+    const { config, handler } = await authenticatedHandler();
     for (const path of config.protectedResourceMetadataPaths) {
       const response = await handler.fetch(
         new Request(`https://muster.example${path}`, { method: "GET" }),
@@ -96,9 +111,7 @@ describe("framework-neutral MCP handler gates", () => {
       413,
     ],
   ])("rejects invalid %s before protocol dispatch", async (_name, make, status) => {
-    const handler = createMusterMcpHandler(
-      createMusterMcpConfig(validConfigInput()),
-    );
+    const { handler } = await authenticatedHandler();
     const response = await handler.fetch(make());
     expect(response.status).toBe(status);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -106,9 +119,7 @@ describe("framework-neutral MCP handler gates", () => {
   });
 
   it("rejects actual oversized and malformed bodies", async () => {
-    const handler = createMusterMcpHandler(
-      createMusterMcpConfig(validConfigInput()),
-    );
+    const { handler } = await authenticatedHandler();
     const oversized = await handler.fetch(request(`"${"x".repeat(4_097)}"`));
     expect(oversized.status).toBe(413);
     const malformed = await handler.fetch(request("{"));
@@ -118,10 +129,7 @@ describe("framework-neutral MCP handler gates", () => {
   });
 
   it("lets the SDK reject unknown methods and modern header mismatches", async () => {
-    const handler = createMusterMcpHandler(
-      createMusterMcpConfig(validConfigInput()),
-      { responseMode: "auto" },
-    );
+    const { handler } = await authenticatedHandler({ responseMode: "auto" });
     const unknown = await handler.fetch(
       request(JSON.stringify({
         jsonrpc: "2.0",

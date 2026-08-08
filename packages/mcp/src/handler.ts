@@ -1,9 +1,18 @@
-import { MUSTER_MCP_SCOPES } from "@kuindji/muster-contract";
+import {
+  MUSTER_MCP_SCOPES,
+  MUSTER_MCP_TOOL_NAMES,
+  MUSTER_MCP_TOOL_SCOPES,
+  type MusterMcpScope,
+} from "@kuindji/muster-contract";
 import {
   createMcpHandler,
   type PerRequestResponseMode,
 } from "@modelcontextprotocol/server";
 import type { MusterMcpConfig } from "./config.js";
+import {
+  MusterMcpAuthenticator,
+  type MusterMcpAuthenticationDependencies,
+} from "./auth.js";
 import {
   JSON_RPC_ERRORS,
   jsonRpcErrorResponse,
@@ -12,8 +21,55 @@ import {
 import { createMusterMcpServer } from "./server.js";
 
 export interface CreateMusterMcpHandlerOptions {
+  readonly authentication: MusterMcpAuthenticationDependencies;
   readonly responseMode?: PerRequestResponseMode;
   readonly onerror?: (error: Error) => void;
+}
+
+const PRE_AUTH_PROTOCOL_METHODS = new Set([
+  "initialize",
+  "notifications/initialized",
+  "notifications/cancelled",
+  "ping",
+  "tools/list",
+  "tools/call",
+]);
+
+function messageMethod(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const method = (value as { readonly method?: unknown }).method;
+  return typeof method === "string" ? method : null;
+}
+
+function toolScope(value: unknown): MusterMcpScope | undefined {
+  if (messageMethod(value) !== "tools/call") return undefined;
+  const params = (value as { readonly params?: unknown }).params;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    return undefined;
+  }
+  const name = (params as { readonly name?: unknown }).name;
+  if (
+    typeof name !== "string" ||
+    !MUSTER_MCP_TOOL_NAMES.includes(name as (typeof MUSTER_MCP_TOOL_NAMES)[number])
+  ) {
+    return undefined;
+  }
+  return MUSTER_MCP_TOOL_SCOPES[name as keyof typeof MUSTER_MCP_TOOL_SCOPES];
+}
+
+function hasProtocolHeaderMismatch(request: Request, value: unknown): boolean {
+  const header = request.headers.get("mcp-protocol-version");
+  if (header === null || typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const params = (value as { readonly params?: unknown }).params;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return false;
+  const meta = (params as { readonly _meta?: unknown })._meta;
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return false;
+  const embedded = (meta as {
+    readonly "io.modelcontextprotocol/protocolVersion"?: unknown;
+  })["io.modelcontextprotocol/protocolVersion"];
+  return typeof embedded === "string" && embedded !== header;
 }
 
 export interface MusterMcpHandler {
@@ -102,8 +158,12 @@ async function boundedRequestBody(
 
 export function createMusterMcpHandler(
   config: MusterMcpConfig,
-  options: CreateMusterMcpHandlerOptions = {},
+  options: CreateMusterMcpHandlerOptions,
 ): MusterMcpHandler {
+  const authenticator = new MusterMcpAuthenticator(
+    config,
+    options.authentication,
+  );
   const sdkHandler = createMcpHandler(
     () => createMusterMcpServer(config),
     {
@@ -161,8 +221,9 @@ export function createMusterMcpHandler(
 
       const body = await boundedRequestBody(request, config.bodyLimitBytes);
       if (body instanceof Response) return body;
+      let message: unknown;
       try {
-        JSON.parse(new TextDecoder().decode(body));
+        message = JSON.parse(new TextDecoder().decode(body));
       } catch {
         return jsonRpcErrorResponse({
           status: 400,
@@ -177,6 +238,18 @@ export function createMusterMcpHandler(
         body,
         signal: request.signal,
       });
+      const method = messageMethod(message);
+      if (
+        method !== null &&
+        PRE_AUTH_PROTOCOL_METHODS.has(method) &&
+        !hasProtocolHeaderMismatch(request, message)
+      ) {
+        const authentication = await authenticator.authenticate(
+          request,
+          toolScope(message),
+        );
+        if (!authentication.ok) return authentication.response;
+      }
       const response = await sdkHandler.fetch(forwarded);
       const headers = new Headers(response.headers);
       headers.set("cache-control", "no-store");

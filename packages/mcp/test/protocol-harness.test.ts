@@ -12,7 +12,7 @@ import {
   createMusterMcpConfig,
   createMusterMcpHandler,
 } from "../src/index.js";
-import { validConfigInput } from "./helpers.js";
+import { createTestAuthentication, validConfigInput } from "./helpers.js";
 
 async function connectClient(input: {
   readonly mode: "modern" | "legacy";
@@ -20,7 +20,9 @@ async function connectClient(input: {
   readonly fetch?: typeof fetch;
 }) {
   const config = createMusterMcpConfig(validConfigInput());
+  const auth = await createTestAuthentication(config);
   const handler = createMusterMcpHandler(config, {
+    authentication: auth.authentication,
     responseMode: input.responseMode,
   });
   const seen: Response[] = [];
@@ -32,7 +34,10 @@ async function connectClient(input: {
   };
   const transport = new StreamableHTTPClientTransport(
     new URL(config.resourceUrl),
-    { fetch: recordingFetch },
+    {
+      fetch: recordingFetch,
+      requestInit: { headers: { authorization: auth.authorizationHeader } },
+    },
   );
   const client = new Client(
     { name: "muster-mcp-harness", version: "0.1.0" },
@@ -98,7 +103,11 @@ describe("real MCP SDK protocol harness", () => {
 
   it("propagates SDK request cancellation before handler dispatch", async () => {
     const config = createMusterMcpConfig(validConfigInput());
-    const handler = createMusterMcpHandler(config, { responseMode: "sse" });
+    const auth = await createTestAuthentication(config);
+    const handler = createMusterMcpHandler(config, {
+      authentication: auth.authentication,
+      responseMode: "sse",
+    });
     const handlerFetch = createHandlerFetch(handler);
     let delayLists = false;
     let observedAbort = false;
@@ -128,7 +137,10 @@ describe("real MCP SDK protocol harness", () => {
     };
     const transport = new StreamableHTTPClientTransport(
       new URL(config.resourceUrl),
-      { fetch: cancellableFetch },
+      {
+        fetch: cancellableFetch,
+        requestInit: { headers: { authorization: auth.authorizationHeader } },
+      },
     );
     const client = new Client(
       { name: "cancel-test", version: "1" },
@@ -151,10 +163,16 @@ describe("real MCP SDK protocol harness", () => {
 
   it("fails unsupported modern protocol negotiation without a session fallback", async () => {
     const config = createMusterMcpConfig(validConfigInput());
-    const handler = createMusterMcpHandler(config);
+    const auth = await createTestAuthentication(config);
+    const handler = createMusterMcpHandler(config, {
+      authentication: auth.authentication,
+    });
     const transport = new StreamableHTTPClientTransport(
       new URL(config.resourceUrl),
-      { fetch: createHandlerFetch(handler) },
+      {
+        fetch: createHandlerFetch(handler),
+        requestInit: { headers: { authorization: auth.authorizationHeader } },
+      },
     );
     const client = new Client(
       { name: "unsupported-version-test", version: "1" },

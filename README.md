@@ -91,8 +91,14 @@ metadata routes, and the frozen six-tool catalog. Its real v2 SDK harness passes
 the `2026-07-28` JSON and request-scoped SSE paths plus the `2025-11-25`
 compatibility path, concurrency, cancellation, unsupported-version, header,
 body, method, media-type, and no-session cases. Tool dispatch still returns a
-generic pending error and makes no authentication, MCP-state, or core call;
-Task 3 is the next bounded unit.
+generic pending error. MCP Task 3 now adds fail-closed RFC 9068 JWT verification
+against HTTP-metadata-aware rotating JWKS caches, exact bearer challenges and
+scope step-up, mandatory per-request token revocation reads, severable
+issuer/subject mapping, and pseudonymous coarse worker-status checks. Disposable
+HTTP fixtures cover key rotation, stale and malformed keys, issuer/resource and
+clock claims, revocation, scope, mapping, worker revocation, concurrency, and
+raw-identity scrubbing. No tool handler, rate counter, availability record, or
+core mutation is invoked yet; Task 4 is the next bounded unit.
 
 ## PostgreSQL adapter verification
 

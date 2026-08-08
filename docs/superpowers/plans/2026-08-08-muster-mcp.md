@@ -230,7 +230,7 @@ modern schema identity. The SDK's specified legacy projection wraps only
 non-object-root output schemas in `{ result }`; it does not change the modern
 frozen catalog. Authentication and identity resolution remain Task 3.
 
-## Task 3: OAuth resource server, JWKS, and per-call identity
+## Task 3: OAuth resource server, JWKS, and per-call identity (complete 2026-08-08)
 
 Implement the authentication boundary:
 
@@ -259,6 +259,19 @@ third-party identity provider for the package gate.
 
 Checkpoint: protected-resource discovery and authenticated identity resolution
 pass over real HTTP; no raw identity reaches a core spy.
+
+Implementation checkpoint: every accepted MCP protocol request now verifies a
+pinned-algorithm `at+jwt` access token, issuer, resource audience, stable
+subject, scope and clock claims against a response-metadata-aware JWKS cache.
+Unknown key IDs trigger one coalesced refresh; stale, unavailable, malformed,
+or mismatched keys fail closed. The handler performs mandatory fingerprint-only
+revocation, exact endpoint/tool scope checks, severable subject resolution, and
+pseudonymous worker-status validation in the frozen order. Uniform bearer
+challenges expose only the endpoint scope or one required step-up scope.
+Disposable local HTTP fixtures cover discovery, short-lived tokens, rotation,
+concurrent refresh, revocation, claim failures, mapping and worker refusal, and
+raw bearer/subject scrubbing. Tool dispatch remains the generic pending result;
+MCP-state mutation, rate/slot accounting, and availability begin in Task 4.
 
 ## Task 4: MCP state port, subject lifecycle, rate limits, and availability
 
