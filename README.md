@@ -97,8 +97,15 @@ scope step-up, mandatory per-request token revocation reads, severable
 issuer/subject mapping, and pseudonymous coarse worker-status checks. Disposable
 HTTP fixtures cover key rotation, stale and malformed keys, issuer/resource and
 clock claims, revocation, scope, mapping, worker revocation, concurrency, and
-raw-identity scrubbing. No tool handler, rate counter, availability record, or
-core mutation is invoked yet; Task 4 is the next bounded unit.
+raw-identity scrubbing. MCP Task 4 now adds the serialized reference
+`McpStateStore`, operator-only one-to-one bind/sever lifecycle, monotonic worker
+mapping revisions, fixed-window per-tool rate and per-slot lease-attempt
+accounting, and equal-or-lower availability records. Its exported conformance
+suite covers exact replay and conflict, same-key and cross-key races, slot and
+window rollover, complete policy comparison, refusal atomicity, detached
+records, stable snapshots, and authentication failure after severance while
+pseudonymous usage remains. Tool handlers still return the generic pending
+result and make no core mutation; Task 5 is the next bounded unit.
 
 ## PostgreSQL adapter verification
 

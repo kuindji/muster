@@ -273,7 +273,7 @@ concurrent refresh, revocation, claim failures, mapping and worker refusal, and
 raw bearer/subject scrubbing. Tool dispatch remains the generic pending result;
 MCP-state mutation, rate/slot accounting, and availability begin in Task 4.
 
-## Task 4: MCP state port, subject lifecycle, rate limits, and availability
+## Task 4: MCP state port, subject lifecycle, rate limits, and availability (complete 2026-08-08)
 
 Implement and export the reviewed `McpStateStore` plus its reference adapter:
 
@@ -302,6 +302,21 @@ history remain non-identifying.
 
 Checkpoint: identity and side-channel state have deterministic, adapter-
 parametric concurrency semantics; tool handlers still use spies.
+
+Implementation checkpoint: `InMemoryMcpStateStore` now serializes the frozen
+four-command MCP-state port, keeps raw OAuth identity only in active severable
+bindings, advances per-worker mapping revisions across rebinding, and retains
+only pseudonymous rate, slot, availability, and severance history. Complete
+policy versions and derived UTC windows are compared before mutation; per-tool
+rate calls, per-slot lease attempts, and equal-or-lower availability updates
+commit atomically, while every refusal is mutation-free. Operator-only mapping
+lifecycle is exported as a library service. The reusable
+`runMcpStateStoreConformance` suite covers exact replay/conflict, input and
+output detachment, stable ordering, policy/window mismatch, window and slot
+rollover, and same-key/cross-key bind, sever, rate, and availability races. The
+authenticated handler integration proves severance fails closed while
+pseudonymous usage survives without retaining the raw subject. Job tool
+dispatch and core mutations remain Task 5.
 
 ## Task 5: Job tool handlers
 
