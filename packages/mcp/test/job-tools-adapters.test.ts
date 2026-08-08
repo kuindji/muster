@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
+  computeSkillSha256,
+  renderSkill,
   type ClassHealth,
   type JobClass,
   type JSONSchema,
+  type SkillSource,
 } from "@kuindji/muster-contract";
 import {
+  ControlPlaneService,
   InMemoryStore,
   LeaseService,
   ManualClock,
@@ -39,6 +43,7 @@ import {
   createMusterMcpConfig,
   createMusterMcpHandler,
   InMemoryMcpStateStore,
+  SkillReleaseRegistry,
 } from "../src/index.js";
 import {
   TEST_NOW,
@@ -274,7 +279,21 @@ async function runtime(store: Store) {
     events,
   });
   const workerStatus = new WorkerStatusService({ store, clock, workerPolicy });
-  return { clock, leaseService, submissionService, workerStatus };
+  const controlPlaneService = new ControlPlaneService({
+    store,
+    clock,
+    events,
+    admission: { admit: async () => ({ admit: true }) },
+    workerPolicy,
+    registry,
+  });
+  return {
+    clock,
+    controlPlaneService,
+    leaseService,
+    submissionService,
+    workerStatus,
+  };
 }
 
 async function enqueue(leaseService: LeaseService, jobId: string) {
@@ -303,6 +322,16 @@ async function authenticatedClient(store: Store) {
     workerId: TEST_WORKER_ID,
     at: TEST_NOW,
   });
+  const skillSource: SkillSource = {
+    contractVersion: "1.1.0",
+    jobClassIds: ["class-test-1"],
+    instructions: "Lease one adapter test job and submit its result.",
+  };
+  const renderedSkill = renderSkill(skillSource);
+  const skillReleaseRegistry = await SkillReleaseRegistry.create([{
+    source: skillSource,
+    skillSha256: await computeSkillSha256(renderedSkill),
+  }]);
   const handler = createMusterMcpHandler(config, {
     authentication: {
       ...auth.authentication,
@@ -315,6 +344,12 @@ async function authenticatedClient(store: Store) {
       leaseService: services.leaseService,
       submissionService: services.submissionService,
     }),
+    workerTools: {
+      stateStore,
+      rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
+      controlPlaneService: services.controlPlaneService,
+      skillReleaseRegistry,
+    },
   });
   const transport = new StreamableHTTPClientTransport(
     new URL(config.resourceUrl),
@@ -331,12 +366,12 @@ async function authenticatedClient(store: Store) {
   return { client, handler, services };
 }
 
-describe("authenticated job tools over real core adapters", () => {
+describe("all authenticated tools over real core adapters", () => {
   it.each([
     ["InMemoryStore", inMemoryFixture],
     ["PostgresStore", postgresFixture],
   ] as const)(
-    "leases, extends, submits, replays, and abandons through %s",
+    "runs all six tools, including replay and availability, through %s",
     async (_name, createFixture) => {
       const fixture = await createFixture();
       const test = await authenticatedClient(fixture.store);
@@ -399,6 +434,27 @@ describe("authenticated job tools over real core adapters", () => {
           },
         });
         expect(abandoned.structuredContent).toEqual({ outcome: "recorded" });
+
+        const active = await test.client.callTool({
+          name: "get_worker_status",
+          arguments: {},
+        });
+        expect(active.structuredContent).toMatchObject({
+          status: "active",
+          contract_version: "1.1.0",
+          cap_usage_bucket: 1,
+          next_slot_bucket: 0,
+        });
+        const maintenance = await test.client.callTool({
+          name: "set_availability",
+          arguments: { state: "maintenance" },
+        });
+        expect(maintenance.structuredContent).toEqual({ outcome: "recorded" });
+        const changed = await test.client.callTool({
+          name: "get_worker_status",
+          arguments: {},
+        });
+        expect(changed.structuredContent).toMatchObject({ status: "maintenance" });
       } finally {
         await test.client.close();
         await test.handler.close();

@@ -1,5 +1,21 @@
 # Changelog
 
+## MCP Task 6 — 2026-08-08
+
+Implemented the authenticated `get_worker_status` and `set_availability`
+handlers. An immutable `SkillReleaseRegistry` now renders deployment releases
+through the canonical contract generator, verifies their SHA-256 values, and
+selects exactly one release by accepted contract plus the complete enrolled
+class set. Worker status exposes only the frozen state, contract, skill hash,
+cap-usage bucket, and next-slot bucket. Availability changes invoke only the
+public core control-plane operation and collapse every invalid transition into
+the generic non-probing tool error. Closed input, atomic MCP-state rate
+preflight, output-schema validation, and canonical mirrors apply to both tools.
+Focused state, bucket-edge, replay, race, severance, revocation, release, and
+leakage tests pass. The authenticated six-tool flow also passes unchanged over
+the in-memory and PostgreSQL Stores. The experimental skill Resource, package
+conformance, publication, deployment, and push remain separate.
+
 ## MCP Task 5 — 2026-08-08
 
 Implemented the authenticated `lease_job`, `submit_result`, `abandon_job`, and

@@ -10,7 +10,16 @@ import type {
   McpSubjectBinding,
   MusterMcpScope,
 } from "@kuindji/muster-contract";
-import type { MusterMcpJobToolDependencies } from "../src/index.js";
+import {
+  computeSkillSha256,
+  renderSkill,
+  type SkillSource,
+} from "@kuindji/muster-contract";
+import {
+  SkillReleaseRegistry,
+  type MusterMcpJobToolDependencies,
+  type MusterMcpWorkerToolDependencies,
+} from "../src/index.js";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
 export const TEST_NOW = "2026-08-08T10:00:00.000Z";
@@ -65,6 +74,70 @@ export function createTestJobTools(
         error: "lease_not_held" as const,
       }),
     },
+    ...overrides,
+  };
+}
+
+const testSkillSource: SkillSource = {
+  contractVersion: "1.1.0",
+  jobClassIds: ["class-test-1"],
+  instructions: "Lease one registered test job and submit its result.",
+};
+
+const testSkillReleaseRegistry = (async () => {
+  const rendered = renderSkill(testSkillSource);
+  return SkillReleaseRegistry.create([{
+    source: testSkillSource,
+    skillSha256: await computeSkillSha256(rendered),
+  }]);
+})();
+
+export async function createTestWorkerTools(
+  overrides: Partial<MusterMcpWorkerToolDependencies> = {},
+): Promise<MusterMcpWorkerToolDependencies> {
+  return {
+    stateStore: {
+      authorizeCall: async (input: AuthorizeMcpCallInput) => ({
+        kind: "authorized" as const,
+        current: {
+          workerId: input.expectedBinding.workerId,
+          bindingRevision: input.expectedBinding.revision,
+          tool: input.tool,
+          ratePolicyVersion: input.policy.version,
+          rateWindowId: input.window.id,
+          assignedSlotOccurrence: input.assignedSlotOccurrence,
+          callsUsed: 1,
+          leaseAttemptsUsed: 0,
+        },
+      }),
+    },
+    rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
+    controlPlaneService: {
+      setWorkerAvailability: async (_workerId, to) => ({
+        ok: true as const,
+        kind: "applied" as const,
+        worker: {
+          workerId: TEST_WORKER_ID,
+          state: to,
+          enrolledAt: TEST_NOW,
+          declaredCapPerWeek: 4,
+          capabilities: {
+            providerSurface: "provider.example",
+            unattendedScheduling: true,
+            languages: ["en"],
+            jobClassIds: ["class-test-1"],
+          },
+          accountCluster: "cluster-test-1",
+          slot: 1,
+          contractAcceptance: {
+            contractVersion: "1.1.0",
+            acceptedAt: TEST_NOW,
+          },
+        },
+        requeuedLeaseCount: 0,
+      }),
+    },
+    skillReleaseRegistry: await testSkillReleaseRegistry,
     ...overrides,
   };
 }

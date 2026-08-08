@@ -115,8 +115,15 @@ boundary, with closed input and output validation, atomic MCP-state preflight,
 canonical text mirrors, complete-response lease padding, coarse expiry
 projection, exact core submission replay, and uniform abandon/extension
 refusals. The same authenticated real-core suite passes over the in-memory and
-PostgreSQL Stores. Task 6 worker tools and canonical skill releases are the next
-bounded unit.
+PostgreSQL Stores. Task 6 now adds an immutable deployment `SkillReleaseRegistry`
+that canonical-renders and SHA-256-verifies every accepted-contract plus
+complete-class-set release, and implements both worker tools behind the same
+authenticated atomic MCP-state preflight. Worker status returns only the frozen
+coarse state, contract, skill hash, cap-usage bucket, and next-slot bucket;
+availability delegates only to the public core control-plane transition and
+projects every refusal through one non-probing error. The authenticated
+six-tool flow passes over both the in-memory and PostgreSQL Stores. Task 7's
+optional experimental skill Resource adapter is the next bounded unit.
 
 ## PostgreSQL adapter verification
 

@@ -22,10 +22,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import type { MusterMcpAuthenticatedRequest } from "./auth.js";
-import { pendingToolResult } from "./results.js";
-
-export const MUSTER_MCP_GENERIC_TOOL_ERROR_MESSAGE =
-  "Muster tool request could not be completed.";
+import { genericToolError, pendingToolResult } from "./results.js";
 
 const JOB_TOOL_NAMES = new Set<MusterMcpToolName>([
   "lease_job",
@@ -78,13 +75,6 @@ const abandonClassifications = Object.freeze({
   after_payload: "abandoned_after_payload",
   platform_failure: "provider_or_platform_failure",
 } as const);
-
-function genericToolError(): CallToolResult {
-  return {
-    isError: true,
-    content: [{ type: "text", text: MUSTER_MCP_GENERIC_TOOL_ERROR_MESSAGE }],
-  };
-}
 
 function secondsBetween(later: string, earlier: string): number | null {
   const seconds = (Date.parse(later) - Date.parse(earlier)) / 1_000;

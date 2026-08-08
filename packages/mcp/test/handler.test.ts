@@ -8,6 +8,7 @@ import {
 import {
   createTestAuthentication,
   createTestJobTools,
+  createTestWorkerTools,
   validConfigInput,
 } from "./helpers.js";
 
@@ -42,7 +43,7 @@ const legacyList = JSON.stringify({
 async function authenticatedHandler(
   options: Omit<
     CreateMusterMcpHandlerOptions,
-    "authentication" | "jobTools"
+    "authentication" | "jobTools" | "workerTools"
   > = {},
 ) {
   const config = createMusterMcpConfig(validConfigInput());
@@ -53,6 +54,7 @@ async function authenticatedHandler(
       ...options,
       authentication: auth.authentication,
       jobTools: createTestJobTools(),
+      workerTools: await createTestWorkerTools(),
     }),
     authorizationHeader: auth.authorizationHeader,
   };

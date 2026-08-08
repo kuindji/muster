@@ -15,6 +15,7 @@ import {
 import {
   createTestAuthentication,
   createTestJobTools,
+  createTestWorkerTools,
   validConfigInput,
 } from "./helpers.js";
 
@@ -28,6 +29,7 @@ async function connectClient(input: {
   const handler = createMusterMcpHandler(config, {
     authentication: auth.authentication,
     jobTools: createTestJobTools(),
+    workerTools: await createTestWorkerTools(),
     responseMode: input.responseMode,
   });
   const seen: Response[] = [];
@@ -112,6 +114,7 @@ describe("real MCP SDK protocol harness", () => {
     const handler = createMusterMcpHandler(config, {
       authentication: auth.authentication,
       jobTools: createTestJobTools(),
+      workerTools: await createTestWorkerTools(),
       responseMode: "sse",
     });
     const handlerFetch = createHandlerFetch(handler);
@@ -173,6 +176,7 @@ describe("real MCP SDK protocol harness", () => {
     const handler = createMusterMcpHandler(config, {
       authentication: auth.authentication,
       jobTools: createTestJobTools(),
+      workerTools: await createTestWorkerTools(),
     });
     const transport = new StreamableHTTPClientTransport(
       new URL(config.resourceUrl),

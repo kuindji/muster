@@ -11,10 +11,12 @@ import {
 } from "./config.js";
 import type { MusterMcpJobToolDispatcher } from "./job-tools.js";
 import { pendingToolResult } from "./results.js";
+import type { MusterMcpWorkerToolDispatcher } from "./worker-tools.js";
 
 export interface MusterMcpServerRequestOptions {
   readonly authenticated?: MusterMcpAuthenticatedRequest;
   readonly jobTools?: MusterMcpJobToolDispatcher;
+  readonly workerTools?: MusterMcpWorkerToolDispatcher;
 }
 
 export function createMusterMcpServer(
@@ -45,9 +47,13 @@ export function createMusterMcpServer(
       }) as unknown as ListToolsResult,
   );
   server.setRequestHandler("tools/call", async (request) => {
-    const result = options.jobTools === undefined
+    const dispatcher = request.params.name === "get_worker_status" ||
+        request.params.name === "set_availability"
+      ? options.workerTools
+      : options.jobTools;
+    const result = dispatcher === undefined
       ? pendingToolResult()
-      : await options.jobTools.call(
+      : await dispatcher.call(
           request.params.name,
           request.params.arguments ?? {},
           options.authenticated,

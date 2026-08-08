@@ -25,10 +25,15 @@ import {
   MusterMcpJobToolDispatcher,
   type MusterMcpJobToolDependencies,
 } from "./job-tools.js";
+import {
+  MusterMcpWorkerToolDispatcher,
+  type MusterMcpWorkerToolDependencies,
+} from "./worker-tools.js";
 
 export interface CreateMusterMcpHandlerOptions {
   readonly authentication: MusterMcpAuthenticationDependencies;
   readonly jobTools: MusterMcpJobToolDependencies;
+  readonly workerTools: MusterMcpWorkerToolDependencies;
   readonly responseMode?: PerRequestResponseMode;
   readonly onerror?: (error: Error) => void;
 }
@@ -207,6 +212,7 @@ export function createMusterMcpHandler(
     options.authentication,
   );
   const jobTools = new MusterMcpJobToolDispatcher(options.jobTools);
+  const workerTools = new MusterMcpWorkerToolDispatcher(options.workerTools);
   const sdkHandler = createMcpHandler(
     (context) => {
       const authenticated = context.authInfo?.extra?.[AUTHENTICATED_CONTEXT_KEY] as
@@ -214,6 +220,7 @@ export function createMusterMcpHandler(
         | undefined;
       return createMusterMcpServer(config, {
         jobTools,
+        workerTools,
         ...(authenticated === undefined ? {} : { authenticated }),
       });
     },

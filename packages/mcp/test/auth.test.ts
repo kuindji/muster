@@ -27,6 +27,7 @@ import {
   TEST_NOW,
   TEST_WORKER_ID,
   createTestJobTools,
+  createTestWorkerTools,
   validConfigInput,
 } from "./helpers.js";
 
@@ -235,6 +236,7 @@ async function fixture(options: {
   const handler = createMusterMcpHandler(config, {
     authentication,
     jobTools: createTestJobTools(),
+    workerTools: await createTestWorkerTools(),
   });
   return {
     config,

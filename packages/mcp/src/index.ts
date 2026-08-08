@@ -5,6 +5,8 @@ export * from "./handler.js";
 export * from "./job-tools.js";
 export * from "./results.js";
 export * from "./server.js";
+export * from "./skill-releases.js";
 export * from "./state-conformance.js";
 export * from "./state-store.js";
 export * from "./testing.js";
+export * from "./worker-tools.js";

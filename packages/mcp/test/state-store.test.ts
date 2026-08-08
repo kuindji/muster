@@ -16,6 +16,7 @@ import {
   TEST_WORKER_ID,
   createTestAuthentication,
   createTestJobTools,
+  createTestWorkerTools,
   validConfigInput,
 } from "./helpers.js";
 
@@ -119,6 +120,7 @@ describe("InMemoryMcpStateStore", () => {
         stateStore: store,
       },
       jobTools: createTestJobTools({ stateStore: store }),
+      workerTools: await createTestWorkerTools({ stateStore: store }),
     });
     const request = () => new Request(config.resourceUrl, {
       method: "POST",

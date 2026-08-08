@@ -374,7 +374,7 @@ abandon classifications and refusal, fixed and overflow expiry buckets, and
 both transport modes. One authenticated real-core suite passes unchanged over
 the reference in-memory Store and the PostgreSQL Store.
 
-## Task 6: Worker tools and canonical skill releases
+## Task 6: Worker tools and canonical skill releases (complete 2026-08-08)
 
 Implement `get_worker_status` and `set_availability`:
 
@@ -401,6 +401,21 @@ all cap/slot bucket edges, skill-release ambiguity, and schema-exact results.
 
 Checkpoint: all six frozen tools pass the authenticated protocol suite without
 raw identity or precise operational leakage.
+
+Implementation checkpoint: `SkillReleaseRegistry` now captures detached
+deployment release definitions, renders them only through canonical
+`renderSkill()` bytes, verifies their SHA-256 values, rejects duplicate or
+ambiguous selection keys, and returns detached immutable releases selected by
+accepted contract plus the complete enrolled class set. The two worker handlers
+validate closed input, apply the same atomic mapping/rate/slot preflight as job
+tools, project only the frozen coarse status fields, and invoke only
+`ControlPlaneService.setWorkerAvailability` for active/maintenance changes.
+Missing releases and every state or concurrency refusal share the generic
+non-probing error. Focused tests cover all visible states, probation, every cap
+and next-slot bucket edge, exact replay, invalid and concurrent transitions,
+mapping severance, token revocation, release mismatch/ambiguity, schema-exact
+results, and leakage. One authenticated six-tool suite passes unchanged over
+the reference in-memory and PostgreSQL Stores.
 
 ## Task 7: Experimental skill Resource adapter
 

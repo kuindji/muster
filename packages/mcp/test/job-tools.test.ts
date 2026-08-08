@@ -24,6 +24,7 @@ import {
   TEST_WORKER_ID,
   createTestAuthentication,
   createTestJobTools,
+  createTestWorkerTools,
   validConfigInput,
 } from "./helpers.js";
 
@@ -109,6 +110,7 @@ async function harness(input: {
       rateLimitPolicy: input.rateLimitPolicy ?? TEST_RATE_LIMIT_POLICY,
       ...input.jobTools,
     }),
+    workerTools: await createTestWorkerTools({ stateStore }),
     responseMode: input.responseMode ?? "auto",
   });
   const responses: Response[] = [];
