@@ -412,4 +412,309 @@ describe("PostgreSQL submission and result-state Store slice", () => {
         },
       });
   });
+
+  it("persists composite authorization, action verdict, and live invalidation atomically", async () => {
+    const store = await createStore();
+    await initializeDirectState(store);
+    const worker = await initializeWorker(store, "worker-authorization", 1);
+    const { candidate, payload } = await enqueueDirect(store, "job-authorization");
+    await acceptLease(
+      store,
+      candidate,
+      worker,
+      "lease-authorization",
+      "result-authorization",
+      payload,
+    );
+    const evidence = (await store.listAcceptedReplicas("job-authorization", 1))
+      .map((entry) => entry.evidence);
+    const decision = {
+      decisionResultHash: "decision-authorization",
+      jobId: "job-authorization",
+      collectionCycle: 1,
+      inputHash: candidate.job.inputHash,
+      result: { answer: "result-authorization" },
+      evidence,
+      achievedStrength: "structural_only" as const,
+      contractVersion: candidate.job.contractVersion,
+      permitEpoch: candidate.job.permitEpoch,
+      verifiedAt: LATER,
+    };
+    expect(await store.recordDecisionResult({
+      decision,
+      transition: { from: "collecting", at: LATER },
+    })).toEqual({ ok: true });
+    const inspected = await store.inspectAuthorizationContext(
+      decision.decisionResultHash,
+    );
+    if (inspected === null) throw new Error("authorization context missing");
+    const expectedContext = {
+      ...inspected,
+      maxInFlightDeadline: "2026-08-08T09:00:00.000Z",
+    };
+    const lowCostPolicy = {
+      classId: "class-direct",
+      contractVersion: "1.0.0",
+      policyVersion: "low-cost-1",
+      windowId: "2026-W32",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane: "lowCost" as const,
+      laneLimit: 2,
+      perWorkerLimit: 2,
+    };
+    const adjudicationPolicy = {
+      classId: "class-direct",
+      contractVersion: "1.0.0",
+      policyVersion: "adjudication-1",
+      windowId: "2026-W32",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane: "splitAndAdjudication" as const,
+      laneLimit: 2,
+    };
+    await store.initializeReservePolicy({ policy: lowCostPolicy, at: NOW });
+    await store.initializeReservePolicy({ policy: adjudicationPolicy, at: NOW });
+    const effectIntent: Parameters<Store["authorizeOrReplayIntent"]>[0]["effectIntent"] = {
+      id: "effect-intent-authorization",
+      effects: [
+        { action: "routeToHumanLowCost" as const, descriptor: { reason: "review" } },
+        { action: "suppress" as const, descriptor: { reason: "unsafe" } },
+      ],
+    };
+    const effectIntentHash = "effect-intent-hash-authorization";
+    const authorizationRequestId = "authorization-request-1";
+    const request: Extract<
+      Parameters<Store["authorizeOrReplayIntent"]>[0]["decision"],
+      { kind: "pend" }
+    >["request"] = {
+      authorizationRequestId,
+      jobId: decision.jobId,
+      collectionCycle: decision.collectionCycle,
+      effectIntent,
+      effectIntentHash,
+      inputHash: decision.inputHash,
+      decisionResultHash: decision.decisionResultHash,
+      evidence,
+      contractVersion: decision.contractVersion,
+      permitEpoch: decision.permitEpoch,
+      humanReviews: [{
+        action: "suppress" as const,
+        predicate: "human-reviewed",
+        requiredPayloadPaths: [],
+        requiredResultPaths: [],
+        requiredEffectPaths: ["$.reason" as const],
+      }],
+    };
+    const authorizationInput: Parameters<Store["authorizeOrReplayIntent"]>[0] = {
+      authorizationRequestId,
+      effectIntent,
+      effectIntentHash,
+      decisionResultHash: decision.decisionResultHash,
+      expectedContext,
+      decision: {
+        kind: "pend" as const,
+        request,
+        charges: [
+          {
+            chargeKey: `${authorizationRequestId}:lowCost`,
+            workerIds: [worker.workerId],
+            policy: lowCostPolicy,
+            at: LATER,
+          },
+          {
+            chargeKey: `${authorizationRequestId}:splitAndAdjudication`,
+            workerIds: [],
+            policy: adjudicationPolicy,
+            at: LATER,
+          },
+        ],
+      },
+      at: LATER,
+    };
+    const concurrentOpen = await Promise.all([
+      store.authorizeOrReplayIntent(authorizationInput),
+      store.authorizeOrReplayIntent(authorizationInput),
+    ]);
+    expect(concurrentOpen.map((outcome) => outcome.kind).sort())
+      .toEqual(["applied", "replayed"]);
+    expect(concurrentOpen.find((outcome) => outcome.kind === "applied"))
+      .toMatchObject({
+        initialReceipt: { outcome: "pending_adjudication" },
+        reserveBatch: { settlements: [{ lane: "lowCost" }, {
+          lane: "splitAndAdjudication",
+        }] },
+      });
+    const restarted = new PostgresStore({
+      pool: harness.pool,
+      schema: store.schema,
+    });
+    const replayCharges = authorizationInput.decision.kind === "pend"
+      ? authorizationInput.decision.charges.map((charge) => ({
+          ...charge,
+          at: "2026-08-08T08:20:00.000Z",
+        }))
+      : [];
+    expect(await restarted.authorizeOrReplayIntent({
+      ...authorizationInput,
+      at: "2026-08-08T08:20:00.000Z",
+      decision: {
+        kind: "pend",
+        request,
+        charges: replayCharges,
+      },
+    })).toMatchObject({ kind: "replayed" });
+    const urgentPolicy = {
+      classId: "class-direct",
+      contractVersion: "1.0.0",
+      policyVersion: "urgent-1",
+      windowId: "2026-W32",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane: "urgent" as const,
+      laneLimit: 0,
+      perWorkerLimit: 0,
+    };
+    await store.initializeReservePolicy({ policy: urgentPolicy, at: NOW });
+    const urgentIntent: Parameters<Store["authorizeOrReplayIntent"]>[0]["effectIntent"] = {
+      id: "effect-intent-urgent",
+      effects: [{ action: "routeToUrgent", descriptor: { reason: "urgent" } }],
+    };
+    const urgentRequestId = "authorization-request-urgent";
+    expect(await store.authorizeOrReplayIntent({
+      authorizationRequestId: urgentRequestId,
+      effectIntent: urgentIntent,
+      effectIntentHash: "effect-intent-hash-urgent",
+      decisionResultHash: decision.decisionResultHash,
+      expectedContext,
+      decision: {
+        kind: "authorize",
+        authorization: {
+          authorizationRequestId: urgentRequestId,
+          effectIntentId: urgentIntent.id,
+          effectIntentHash: "effect-intent-hash-urgent",
+          jobId: decision.jobId,
+          collectionCycle: decision.collectionCycle,
+          inputHash: decision.inputHash,
+          decisionResultHash: decision.decisionResultHash,
+          evidence,
+          contractVersion: decision.contractVersion,
+          permitEpoch: decision.permitEpoch,
+          actions: ["routeToUrgent"],
+        },
+        charges: [
+          {
+            chargeKey: `${urgentRequestId}:lowCost`,
+            workerIds: [worker.workerId],
+            policy: lowCostPolicy,
+            at: LATER,
+          },
+          {
+            chargeKey: `${urgentRequestId}:urgent`,
+            workerIds: [worker.workerId],
+            policy: urgentPolicy,
+            at: LATER,
+          },
+        ],
+      },
+      at: LATER,
+    })).toMatchObject({
+      kind: "applied",
+      initialReceipt: {
+        outcome: "denied",
+        denialReason: "escalation_budget_exhausted",
+      },
+      reserveBatch: {
+        settlements: [{ lane: "urgent", charge: { outcome: "exhausted" } }],
+        skippedLanes: ["lowCost"],
+      },
+    });
+    expect(await store.getReservePolicy({
+      classId: "class-direct",
+      contractVersion: "1.0.0",
+      lane: "lowCost",
+    })).toMatchObject({ used: 1 });
+    const verdict = {
+      kind: "human" as const,
+      jobId: decision.jobId,
+      collectionCycle: decision.collectionCycle,
+      authorizationRequestId,
+      effectIntentId: effectIntent.id,
+      effectIntentHash,
+      actions: effectIntent.effects.map((effect) => effect.action),
+      inputHash: decision.inputHash,
+      decisionResultHash: decision.decisionResultHash,
+      evidence,
+      contractVersion: decision.contractVersion,
+      permitEpoch: decision.permitEpoch,
+      adjudicatorId: "human-1",
+      decision: "approve" as const,
+      decidedAt: LATER,
+    };
+    const authorization = {
+      authorizationRequestId,
+      effectIntentId: effectIntent.id,
+      effectIntentHash,
+      jobId: decision.jobId,
+      collectionCycle: decision.collectionCycle,
+      inputHash: decision.inputHash,
+      decisionResultHash: decision.decisionResultHash,
+      evidence,
+      actionAdjudicationVerdictHash: "action-verdict-1",
+      contractVersion: decision.contractVersion,
+      permitEpoch: decision.permitEpoch,
+      actions: verdict.actions,
+    };
+    const verdictInput = {
+      verdict,
+      verdictHash: "action-verdict-1",
+      processedAt: LATER,
+      expectedContext: { persisted: expectedContext, current: inspected },
+      decision: "approve" as const,
+      authorization,
+    };
+    const concurrentVerdicts = await Promise.all([
+      store.applyActionAdjudicationVerdict(verdictInput),
+      restarted.applyActionAdjudicationVerdict(verdictInput),
+    ]);
+    expect(concurrentVerdicts.map((outcome) => outcome.kind).sort())
+      .toEqual(["applied", "replayed"]);
+    expect(concurrentVerdicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        receipt: expect.objectContaining({ outcome: "approved" }),
+      }),
+    ]));
+    expect(await store.getAuthorizationStatus(authorizationRequestId)).toEqual({
+      state: "authorized",
+      validity: { kind: "valid" },
+    });
+    const snapshot = await store.inspectInvalidationScope({
+      kind: "job_cycles",
+      classId: "class-direct",
+      jobCycles: [{ jobId: decision.jobId, collectionCycle: 1 }],
+    });
+    expect(await store.invalidateResultScope({
+      scope: snapshot.scope,
+      expectedTargets: snapshot.targets,
+      requeuePlans: [],
+      reason: "operator_cancelled",
+      at: LATER,
+    })).toMatchObject({ kind: "applied" });
+    expect(await store.getAuthorizationStatus(authorizationRequestId)).toEqual({
+      state: "authorized",
+      validity: {
+        kind: "invalid",
+        reason: "operator_cancelled",
+        invalidatedAt: LATER,
+      },
+    });
+    await harness.pool.query(
+      `UPDATE "${store.schema}".authorization_status
+          SET record = '{"state":"future"}'::jsonb
+        WHERE authorization_request_id = $1`,
+      [authorizationRequestId],
+    );
+    await expect(store.getAuthorizationStatus(authorizationRequestId))
+      .rejects.toMatchObject({ code: "invalid_stored_value" });
+  });
 });

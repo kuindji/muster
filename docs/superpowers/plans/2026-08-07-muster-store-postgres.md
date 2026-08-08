@@ -383,7 +383,7 @@ unchanged against PostgreSQL 16; direct multi-client tests cover adapter-restart
 replay, split-versus-decision serialization, cross-cycle isolation, and live
 authorization-context reconstruction. Task 6 is the next bounded adapter slice.
 
-## Task 6: Reserves, adjudication, authorization, and invalidation
+## Task 6: Reserves, adjudication, authorization, and invalidation (complete 2026-08-08)
 
 Implement the high-contention safety slice:
 
@@ -417,6 +417,22 @@ preflight but before final writes must prove complete rollback.
 
 Checkpoint: the Task-6 Store conformance slice and every safety-race regression
 pass against PostgreSQL 16.
+
+Completion note: the PostgreSQL adapter now owns durable reserve-policy windows,
+per-worker usage, exact charge replay, fail-closed composite authorization
+settlement, and accounting-owned reserve-health publication. Result and action
+adjudications persist first-open time, live compared context, canonical first
+verdict history, terminal transitions, and exact replay across adapter restart.
+Authorization intent identity, immutable initial receipts, independently mutable
+live status, and approved authorization records commit atomically with their
+reserve disposition. Class-qualified invalidation closes open leases, retires
+pending adjudications, invalidates live authorizations, advances supplied
+cycles/epochs, and applies complete emergency queue/class batches in one bounded
+serializable transaction. The complete cumulative Task-6 Store runner passes
+unchanged against PostgreSQL 16; focused multi-client coverage also proves
+last-unit reserve exclusion, composite no-partial-debit behavior, authorization
+identity and action-verdict single winners, health/load/version fencing, and
+new-class emergency exclusion. Task 7 is the next bounded adapter slice.
 
 ## Task 7: Ledger, privacy boundary, and reputation evidence
 

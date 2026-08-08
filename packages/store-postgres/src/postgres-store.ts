@@ -99,6 +99,49 @@ type DecisionResultRecord = NonNullable<
 type ResultState = NonNullable<
   Awaited<ReturnType<Store["getResultState"]>>
 >;
+type ReservePolicyRecord = NonNullable<
+  Awaited<ReturnType<Store["getReservePolicy"]>>
+>;
+type ReserveChargeOutcome = Awaited<ReturnType<Store["chargeReserve"]>>;
+type AdjudicationLoadSnapshot = Awaited<
+  ReturnType<Store["inspectAdjudicationLoad"]>
+>;
+type ResultVerdictContext = NonNullable<
+  Awaited<ReturnType<Store["inspectResultVerdictContext"]>>
+>;
+type ActionAdjudicationRequest = NonNullable<
+  Awaited<ReturnType<Store["getActionAdjudicationRequest"]>>
+>;
+type PendingAuthorizationContext = NonNullable<
+  Awaited<ReturnType<Store["getPendingAuthorizationContext"]>>
+>;
+type VerdictHistoryRecord = NonNullable<
+  Awaited<ReturnType<Store["getVerdictHistory"]>>
+>;
+type AuthorizationContext = NonNullable<
+  Awaited<ReturnType<Store["inspectAuthorizationContext"]>>
+>;
+type AuthorizeIntentOutcome = Awaited<ReturnType<Store["authorizeOrReplayIntent"]>>;
+type AuthorizedIntentOutcome = Extract<
+  AuthorizeIntentOutcome,
+  { readonly initialReceipt: unknown }
+>;
+type AuthorizationReserveBatch = NonNullable<
+  AuthorizedIntentOutcome["reserveBatch"]
+>;
+type AuthorizationStatus = NonNullable<
+  Awaited<ReturnType<Store["getAuthorizationStatus"]>>
+>;
+type ActionAuthorization = NonNullable<
+  Awaited<ReturnType<Store["getAuthorization"]>>
+>;
+type InvalidationSnapshot = Awaited<
+  ReturnType<Store["inspectInvalidationScope"]>
+>;
+type AppliedInvalidation = Extract<
+  Awaited<ReturnType<Store["invalidateResultScope"]>>,
+  { kind: "applied" }
+>;
 
 const workerStates = new Set([
   "enrolled", "active", "maintenance", "paused", "suspended", "revoked",
@@ -331,6 +374,135 @@ function decodeDecisionResult(
   };
 }
 
+function decodeOpaqueRecord<T>(value: unknown, description: string): T {
+  return decodeStoredRecord<T>(value, () => true, description);
+}
+
+function validReservePolicyRecord(record: JsonRecord): boolean {
+  return decodePositiveRevision(record.revision) >= 1 &&
+    isObject(record.policy) && isString(record.policy.classId) &&
+    isString(record.policy.contractVersion) && isString(record.policy.lane) &&
+    isString(record.policy.policyVersion) && isString(record.policy.windowId) &&
+    isString(record.policy.windowStartsAt) && isString(record.policy.windowEndsAt) &&
+    isNonNegativeSafeInteger(record.policy.laneLimit) &&
+    isNonNegativeSafeInteger(record.used) && Array.isArray(record.workerUsage) &&
+    record.workerUsage.every((entry) => isObject(entry) &&
+      isString(entry.workerId) && isNonNegativeSafeInteger(entry.used)) &&
+    isString(record.updatedAt);
+}
+
+function decodeReservePolicy(value: unknown): ReservePolicyRecord {
+  return decodeStoredRecord<ReservePolicyRecord>(
+    value,
+    validReservePolicyRecord,
+    "reserve_policies.record",
+  );
+}
+
+function validActionAuthorization(record: JsonRecord): boolean {
+  return isString(record.authorizationRequestId) &&
+    isString(record.effectIntentId) && isString(record.effectIntentHash) &&
+    isString(record.jobId) && Number.isSafeInteger(record.collectionCycle) &&
+    Number(record.collectionCycle) > 0 && isString(record.inputHash) &&
+    isString(record.decisionResultHash) && Array.isArray(record.evidence) &&
+    record.evidence.every(validSubmissionEvidence) &&
+    (record.resultAdjudicationVerdictHash === undefined ||
+      isString(record.resultAdjudicationVerdictHash)) &&
+    (record.actionAdjudicationVerdictHash === undefined ||
+      isString(record.actionAdjudicationVerdictHash)) &&
+    isString(record.contractVersion) && isString(record.permitEpoch) &&
+    Array.isArray(record.actions) && record.actions.length > 0 &&
+    record.actions.every(isString);
+}
+
+function validAuthorizationStatus(record: JsonRecord): boolean {
+  if (!isString(record.state) || ![
+    "pending_adjudication", "authorized", "denied", "expired", "superseded",
+    "cancelled",
+  ].includes(record.state)) return false;
+  if (record.state === "authorized") {
+    if (!isObject(record.validity) || !isString(record.validity.kind) ||
+        !["valid", "invalid"].includes(record.validity.kind)) return false;
+    return record.validity.kind === "valid" ||
+      (isString(record.validity.reason) && isString(record.validity.invalidatedAt));
+  }
+  return record.state !== "denied" || isString(record.reason);
+}
+
+function validEffectIntent(value: unknown): boolean {
+  return isObject(value) && isString(value.id) && Array.isArray(value.effects) &&
+    value.effects.length > 0 && value.effects.every((effect) =>
+      isObject(effect) && isString(effect.action) && isObject(effect.descriptor));
+}
+
+function validActionAdjudicationRequest(record: JsonRecord): boolean {
+  return isString(record.authorizationRequestId) && isString(record.jobId) &&
+    Number.isSafeInteger(record.collectionCycle) &&
+    Number(record.collectionCycle) > 0 && validEffectIntent(record.effectIntent) &&
+    isString(record.effectIntentHash) && isString(record.inputHash) &&
+    isString(record.decisionResultHash) && Array.isArray(record.evidence) &&
+    record.evidence.every(validSubmissionEvidence) &&
+    (record.resultAdjudicationVerdictHash === undefined ||
+      isString(record.resultAdjudicationVerdictHash)) &&
+    isString(record.contractVersion) && isString(record.permitEpoch) &&
+    Array.isArray(record.humanReviews) && record.humanReviews.length > 0 &&
+    record.humanReviews.every((review) => isObject(review) &&
+      isString(review.action) && isString(review.predicate) &&
+      Array.isArray(review.requiredPayloadPaths) &&
+      review.requiredPayloadPaths.every(isString) &&
+      Array.isArray(review.requiredResultPaths) &&
+      review.requiredResultPaths.every(isString) &&
+      Array.isArray(review.requiredEffectPaths) &&
+      review.requiredEffectPaths.every(isString));
+}
+
+function validInitialReceipt(record: JsonRecord): boolean {
+  if (!isString(record.authorizationRequestId) ||
+      !isString(record.effectIntentId) || !isString(record.effectIntentHash) ||
+      !isString(record.jobId) || !Number.isSafeInteger(record.collectionCycle) ||
+      Number(record.collectionCycle) < 1 || !isString(record.decisionResultHash) ||
+      !isString(record.at) || !isString(record.outcome) || ![
+        "authorized", "denied", "pending_adjudication",
+      ].includes(record.outcome)) return false;
+  if (record.outcome === "authorized") {
+    return isObject(record.authorization) && validActionAuthorization(record.authorization);
+  }
+  return record.outcome !== "denied" || isString(record.denialReason);
+}
+
+function validAuthorizationContext(record: JsonRecord): boolean {
+  return isObject(record.decision) && validDecisionResult(record.decision) &&
+    isObject(record.jobCycle) && validJobRecord(record.jobCycle) &&
+    isObject(record.currentJob) && validJobRecord(record.currentJob) &&
+    isString(record.resultState) && resultStates.has(record.resultState) &&
+    isObject(record.classVersion) && validClassVersion(record.classVersion) &&
+    isString(record.maxInFlightDeadline);
+}
+
+function validVerdictHistory(record: JsonRecord): boolean {
+  if ((record.kind !== "result" && record.kind !== "action") ||
+      !isString(record.requestId) || !isString(record.verdictHash) ||
+      !isObject(record.verdict) || !isObject(record.receipt)) return false;
+  const receipt = record.receipt;
+  return isString(receipt.requestId) && isString(receipt.verdictHash) &&
+    isString(receipt.decidedAt) && isString(receipt.outcome) && [
+      "resolved", "rejected", "approved", "denied",
+    ].includes(receipt.outcome) &&
+    (receipt.outcome !== "rejected" ||
+      (receipt.rejectOutcome === "requeued" ||
+        receipt.rejectOutcome === "cap_exhausted"));
+}
+
+function validResultAdjudicationRequest(value: unknown): boolean {
+  return isObject(value) && isString(value.id) && isString(value.reason) &&
+    isString(value.jobId) && Number.isSafeInteger(value.collectionCycle) &&
+    Number(value.collectionCycle) > 0 && isString(value.inputHash) &&
+    Array.isArray(value.candidateResultHashes) &&
+    value.candidateResultHashes.every(isString) && Array.isArray(value.evidence) &&
+    value.evidence.every(validSubmissionEvidence) &&
+    isString(value.contractVersion) && isString(value.permitEpoch);
+}
+
 function validClaimOutcome(record: JsonRecord): boolean {
   return record.kind === "claimed" && isObject(record.lease) &&
     isObject(record.job) && validLeaseRecord(record.lease) &&
@@ -477,8 +649,8 @@ function notImplemented<Method extends AsyncStoreMethod>(method: string): Method
  * PostgreSQL implementation of the frozen Store boundary.
  *
  * The adapter borrows a client per operation and never owns caller pool
- * shutdown. Tasks 3 through 5 implement control, lease, and result state;
- * later plan slices remain explicit infrastructure stubs so the class is
+ * shutdown. Tasks 3 through 6 implement control, lease, result, and safety
+ * state; later plan slices remain explicit infrastructure stubs so the class is
  * already Store-assignable.
  */
 export class PostgresStore implements Store {
@@ -1105,7 +1277,7 @@ export class PostgresStore implements Store {
     });
   }
 
-  private async publishReserveHealth(
+  private async publishReserveHealthFromSnapshot(
     client: QueryableClient,
     classId: string,
     current: ClassHealthSnapshot,
@@ -1259,7 +1431,7 @@ export class PostgresStore implements Store {
         ],
       );
       const classHealth = captured.to === "retired"
-        ? await this.publishReserveHealth(
+        ? await this.publishReserveHealthFromSnapshot(
             client,
             captured.classId,
             currentHealth!,
@@ -2952,7 +3124,15 @@ export class PostgresStore implements Store {
   async inspectAuthorizationContext(
     decisionResultHash: Parameters<Store["inspectAuthorizationContext"]>[0],
   ): ReturnType<Store["inspectAuthorizationContext"]> {
-    return withPoolClient(this.#pool, async (client) => {
+    return withPoolClient(this.#pool, (client) =>
+      this.loadAuthorizationContext(client, decisionResultHash));
+  }
+
+  private async loadAuthorizationContext(
+    client: QueryableClient,
+    decisionResultHash: string,
+    lock = false,
+  ): Promise<AuthorizationContext | null> {
       const result = await client.query<{
         readonly decision_record: unknown;
         readonly cycle_record: unknown;
@@ -2967,10 +3147,12 @@ export class PostgresStore implements Store {
            JOIN ${this.quotedSchema}.job_cycles jc
              ON jc.job_id = d.job_id AND jc.collection_cycle = d.collection_cycle
            JOIN ${this.quotedSchema}.jobs j ON j.job_id = d.job_id
-           JOIN ${this.quotedSchema}.class_versions cv
+          JOIN ${this.quotedSchema}.class_versions cv
              ON cv.class_id = (jc.record->>'classId')
             AND cv.contract_version = (d.record->>'contractVersion')
-          WHERE d.decision_result_hash = $1`,
+          WHERE d.decision_result_hash = $1${
+            lock ? " FOR UPDATE OF d, jc, j, cv" : ""
+          }`,
         [decisionResultHash],
       );
       const row = result.rows[0];
@@ -2988,31 +3170,2393 @@ export class PostgresStore implements Store {
         resultState: row.result_state as ResultState,
         classVersion: decodeClassVersion({ record: row.class_record }),
       };
+  }
+
+  private async settleAuthorizationReserves(
+    client: QueryableClient,
+    authorizationRequestId: string,
+    charges: readonly Parameters<Store["chargeReserve"]>[0][],
+    context: Parameters<Store["authorizeOrReplayIntent"]>[0]["expectedContext"],
+    at: string,
+  ): Promise<AuthorizationReserveBatch | Exclude<
+    AuthorizeIntentOutcome,
+    AuthorizedIntentOutcome
+  >> {
+    const order = ["lowCost", "urgent", "splitAndAdjudication"] as const;
+    const lanes = charges.map((charge) => charge.policy.lane);
+    if (lanes.some((lane) => !order.includes(lane as typeof order[number]))) {
+      return { kind: "reserve_batch_invalid", reason: "extraneous_lane" };
+    }
+    if (new Set(lanes).size !== lanes.length) {
+      return { kind: "reserve_batch_invalid", reason: "duplicate_lane" };
+    }
+    const indexes = lanes.map((lane) => order.indexOf(lane as typeof order[number]));
+    if (indexes.some((index, position) =>
+        position > 0 && index <= indexes[position - 1]!)) {
+      return { kind: "reserve_batch_invalid", reason: "lane_order" };
+    }
+    for (const charge of charges) {
+      if (charge.chargeKey !== `${authorizationRequestId}:${charge.policy.lane}`) {
+        return { kind: "reserve_batch_invalid", reason: "charge_key" };
+      }
+      if (charge.policy.classId !== context.jobCycle.classId ||
+          charge.policy.contractVersion !== context.jobCycle.contractVersion ||
+          charge.at !== at) {
+        return { kind: "reserve_batch_invalid", reason: "context_mismatch" };
+      }
+      if (charge.workerIds.some((workerId, index) =>
+          index > 0 && workerId <= charge.workerIds[index - 1]!)) {
+        return { kind: "reserve_batch_invalid", reason: "worker_order" };
+      }
+    }
+
+    // Preflight every lane before any mutation. Serializable row locks keep the
+    // checked policies and charge identities stable through settlement.
+    const preflight: Array<{
+      readonly charge: typeof charges[number];
+      readonly outcome: "charged" | "exhausted";
+    }> = [];
+    for (const charge of charges) {
+      const existing = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.reserve_charges
+          WHERE charge_key = $1 FOR UPDATE`,
+        [charge.chargeKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        const record = decodeOpaqueRecord<Extract<
+          ReserveChargeOutcome,
+          { kind: "charged" | "exhausted" }
+        >>(existing.rows[0].record, "reserve_charges.record");
+        if (!equal(record.charge.charge.policy, charge.policy) ||
+            !equal(record.charge.charge.workerIds, charge.workerIds)) {
+          return {
+            kind: "reserve_charge_conflict",
+            lane: charge.policy.lane as typeof order[number],
+            existingCharge: record.charge,
+          };
+        }
+        preflight.push({ charge, outcome: record.charge.outcome });
+      } else {
+        const policy = await this.loadReservePolicy(client, charge.policy, true);
+        if (policy === null || !equal(policy.policy, charge.policy)) {
+          return {
+            kind: "reserve_policy_conflict",
+            lane: charge.policy.lane as typeof order[number],
+            currentPolicy: policy,
+          };
+        }
+        const perWorkerLimit = policy.policy.perWorkerLimit;
+        const perWorkerCapacity = charge.policy.lane === "lowCost" ||
+            charge.policy.lane === "urgent"
+          ? charge.workerIds.every((workerId) =>
+              (policy.workerUsage.find((usage) =>
+                usage.workerId === workerId)?.used ?? 0) < (perWorkerLimit ?? -1))
+          : true;
+        preflight.push({
+          charge,
+          outcome: policy.used < policy.policy.laneLimit && perWorkerCapacity
+            ? "charged"
+            : "exhausted",
+        });
+      }
+    }
+
+    if (charges[0] === undefined) {
+      return { kind: "reserve_batch_invalid", reason: "extraneous_lane" };
+    }
+    const failClosed = preflight.some((entry) =>
+      (entry.charge.policy.lane === "lowCost" ||
+        entry.charge.policy.lane === "urgent") &&
+      entry.outcome === "exhausted");
+    const selected = preflight.filter((entry) =>
+      !failClosed || (
+        (entry.charge.policy.lane === "lowCost" ||
+          entry.charge.policy.lane === "urgent") &&
+        entry.outcome === "exhausted"
+      ));
+
+    const healthResult = await client.query<RevisionedRecordRow>(
+      `SELECT revision, record FROM ${this.quotedSchema}.class_health
+        WHERE class_id = $1 FOR UPDATE`,
+      [charges[0].policy.classId],
+    );
+    if (healthResult.rows[0] === undefined) {
+      return {
+        kind: "reserve_policy_conflict",
+        lane: charges[0].policy.lane as typeof order[number],
+        currentPolicy: await this.loadReservePolicy(client, charges[0].policy),
+      };
+    }
+    const startingHealth = decodeHealth(healthResult.rows[0]);
+    const results: Array<{
+      readonly settlement: AuthorizationReserveBatch["settlements"][number];
+      readonly applied: boolean;
+      readonly chargeKey: string;
+    }> = [];
+    let classHealth = startingHealth;
+    for (const { charge } of selected) {
+      await client.query(
+        `UPDATE ${this.quotedSchema}.class_health
+            SET revision = $2, operating = $3, updated_at = $4::timestamptz,
+                adjudication_unsafe_since = $5::timestamptz, record = $6::jsonb
+          WHERE class_id = $1`,
+        [startingHealth.classId, startingHealth.revision,
+          startingHealth.health.operating, startingHealth.updatedAt,
+          startingHealth.adjudicationUnsafeSince ?? null,
+          JSON.stringify(startingHealth)],
+      );
+      const outcome = await this.settleReserve(client, charge);
+      if (outcome.kind === "reserve_charge_conflict" ||
+          outcome.kind === "reserve_policy_conflict") {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "reserve batch changed after serializable preflight",
+        );
+      }
+      if (outcome.status === "applied") classHealth = outcome.classHealth;
+      results.push({
+        settlement: {
+          lane: charge.policy.lane as typeof order[number],
+          charge: outcome.charge,
+          currentPolicy: outcome.currentPolicy,
+        },
+        applied: outcome.status === "applied",
+        chargeKey: charge.chargeKey,
+      });
+    }
+    await client.query(
+      `UPDATE ${this.quotedSchema}.class_health
+          SET revision = $2, operating = $3, updated_at = $4::timestamptz,
+              adjudication_unsafe_since = $5::timestamptz, record = $6::jsonb
+        WHERE class_id = $1`,
+      [classHealth.classId, classHealth.revision, classHealth.health.operating,
+        classHealth.updatedAt, classHealth.adjudicationUnsafeSince ?? null,
+        JSON.stringify(classHealth)],
+    );
+    for (const result of results) {
+      if (!result.applied) continue;
+      const stored = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.reserve_charges
+          WHERE charge_key = $1 FOR UPDATE`,
+        [result.chargeKey],
+      );
+      if (stored.rows[0] === undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `reserve charge ${result.chargeKey} disappeared`,
+        );
+      }
+      const record = decodeOpaqueRecord<Record<string, unknown>>(
+        stored.rows[0].record,
+        "reserve_charges.record",
+      );
+      await client.query(
+        `UPDATE ${this.quotedSchema}.reserve_charges
+            SET record = $2::jsonb WHERE charge_key = $1`,
+        [result.chargeKey, JSON.stringify({ ...record, classHealth })],
+      );
+    }
+    return {
+      settlements: results.map((result) => result.settlement),
+      skippedLanes: preflight
+        .filter((entry) => !selected.includes(entry))
+        .map((entry) => entry.charge.policy.lane as typeof order[number]),
+      classHealth,
+    };
+  }
+
+  private async loadReservePolicy(
+    client: QueryableClient,
+    input: Parameters<Store["getReservePolicy"]>[0],
+    lock = false,
+  ): Promise<ReservePolicyRecord | null> {
+    const result = await client.query<RecordRow>(
+      `SELECT record FROM ${this.quotedSchema}.reserve_policies
+        WHERE class_id = $1 AND contract_version = $2 AND lane = $3${
+          lock ? " FOR UPDATE" : ""
+        }`,
+      [input.classId, input.contractVersion, input.lane],
+    );
+    return result.rows[0] === undefined
+      ? null
+      : decodeReservePolicy(result.rows[0].record);
+  }
+
+  private validReservePolicy(
+    policy: Parameters<Store["initializeReservePolicy"]>[0]["policy"],
+  ): boolean {
+    const start = Date.parse(policy.windowStartsAt);
+    const end = Date.parse(policy.windowEndsAt);
+    return policy.classId.length > 0 && policy.contractVersion.length > 0 &&
+      policy.policyVersion.length > 0 && policy.windowId.length > 0 &&
+      Number.isFinite(start) && Number.isFinite(end) && start < end &&
+      Number.isSafeInteger(policy.laneLimit) && policy.laneLimit >= 0 &&
+      (policy.lane === "lowCost" || policy.lane === "urgent"
+        ? policy.perWorkerLimit !== undefined &&
+          Number.isSafeInteger(policy.perWorkerLimit) && policy.perWorkerLimit >= 0
+        : policy.perWorkerLimit === undefined);
+  }
+
+  private async publishReserveHealth(
+    client: QueryableClient,
+    classId: string,
+    at: string,
+  ): Promise<ClassHealthSnapshot> {
+    const healthResult = await client.query<RevisionedRecordRow>(
+      `SELECT revision, record FROM ${this.quotedSchema}.class_health
+        WHERE class_id = $1 FOR UPDATE`,
+      [classId],
+    );
+    const row = healthResult.rows[0];
+    if (row === undefined) {
+      throw new PostgresInfrastructureError(
+        "invalid_stored_value",
+        `class ${classId} has no health snapshot`,
+      );
+    }
+    const current = decodeHealth(row);
+    const policies = await client.query<{
+      readonly record: unknown;
+      readonly state: string;
+    }>(
+      `SELECT rp.record, cv.state
+         FROM ${this.quotedSchema}.reserve_policies rp
+         JOIN ${this.quotedSchema}.class_versions cv
+           ON cv.class_id = rp.class_id
+          AND cv.contract_version = rp.contract_version
+        WHERE rp.class_id = $1
+        ORDER BY rp.contract_version COLLATE "C", rp.lane COLLATE "C"
+        FOR UPDATE OF rp`,
+      [classId],
+    );
+    const reserves = {
+      lowCost: "available" as "available" | "saturated",
+      urgent: "available" as "available" | "saturated",
+      splitAndAdjudication: "available" as "available" | "saturated",
+      audit: "available" as "available" | "saturated",
+    };
+    for (const policyRow of policies.rows) {
+      if (policyRow.state === "retired") continue;
+      const record = decodeReservePolicy(policyRow.record);
+      if (record.used >= record.policy.laneLimit) {
+        reserves[record.policy.lane] = "saturated";
+      }
+    }
+    const next: ClassHealthSnapshot = {
+      revision: current.revision + 1,
+      classId,
+      health: { ...current.health, reserves },
+      updatedAt: at,
+      source: "automatic",
+      ...(current.adjudicationUnsafeSince === undefined
+        ? {}
+        : { adjudicationUnsafeSince: current.adjudicationUnsafeSince }),
+    };
+    const updated = await client.query(
+      `UPDATE ${this.quotedSchema}.class_health
+          SET revision = $2, operating = $3, updated_at = $4::timestamptz,
+              adjudication_unsafe_since = $5::timestamptz, record = $6::jsonb
+        WHERE class_id = $1 AND revision = $7`,
+      [
+        classId,
+        next.revision,
+        next.health.operating,
+        next.updatedAt,
+        next.adjudicationUnsafeSince ?? null,
+        JSON.stringify(next),
+        current.revision,
+      ],
+    );
+    if (updated.rowCount !== 1) restartSerializableTransaction();
+    return next;
+  }
+
+  private async settleReserve(
+    client: QueryableClient,
+    charge: Parameters<Store["chargeReserve"]>[0],
+  ): Promise<ReserveChargeOutcome> {
+    const readExisting = async (): Promise<ReserveChargeOutcome | null> => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.reserve_charges
+          WHERE charge_key = $1 FOR UPDATE`,
+        [charge.chargeKey],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return null;
+      const existing = decodeOpaqueRecord<Extract<
+        ReserveChargeOutcome,
+        { kind: "charged" | "exhausted" }
+      >>(row.record, "reserve_charges.record");
+      const semanticMatches = equal(existing.charge.charge.policy, charge.policy) &&
+        equal(existing.charge.charge.workerIds, charge.workerIds);
+      if (!semanticMatches) {
+        return {
+          kind: "reserve_charge_conflict",
+          existingCharge: existing.charge,
+        };
+      }
+      return { ...existing, status: "replayed" };
+    };
+
+    const early = await readExisting();
+    if (early !== null) return early;
+    const current = await this.loadReservePolicy(client, charge.policy, true);
+    const raced = await readExisting();
+    if (raced !== null) return raced;
+    if (current === null || !equal(current.policy, charge.policy)) {
+      return { kind: "reserve_policy_conflict", currentPolicy: current };
+    }
+    const perWorkerLimit = charge.policy.perWorkerLimit;
+    const perWorkerCapacity = charge.policy.lane === "lowCost" ||
+        charge.policy.lane === "urgent"
+      ? charge.workerIds.every((workerId) =>
+          (current.workerUsage.find((entry) => entry.workerId === workerId)?.used ?? 0) <
+            (perWorkerLimit ?? -1))
+      : true;
+    const outcome = current.used < current.policy.laneLimit && perWorkerCapacity
+      ? "charged" as const
+      : "exhausted" as const;
+    let nextPolicy = current;
+    if (outcome === "charged") {
+      const usage = new Map(current.workerUsage.map((entry) => [entry.workerId, entry.used]));
+      if (charge.policy.lane === "lowCost" || charge.policy.lane === "urgent") {
+        for (const workerId of charge.workerIds) {
+          usage.set(workerId, (usage.get(workerId) ?? 0) + 1);
+        }
+      }
+      nextPolicy = {
+        revision: current.revision + 1,
+        policy: structuredClone(current.policy),
+        used: current.used + 1,
+        workerUsage: [...usage.entries()]
+          .sort(([left], [right]) => compareWireIds(left, right))
+          .map(([workerId, used]) => ({ workerId, used })),
+        updatedAt: charge.at,
+      };
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.reserve_policies
+            SET revision = $4, window_id = $5,
+                window_starts_at = $6::timestamptz,
+                window_ends_at = $7::timestamptz, record = $8::jsonb
+          WHERE class_id = $1 AND contract_version = $2 AND lane = $3
+            AND revision = $9`,
+        [
+          charge.policy.classId,
+          charge.policy.contractVersion,
+          charge.policy.lane,
+          nextPolicy.revision,
+          nextPolicy.policy.windowId,
+          nextPolicy.policy.windowStartsAt,
+          nextPolicy.policy.windowEndsAt,
+          JSON.stringify(nextPolicy),
+          current.revision,
+        ],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+    }
+    const classHealth = await this.publishReserveHealth(
+      client,
+      charge.policy.classId,
+      charge.at,
+    );
+    const applied = {
+      kind: outcome,
+      status: "applied" as const,
+      charge: { charge: structuredClone(charge), outcome },
+      currentPolicy: nextPolicy,
+      classHealth,
+    } as Extract<ReserveChargeOutcome, { kind: typeof outcome }>;
+    const inserted = await client.query(
+      `INSERT INTO ${this.quotedSchema}.reserve_charges
+         (charge_key, class_id, contract_version, lane, window_id,
+          outcome, charged_at, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8::jsonb)
+       ON CONFLICT (charge_key) DO NOTHING`,
+      [
+        charge.chargeKey,
+        charge.policy.classId,
+        charge.policy.contractVersion,
+        charge.policy.lane,
+        charge.policy.windowId,
+        outcome,
+        charge.at,
+        JSON.stringify(applied),
+      ],
+    );
+    if (inserted.rowCount !== 1) restartSerializableTransaction();
+    return applied;
+  }
+
+  private async bumpAdjudicationLoad(
+    client: QueryableClient,
+    classId: string,
+    at: string,
+  ): Promise<void> {
+    const result = await client.query<{ readonly revision: string }>(
+      `SELECT revision FROM ${this.quotedSchema}.adjudication_load
+        WHERE class_id = $1 FOR UPDATE`,
+      [classId],
+    );
+    const row = result.rows[0];
+    const revision = row === undefined
+      ? 1
+      : decodePositiveRevision(row.revision, "adjudication_load.revision") + 1;
+    const record: AdjudicationLoadSnapshot = {
+      revision,
+      classId,
+      windowStartsAt: at,
+      admittedDemand: 0,
+    };
+    if (row === undefined) {
+      const inserted = await client.query(
+        `INSERT INTO ${this.quotedSchema}.adjudication_load
+           (class_id, revision, window_starts_at, admitted_demand,
+            oldest_pending_opened_at, record)
+         VALUES ($1, $2, $3::timestamptz, 0, NULL, $4::jsonb)
+         ON CONFLICT (class_id) DO NOTHING`,
+        [classId, revision, at, JSON.stringify(record)],
+      );
+      if (inserted.rowCount !== 1) restartSerializableTransaction();
+      return;
+    }
+    const updated = await client.query(
+      `UPDATE ${this.quotedSchema}.adjudication_load
+          SET revision = $2, record = $3::jsonb
+        WHERE class_id = $1 AND revision = $4`,
+      [classId, revision, JSON.stringify(record), revision - 1],
+    );
+    if (updated.rowCount !== 1) restartSerializableTransaction();
+  }
+
+  private async loadAdjudicationLoad(
+    client: QueryableClient,
+    input: Parameters<Store["inspectAdjudicationLoad"]>[0],
+  ): Promise<AdjudicationLoadSnapshot> {
+    const revisionResult = await client.query<{ readonly revision: string }>(
+      `SELECT revision FROM ${this.quotedSchema}.adjudication_load
+        WHERE class_id = $1`,
+      [input.classId],
+    );
+    const result = await client.query<{
+      readonly opened_at: unknown;
+      readonly pending: boolean;
+    }>(
+      `SELECT opened_at, (state = 'pending_result_adjudication') AS pending
+         FROM ${this.quotedSchema}.result_adjudications
+        WHERE class_id = $1
+       UNION ALL
+       SELECT aa.opened_at,
+              (ast.state = 'pending_adjudication') AS pending
+         FROM ${this.quotedSchema}.action_adjudications aa
+         JOIN ${this.quotedSchema}.authorization_status ast
+           ON ast.authorization_request_id = aa.authorization_request_id
+        WHERE aa.class_id = $1`,
+      [input.classId],
+    );
+    const opened = result.rows.map((row) => {
+      const value = row.opened_at;
+      const timestamp = value instanceof Date ? value.toISOString() : String(value);
+      return { timestamp, pending: row.pending };
+    });
+    const pending = opened.filter((entry) => entry.pending)
+      .map((entry) => entry.timestamp).sort(compareWireIds);
+    return {
+      revision: revisionResult.rows[0] === undefined
+        ? 0
+        : decodePositiveRevision(
+            revisionResult.rows[0].revision,
+            "adjudication_load.revision",
+          ),
+      classId: input.classId,
+      windowStartsAt: input.windowStartsAt,
+      admittedDemand: opened.filter((entry) =>
+        entry.timestamp >= input.windowStartsAt).length,
+      ...(pending[0] === undefined ? {} : { oldestPendingOpenedAt: pending[0] }),
+    };
+  }
+
+  private async loadResultVerdictContext(
+    client: QueryableClient,
+    requestId: string,
+    lock = false,
+  ): Promise<ResultVerdictContext | null> {
+    const result = await client.query<{
+      readonly request_record: unknown;
+      readonly cycle_record: unknown;
+      readonly current_job_record: unknown;
+      readonly result_state: unknown;
+      readonly class_record: unknown;
+    }>(
+      `SELECT ra.record AS request_record, jc.record AS cycle_record,
+              j.record AS current_job_record, jc.result_state,
+              cv.record AS class_record
+         FROM ${this.quotedSchema}.result_adjudications ra
+         JOIN ${this.quotedSchema}.job_cycles jc
+           ON jc.job_id = ra.job_id AND jc.collection_cycle = ra.collection_cycle
+         JOIN ${this.quotedSchema}.jobs j ON j.job_id = ra.job_id
+         JOIN ${this.quotedSchema}.class_versions cv
+           ON cv.class_id = ra.class_id
+          AND cv.contract_version = (ra.record->'request'->>'contractVersion')
+        WHERE ra.request_id = $1${
+          lock ? " FOR UPDATE OF ra, jc, j, cv" : ""
+        }`,
+      [requestId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return null;
+    if (!isString(row.result_state) || !resultStates.has(row.result_state)) {
+      throw new PostgresInfrastructureError(
+        "invalid_stored_value",
+        "job_cycles.result_state has an unknown value",
+      );
+    }
+    const stored = decodeStoredRecord<{
+      readonly request: ResultVerdictContext["request"];
+    }>(
+      row.request_record,
+      (record) => validResultAdjudicationRequest(record.request),
+      "result_adjudications.record",
+    );
+    return {
+      request: stored.request,
+      jobCycle: decodeJob({ record: row.cycle_record }, "job_cycles.record"),
+      currentJob: decodeJob({ record: row.current_job_record }),
+      resultState: row.result_state as ResultState,
+      classVersion: decodeClassVersion({ record: row.class_record }),
+    };
+  }
+
+  private async loadInvalidationSnapshot(
+    client: QueryableClient,
+    scope: Parameters<Store["inspectInvalidationScope"]>[0],
+    lock = false,
+  ): Promise<InvalidationSnapshot> {
+    const cycles = await client.query<{
+      readonly result_state: unknown;
+      readonly record: unknown;
+    }>(
+      `SELECT result_state, record FROM ${this.quotedSchema}.job_cycles
+        WHERE record->>'classId' = $1
+        ORDER BY job_id COLLATE "C", collection_cycle${
+          lock ? " FOR UPDATE" : ""
+        }`,
+      [scope.classId],
+    );
+    let decisionCycles = new Set<string>();
+    if (scope.kind === "decision_results") {
+      const decisions = await client.query<{
+        readonly decision_result_hash: string;
+        readonly job_id: string;
+        readonly collection_cycle: string;
+      }>(
+        `SELECT decision_result_hash, job_id, collection_cycle
+           FROM ${this.quotedSchema}.decisions
+          WHERE decision_result_hash = ANY($1::text[])${
+            lock ? " FOR UPDATE" : ""
+          }`,
+        [scope.decisionResultHashes],
+      );
+      decisionCycles = new Set(decisions.rows.map((row) =>
+        `${row.job_id}:${row.collection_cycle}`));
+    }
+    const selectedCycles = scope.kind === "job_cycles"
+      ? new Set(scope.jobCycles.map((entry) =>
+          `${entry.jobId}:${entry.collectionCycle}`))
+      : null;
+    const targets: InvalidationSnapshot["targets"] = [];
+    for (const row of cycles.rows) {
+      if (!isString(row.result_state) || !resultStates.has(row.result_state)) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      const job = decodeJob({ record: row.record }, "job_cycles.record");
+      const key = `${job.jobId}:${job.collectionCycle}`;
+      const matches = scope.kind === "class" ||
+        (scope.kind === "job_cycles" && selectedCycles!.has(key)) ||
+        (scope.kind === "permit_epoch" && job.permitEpoch === scope.permitEpoch) ||
+        (scope.kind === "contract_version" &&
+          job.contractVersion === scope.contractVersion) ||
+        (scope.kind === "decision_results" && decisionCycles.has(key));
+      if (!matches) continue;
+      targets.push({
+        jobId: job.jobId,
+        collectionCycle: job.collectionCycle,
+        state: row.result_state as ResultState,
+        inputHash: job.inputHash,
+        permitEpoch: job.permitEpoch,
+        contractVersion: job.contractVersion,
+      });
+    }
+    return { scope: structuredClone(scope), targets };
+  }
+
+  private async applyInvalidation(
+    client: QueryableClient,
+    snapshot: InvalidationSnapshot,
+    reason: Parameters<Store["invalidateResultScope"]>[0]["reason"],
+    requeuePlans: Parameters<Store["invalidateResultScope"]>[0]["requeuePlans"],
+    at: string,
+    epochTransition?: {
+      readonly classId: string;
+      readonly fromEpoch: string | null;
+      readonly toEpoch: string;
+    },
+  ): Promise<AppliedInvalidation> {
+    const resultTarget = {
+      emergency_halted: "cancelled",
+      operator_cancelled: "cancelled",
+      emergency_permit_withdrawal: "superseded",
+      contract_expired: "expired",
+      max_in_flight_exceeded: "expired",
+    } as const;
+    const to = resultTarget[reason];
+    const targetKeys = new Set(snapshot.targets.map((target) =>
+      `${target.jobId}:${target.collectionCycle}`));
+    const nextKeys = new Set<string>();
+    for (const plan of requeuePlans) {
+      const oldKey = `${plan.jobId}:${plan.fromCollectionCycle}`;
+      const nextKey = `${plan.jobId}:${plan.newCollectionCycle}`;
+      if (!targetKeys.has(oldKey) ||
+          plan.newCollectionCycle !== plan.fromCollectionCycle + 1 ||
+          nextKeys.has(nextKey)) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `invalid requeue plan for ${oldKey}`,
+        );
+      }
+      const collision = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.job_cycles
+          WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+        [plan.jobId, plan.newCollectionCycle],
+      );
+      if (collision.rows[0] !== undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `duplicate requeue target ${nextKey}`,
+        );
+      }
+      nextKeys.add(nextKey);
+    }
+    const resultTransitions: AppliedInvalidation["resultTransitions"] = [];
+    const authorizationTransitions: AppliedInvalidation["authorizationTransitions"] = [];
+    const invalidatedAuthorizations: AppliedInvalidation["invalidatedAuthorizations"] = [];
+    for (const target of snapshot.targets) {
+      const leases = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE job_id = $1 AND collection_cycle = $2 AND open = true
+          ORDER BY lease_id COLLATE "C" FOR UPDATE`,
+        [target.jobId, target.collectionCycle],
+      );
+      for (const row of leases.rows) {
+        await this.closeLeaseAttempt(client, decodeLease(row), true);
+      }
+      await client.query(
+        `UPDATE ${this.quotedSchema}.job_cycles SET result_state = $3
+          WHERE job_id = $1 AND collection_cycle = $2`,
+        [target.jobId, target.collectionCycle, to],
+      );
+      resultTransitions.push({
+        jobId: target.jobId,
+        collectionCycle: target.collectionCycle,
+        from: target.state,
+        to,
+      });
+      const resultRequests = await client.query<RecordRow & { readonly request_id: string }>(
+        `SELECT request_id, record FROM ${this.quotedSchema}.result_adjudications
+          WHERE job_id = $1 AND collection_cycle = $2
+            AND state = 'pending_result_adjudication' FOR UPDATE`,
+        [target.jobId, target.collectionCycle],
+      );
+      for (const row of resultRequests.rows) {
+        const record = decodeOpaqueRecord<Record<string, unknown>>(
+          row.record,
+          "result_adjudications.record",
+        );
+        await client.query(
+          `UPDATE ${this.quotedSchema}.result_adjudications
+              SET state = $2, record = $3::jsonb WHERE request_id = $1`,
+          [row.request_id, to, JSON.stringify({ ...record, state: to })],
+        );
+      }
+      const pendingActions = await client.query<{
+        readonly authorization_request_id: string;
+        readonly revision: string;
+      }>(
+        `SELECT ast.authorization_request_id, ast.revision
+           FROM ${this.quotedSchema}.authorization_status ast
+           JOIN ${this.quotedSchema}.action_adjudications aa
+             ON aa.authorization_request_id = ast.authorization_request_id
+          WHERE (aa.request->>'jobId') = $1
+            AND (aa.request->>'collectionCycle')::bigint = $2
+            AND ast.state = 'pending_adjudication'
+          ORDER BY ast.authorization_request_id COLLATE "C"
+          FOR UPDATE OF ast`,
+        [target.jobId, target.collectionCycle],
+      );
+      for (const row of pendingActions.rows) {
+        const revision = decodePositiveRevision(row.revision);
+        const status: AuthorizationStatus = { state: to };
+        await client.query(
+          `UPDATE ${this.quotedSchema}.authorization_status
+              SET state = $2, revision = $3, record = $4::jsonb
+            WHERE authorization_request_id = $1`,
+          [row.authorization_request_id, to, revision + 1, JSON.stringify(status)],
+        );
+        authorizationTransitions.push({
+          authorizationRequestId: row.authorization_request_id,
+          from: "pending_adjudication",
+          to,
+        });
+      }
+      const liveAuthorizations = await client.query<{
+        readonly authorization_request_id: string;
+        readonly class_id: string;
+        readonly revision: string;
+        readonly status_record: unknown;
+      }>(
+        `SELECT a.authorization_request_id, a.class_id, ast.revision,
+                ast.record AS status_record
+           FROM ${this.quotedSchema}.authorizations a
+           JOIN ${this.quotedSchema}.authorization_status ast
+             ON ast.authorization_request_id = a.authorization_request_id
+          WHERE a.job_id = $1 AND a.collection_cycle = $2
+            AND ast.state = 'authorized'
+          ORDER BY a.authorization_request_id COLLATE "C"
+          FOR UPDATE OF ast`,
+        [target.jobId, target.collectionCycle],
+      );
+      for (const row of liveAuthorizations.rows) {
+        const status = decodeStoredRecord<AuthorizationStatus>(
+          row.status_record,
+          validAuthorizationStatus,
+          "authorization_status.record",
+        );
+        if (status.state !== "authorized" || status.validity.kind !== "valid") continue;
+        const nextStatus: AuthorizationStatus = {
+          state: "authorized",
+          validity: { kind: "invalid", reason, invalidatedAt: at },
+        };
+        const revision = decodePositiveRevision(row.revision);
+        await client.query(
+          `UPDATE ${this.quotedSchema}.authorization_status
+              SET revision = $2, record = $3::jsonb
+            WHERE authorization_request_id = $1`,
+          [row.authorization_request_id, revision + 1, JSON.stringify(nextStatus)],
+        );
+        invalidatedAuthorizations.push({
+          authorizationRequestId: row.authorization_request_id,
+          classId: row.class_id,
+          jobId: target.jobId,
+          collectionCycle: target.collectionCycle,
+          reason,
+        });
+      }
+    }
+    for (const plan of requeuePlans) {
+      const old = snapshot.targets.find((target) =>
+        target.jobId === plan.jobId &&
+        target.collectionCycle === plan.fromCollectionCycle)!;
+      const oldResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.job_cycles
+          WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+        [old.jobId, old.collectionCycle],
+      );
+      const oldJob = decodeJob(oldResult.rows[0]!, "job_cycles.record");
+      const next: JobRecord = {
+        ...oldJob,
+        collectionCycle: plan.newCollectionCycle,
+        permitEpoch: plan.permitEpoch,
+        inputHash: plan.inputHash,
+        cycleStartedAt: plan.cycleStartedAt,
+      };
+      await client.query(
+        `UPDATE ${this.quotedSchema}.jobs
+            SET input_hash = $2, collection_cycle = $3, record = $4::jsonb
+          WHERE job_id = $1`,
+        [next.jobId, next.inputHash, next.collectionCycle, JSON.stringify(next)],
+      );
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.job_cycles
+           (job_id, collection_cycle, permit_epoch, input_hash,
+            cycle_started_at, result_state, record)
+         VALUES ($1, $2, $3, $4, $5::timestamptz, 'collecting', $6::jsonb)`,
+        [next.jobId, next.collectionCycle, next.permitEpoch, next.inputHash,
+          next.cycleStartedAt, JSON.stringify(next)],
+      );
+      const attempts: JobCycleAttemptSnapshot = {
+        attemptCount: 0,
+        openLeaseIds: [],
+        acceptedWorkerIds: [],
+        acceptedDiversity: [],
+        splitObserved: false,
+      };
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.attempts
+           (job_id, collection_cycle, candidate_revision,
+            attempt_count, split_observed, record)
+         VALUES ($1, $2, 1, 0, false, $3::jsonb)`,
+        [next.jobId, next.collectionCycle, JSON.stringify(attempts)],
+      );
+    }
+    if (epochTransition !== undefined) {
+      const record = {
+        classId: epochTransition.classId,
+        permitEpoch: epochTransition.toEpoch,
+        updatedAt: at,
+      };
+      await client.query(
+        `UPDATE ${this.quotedSchema}.permit_epochs
+            SET permit_epoch = $2, updated_at = $3::timestamptz, record = $4::jsonb
+          WHERE class_id = $1`,
+        [epochTransition.classId, epochTransition.toEpoch, at, JSON.stringify(record)],
+      );
+    }
+    if (snapshot.targets.length > 0) {
+      await this.bumpAdjudicationLoad(client, snapshot.scope.classId, at);
+    }
+    return {
+      kind: "applied",
+      resultTransitions,
+      authorizationTransitions,
+      invalidatedAuthorizations,
+      newCycles: structuredClone(requeuePlans),
+      ...(epochTransition === undefined ? {} : { epochTransition }),
+    };
+  }
+
+  private contextEligible(
+    classVersion: ClassVersionRecord,
+    processedAt: string,
+    maxInFlightDeadline: string,
+  ): boolean {
+    if (classVersion.state === "retired" || classVersion.state === "draft") {
+      return false;
+    }
+    if (classVersion.state === "draining" &&
+        (classVersion.acceptedUntil === undefined ||
+          Date.parse(processedAt) > Date.parse(classVersion.acceptedUntil))) {
+      return false;
+    }
+    return Date.parse(processedAt) < Date.parse(maxInFlightDeadline);
+  }
+  async authorizeOrReplayIntent(
+    input: Parameters<Store["authorizeOrReplayIntent"]>[0],
+  ): ReturnType<Store["authorizeOrReplayIntent"]> {
+    return this.transact(input, async (client, captured) => {
+      const semantic = {
+        authorizationRequestId: captured.authorizationRequestId,
+        effectIntent: captured.effectIntent,
+        effectIntentHash: captured.effectIntentHash,
+        decisionResultHash: captured.decisionResultHash,
+        decision: captured.decision.kind === "deny"
+          ? captured.decision
+          : {
+              ...captured.decision,
+              ...(captured.decision.charges === undefined
+                ? {}
+                : {
+                    charges: captured.decision.charges.map((charge) => ({
+                      ...charge,
+                      at: undefined,
+                    })),
+                  }),
+            },
+      };
+      const semanticFingerprint = commandFingerprint(semantic);
+      const existingResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.effect_intents
+          WHERE effect_intent_id = $1 FOR UPDATE`,
+        [captured.effectIntent.id],
+      );
+      const existingRow = existingResult.rows[0];
+      if (existingRow !== undefined) {
+        const existing = decodeStoredRecord<{
+          readonly input: string;
+          readonly initialReceipt: AuthorizedIntentOutcome["initialReceipt"];
+          readonly reserveBatch?: AuthorizationReserveBatch;
+        }>(
+          existingRow.record,
+          (record) => isString(record.input) &&
+            isObject(record.initialReceipt) &&
+            validInitialReceipt(record.initialReceipt) &&
+            (record.reserveBatch === undefined || isObject(record.reserveBatch)),
+          "effect_intents.record",
+        );
+        return existing.input === semanticFingerprint
+          ? {
+              kind: "replayed",
+              initialReceipt: existing.initialReceipt,
+              ...(existing.reserveBatch === undefined
+                ? {}
+                : { reserveBatch: existing.reserveBatch }),
+            }
+          : { kind: "conflict" };
+      }
+      const identity = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.core_identities
+          WHERE identity_id = $1 FOR UPDATE`,
+        [captured.authorizationRequestId],
+      );
+      if (identity.rows[0] !== undefined) return { kind: "conflict" } as const;
+      const current = await this.loadAuthorizationContext(
+        client,
+        captured.decisionResultHash,
+        true,
+      );
+      if (current === null || !equal(current.decision, captured.expectedContext.decision)) {
+        return {
+          kind: "authorization_context_conflict",
+          reason: "decision_changed",
+        } as const;
+      }
+      if (!equal(current.jobCycle, captured.expectedContext.jobCycle)) {
+        return {
+          kind: "authorization_context_conflict",
+          reason: "job_cycle_changed",
+        } as const;
+      }
+      if (!equal(current.currentJob, captured.expectedContext.currentJob) ||
+          current.currentJob.collectionCycle !== current.jobCycle.collectionCycle) {
+        return {
+          kind: "authorization_context_conflict",
+          reason: "current_cycle_changed",
+        } as const;
+      }
+      if (current.resultState !== "verified" ||
+          captured.expectedContext.resultState !== "verified") {
+        return {
+          kind: "authorization_context_conflict",
+          reason: "result_not_verified",
+        } as const;
+      }
+      if (!equal(current.classVersion, captured.expectedContext.classVersion) ||
+          !this.contextEligible(
+            current.classVersion,
+            captured.at,
+            captured.expectedContext.maxInFlightDeadline,
+          )) {
+        return {
+          kind: "authorization_context_conflict",
+          reason: "class_version_ineligible",
+        } as const;
+      }
+      const hasSplitLane = captured.decision.kind !== "deny" &&
+        captured.decision.charges?.some((charge) =>
+          charge.policy.lane === "splitAndAdjudication") === true;
+      if ((captured.decision.kind === "pend") !== hasSplitLane) {
+        return { kind: "reserve_batch_invalid", reason: "decision_mismatch" } as const;
+      }
+      let reserveBatch: AuthorizationReserveBatch | undefined;
+      if (captured.decision.kind !== "deny" &&
+          captured.decision.charges !== undefined) {
+        const settlement = await this.settleAuthorizationReserves(
+          client,
+          captured.authorizationRequestId,
+          captured.decision.charges,
+          captured.expectedContext,
+          captured.at,
+        );
+        if ("kind" in settlement) return settlement;
+        reserveBatch = settlement;
+      }
+      if (captured.decision.kind === "pend" && reserveBatch === undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "pending adjudication requires a reserve batch",
+        );
+      }
+
+      const decision = current.decision;
+      let initialReceipt: AuthorizedIntentOutcome["initialReceipt"];
+      let status: AuthorizationStatus;
+      let authorization: ActionAuthorization | undefined;
+      if (captured.decision.kind === "deny") {
+        initialReceipt = {
+          authorizationRequestId: captured.authorizationRequestId,
+          effectIntentId: captured.effectIntent.id,
+          effectIntentHash: captured.effectIntentHash,
+          jobId: decision.jobId,
+          collectionCycle: decision.collectionCycle,
+          decisionResultHash: captured.decisionResultHash,
+          at: captured.at,
+          outcome: "denied",
+          denialReason: captured.decision.reason,
+        };
+        status = { state: "denied", reason: captured.decision.reason };
+      } else if (reserveBatch?.settlements.some((entry) =>
+          (entry.lane === "lowCost" || entry.lane === "urgent") &&
+          entry.charge.outcome === "exhausted")) {
+        initialReceipt = {
+          authorizationRequestId: captured.authorizationRequestId,
+          effectIntentId: captured.effectIntent.id,
+          effectIntentHash: captured.effectIntentHash,
+          jobId: decision.jobId,
+          collectionCycle: decision.collectionCycle,
+          decisionResultHash: captured.decisionResultHash,
+          at: captured.at,
+          outcome: "denied",
+          denialReason: "escalation_budget_exhausted",
+        };
+        status = { state: "denied", reason: "escalation_budget_exhausted" };
+      } else if (captured.decision.kind === "authorize") {
+        authorization = structuredClone(captured.decision.authorization);
+        initialReceipt = {
+          authorizationRequestId: captured.authorizationRequestId,
+          effectIntentId: captured.effectIntent.id,
+          effectIntentHash: captured.effectIntentHash,
+          jobId: decision.jobId,
+          collectionCycle: decision.collectionCycle,
+          decisionResultHash: captured.decisionResultHash,
+          at: captured.at,
+          outcome: "authorized",
+          authorization,
+        };
+        status = { state: "authorized", validity: { kind: "valid" } };
+      } else {
+        initialReceipt = {
+          authorizationRequestId: captured.authorizationRequestId,
+          effectIntentId: captured.effectIntent.id,
+          effectIntentHash: captured.effectIntentHash,
+          jobId: decision.jobId,
+          collectionCycle: decision.collectionCycle,
+          decisionResultHash: captured.decisionResultHash,
+          at: captured.at,
+          outcome: "pending_adjudication",
+        };
+        status = { state: "pending_adjudication" };
+      }
+      const effectRecord = {
+        input: semanticFingerprint,
+        authorizationRequestId: captured.authorizationRequestId,
+        effectIntent: structuredClone(captured.effectIntent),
+        effectIntentHash: captured.effectIntentHash,
+        decisionResultHash: captured.decisionResultHash,
+        initialReceipt,
+        ...(reserveBatch === undefined ? {} : { reserveBatch }),
+      };
+      const insertedIdentity = await client.query(
+        `INSERT INTO ${this.quotedSchema}.core_identities
+           (identity_id, identity_kind)
+         VALUES ($1, 'authorization_request')
+         ON CONFLICT (identity_id) DO NOTHING`,
+        [captured.authorizationRequestId],
+      );
+      if (insertedIdentity.rowCount !== 1) restartSerializableTransaction();
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.effect_intents
+           (effect_intent_id, authorization_request_id, effect_intent_hash,
+            decision_result_hash, record)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [captured.effectIntent.id, captured.authorizationRequestId,
+          captured.effectIntentHash, captured.decisionResultHash,
+          JSON.stringify(effectRecord)],
+      );
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.authorization_status
+           (authorization_request_id, state, revision, record)
+         VALUES ($1, $2, 1, $3::jsonb)`,
+        [captured.authorizationRequestId, status.state, JSON.stringify(status)],
+      );
+      if (authorization !== undefined) {
+        await client.query(
+          `INSERT INTO ${this.quotedSchema}.authorizations
+             (authorization_request_id, effect_intent_id, class_id, job_id,
+              collection_cycle, record)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+          [captured.authorizationRequestId, captured.effectIntent.id,
+            current.jobCycle.classId, authorization.jobId,
+            authorization.collectionCycle, JSON.stringify(authorization)],
+        );
+      }
+      if (captured.decision.kind === "pend" && status.state === "pending_adjudication") {
+        await client.query(
+          `INSERT INTO ${this.quotedSchema}.action_adjudications
+             (authorization_request_id, class_id, opened_at, request, context)
+           VALUES ($1, $2, $3::timestamptz, $4::jsonb, $5::jsonb)`,
+          [captured.authorizationRequestId, current.jobCycle.classId, captured.at,
+            JSON.stringify(captured.decision.request),
+            JSON.stringify(captured.expectedContext)],
+        );
+        await this.bumpAdjudicationLoad(
+          client,
+          current.jobCycle.classId,
+          captured.at,
+        );
+      }
+      return {
+        kind: "applied",
+        initialReceipt,
+        ...(reserveBatch === undefined ? {} : { reserveBatch }),
+      };
     });
   }
-  readonly authorizeOrReplayIntent = notImplemented<Store["authorizeOrReplayIntent"]>("authorizeOrReplayIntent");
-  readonly getAuthorizationStatus = notImplemented<Store["getAuthorizationStatus"]>("getAuthorizationStatus");
-  readonly getInitialReceipt = notImplemented<Store["getInitialReceipt"]>("getInitialReceipt");
-  readonly getAuthorization = notImplemented<Store["getAuthorization"]>("getAuthorization");
-  readonly inspectInvalidationScope = notImplemented<Store["inspectInvalidationScope"]>("inspectInvalidationScope");
-  readonly invalidateResultScope = notImplemented<Store["invalidateResultScope"]>("invalidateResultScope");
-  readonly openResultAdjudication = notImplemented<Store["openResultAdjudication"]>("openResultAdjudication");
-  readonly getResultAdjudicationRequest = notImplemented<Store["getResultAdjudicationRequest"]>("getResultAdjudicationRequest");
-  readonly inspectResultVerdictContext = notImplemented<Store["inspectResultVerdictContext"]>("inspectResultVerdictContext");
-  readonly listPendingResultAdjudications = notImplemented<Store["listPendingResultAdjudications"]>("listPendingResultAdjudications");
-  readonly applyResultAdjudicationVerdict = notImplemented<Store["applyResultAdjudicationVerdict"]>("applyResultAdjudicationVerdict");
-  readonly getActionAdjudicationRequest = notImplemented<Store["getActionAdjudicationRequest"]>("getActionAdjudicationRequest");
-  readonly getPendingAuthorizationContext = notImplemented<Store["getPendingAuthorizationContext"]>("getPendingAuthorizationContext");
-  readonly listPendingActionAdjudications = notImplemented<Store["listPendingActionAdjudications"]>("listPendingActionAdjudications");
-  readonly getVerdictHistory = notImplemented<Store["getVerdictHistory"]>("getVerdictHistory");
-  readonly applyActionAdjudicationVerdict = notImplemented<Store["applyActionAdjudicationVerdict"]>("applyActionAdjudicationVerdict");
-  readonly inspectAdjudicationLoad = notImplemented<Store["inspectAdjudicationLoad"]>("inspectAdjudicationLoad");
-  readonly refreshClassHealth = notImplemented<Store["refreshClassHealth"]>("refreshClassHealth");
-  readonly enterEmergencyHalt = notImplemented<Store["enterEmergencyHalt"]>("enterEmergencyHalt");
-  readonly getReservePolicy = notImplemented<Store["getReservePolicy"]>("getReservePolicy");
-  readonly initializeReservePolicy = notImplemented<Store["initializeReservePolicy"]>("initializeReservePolicy");
-  readonly transitionReservePolicy = notImplemented<Store["transitionReservePolicy"]>("transitionReservePolicy");
-  readonly chargeReserve = notImplemented<Store["chargeReserve"]>("chargeReserve");
+
+  async getAuthorizationStatus(
+    authorizationRequestId: Parameters<Store["getAuthorizationStatus"]>[0],
+  ): ReturnType<Store["getAuthorizationStatus"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.authorization_status
+          WHERE authorization_request_id = $1`,
+        [authorizationRequestId],
+      );
+      return result.rows[0] === undefined
+        ? null
+        : decodeStoredRecord<AuthorizationStatus>(
+            result.rows[0].record,
+            validAuthorizationStatus,
+            "authorization_status.record",
+          );
+    });
+  }
+
+  async getInitialReceipt(
+    effectIntentId: Parameters<Store["getInitialReceipt"]>[0],
+  ): ReturnType<Store["getInitialReceipt"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.effect_intents
+          WHERE effect_intent_id = $1`,
+        [effectIntentId],
+      );
+      if (result.rows[0] === undefined) return null;
+      const stored = decodeOpaqueRecord<{
+        readonly initialReceipt: AuthorizedIntentOutcome["initialReceipt"];
+      }>(result.rows[0].record, "effect_intents.record");
+      return decodeStoredRecord<AuthorizedIntentOutcome["initialReceipt"]>(
+        stored.initialReceipt,
+        validInitialReceipt,
+        "effect_intents.record.initialReceipt",
+      );
+    });
+  }
+
+  async getAuthorization(
+    authorizationRequestId: Parameters<Store["getAuthorization"]>[0],
+  ): ReturnType<Store["getAuthorization"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.authorizations
+          WHERE authorization_request_id = $1`,
+        [authorizationRequestId],
+      );
+      return result.rows[0] === undefined
+        ? null
+        : decodeStoredRecord<ActionAuthorization>(
+            result.rows[0].record,
+            validActionAuthorization,
+            "authorizations.record",
+          );
+    });
+  }
+  async inspectInvalidationScope(
+    scope: Parameters<Store["inspectInvalidationScope"]>[0],
+  ): ReturnType<Store["inspectInvalidationScope"]> {
+    return withPoolClient(this.#pool, (client) =>
+      this.loadInvalidationSnapshot(client, scope));
+  }
+
+  async invalidateResultScope(
+    input: Parameters<Store["invalidateResultScope"]>[0],
+  ): ReturnType<Store["invalidateResultScope"]> {
+    return this.transact(input, async (client, captured) => {
+      const replayKey = commandFingerprint(captured);
+      const replay = await this.readReplay<AppliedInvalidation>(
+        client,
+        "invalidate_result_scope",
+        replayKey,
+        replayKey,
+        validOutcome("applied"),
+      );
+      if (replay !== null) return replay;
+      const current = await this.loadInvalidationSnapshot(client, captured.scope, true);
+      const expectedTargets = [...captured.expectedTargets].sort((left, right) =>
+        compareWireIds(left.jobId, right.jobId) ||
+        left.collectionCycle - right.collectionCycle);
+      if (!equal(current.targets, expectedTargets)) {
+        return { kind: "conflict", current } as const;
+      }
+      let epochTransition: {
+        readonly classId: string;
+        readonly fromEpoch: string | null;
+        readonly toEpoch: string;
+      } | undefined;
+      if (captured.reason === "emergency_permit_withdrawal") {
+        const transition = captured.epochTransition;
+        const epochResult = await client.query<{ readonly permit_epoch: unknown }>(
+          `SELECT permit_epoch FROM ${this.quotedSchema}.permit_epochs
+            WHERE class_id = $1 FOR UPDATE`,
+          [transition.classId],
+        );
+        const currentEpoch = epochResult.rows[0]?.permit_epoch;
+        if (transition.classId !== captured.scope.classId ||
+            currentEpoch !== transition.fromEpoch) {
+          return { kind: "conflict", current } as const;
+        }
+        epochTransition = transition;
+      }
+      const outcome = await this.applyInvalidation(
+        client,
+        current,
+        captured.reason,
+        captured.requeuePlans,
+        captured.at,
+        epochTransition,
+      );
+      await this.writeReplay(
+        client,
+        "invalidate_result_scope",
+        replayKey,
+        replayKey,
+        outcome,
+      );
+      return outcome;
+    });
+  }
+  async openResultAdjudication(
+    input: Parameters<Store["openResultAdjudication"]>[0],
+  ): ReturnType<Store["openResultAdjudication"]> {
+    return this.transact(input, async (client, captured) => {
+      const existingResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.result_adjudications
+          WHERE request_id = $1 FOR UPDATE`,
+        [captured.request.id],
+      );
+      const existingRow = existingResult.rows[0];
+      if (existingRow !== undefined) {
+        const existing = decodeStoredRecord<{
+          readonly request: typeof captured.request;
+          readonly openedAt: string;
+          readonly charge: {
+            readonly charge: Extract<ReserveChargeOutcome,
+              { kind: "charged" | "exhausted" }>["charge"];
+            readonly currentPolicy: ReservePolicyRecord;
+            readonly classHealth: ClassHealthSnapshot;
+          };
+        }>(
+          existingRow.record,
+          (record) => validResultAdjudicationRequest(record.request) &&
+            isString(record.openedAt) && isObject(record.charge),
+          "result_adjudications.record",
+        );
+        const same = equal(existing.request, captured.request) && equal(
+          { ...existing.charge.charge.charge, at: undefined },
+          { ...captured.charge, at: undefined },
+        );
+        if (!same) return { kind: "identity_conflict" } as const;
+        return {
+          kind: "replayed",
+          original: existing.charge.charge.outcome === "charged"
+            ? "opened_charged"
+            : "opened_uncovered",
+          openedAt: existing.openedAt,
+          ...existing.charge,
+        } as Awaited<ReturnType<Store["openResultAdjudication"]>>;
+      }
+      const identity = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.core_identities
+          WHERE identity_id = $1 FOR UPDATE`,
+        [captured.request.id],
+      );
+      if (identity.rows[0] !== undefined) {
+        return { kind: "identity_conflict" } as const;
+      }
+      const cycleResult = await client.query<{
+        readonly result_state: unknown;
+        readonly record: unknown;
+      }>(
+        `SELECT result_state, record FROM ${this.quotedSchema}.job_cycles
+          WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+        [captured.resultTransition.jobId, captured.resultTransition.collectionCycle],
+      );
+      const cycleRow = cycleResult.rows[0];
+      const actual = cycleRow?.result_state;
+      if (actual !== undefined && (!isString(actual) || !resultStates.has(actual))) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      if (cycleRow === undefined) {
+        return { kind: "state_conflict", actual: captured.resultTransition.from } as const;
+      }
+      const job = decodeJob({ record: cycleRow.record }, "job_cycles.record");
+      if (captured.request.jobId !== captured.resultTransition.jobId ||
+          captured.request.collectionCycle !== captured.resultTransition.collectionCycle ||
+          captured.request.inputHash !== job.inputHash ||
+          captured.request.contractVersion !== job.contractVersion ||
+          captured.request.permitEpoch !== job.permitEpoch ||
+          actual !== captured.resultTransition.from) {
+        return {
+          kind: "state_conflict",
+          actual: (actual as ResultState) ?? captured.resultTransition.from,
+        } as const;
+      }
+      const cycleCollision = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.result_adjudications
+          WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+        [job.jobId, job.collectionCycle],
+      );
+      if (cycleCollision.rows[0] !== undefined) {
+        return { kind: "state_conflict", actual: actual as ResultState } as const;
+      }
+      const settlement = await this.settleReserve(client, captured.charge);
+      if (settlement.kind === "reserve_charge_conflict" ||
+          settlement.kind === "reserve_policy_conflict") return settlement;
+      const charge = {
+        charge: settlement.charge,
+        currentPolicy: settlement.currentPolicy,
+        classHealth: settlement.classHealth,
+      };
+      const openedAt = captured.resultTransition.at;
+      const state = "pending_result_adjudication" as const;
+      const record = {
+        request: structuredClone(captured.request),
+        openedAt,
+        state,
+        charge,
+      };
+      const insertedIdentity = await client.query(
+        `INSERT INTO ${this.quotedSchema}.core_identities
+           (identity_id, identity_kind)
+         VALUES ($1, 'result_adjudication_request')
+         ON CONFLICT (identity_id) DO NOTHING`,
+        [captured.request.id],
+      );
+      if (insertedIdentity.rowCount !== 1) restartSerializableTransaction();
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.result_adjudications
+           (request_id, job_id, collection_cycle, class_id, state, opened_at, record)
+         VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::jsonb)`,
+        [
+          captured.request.id,
+          job.jobId,
+          job.collectionCycle,
+          job.classId,
+          state,
+          openedAt,
+          JSON.stringify(record),
+        ],
+      );
+      await client.query(
+        `UPDATE ${this.quotedSchema}.job_cycles
+            SET result_state = 'pending_result_adjudication'
+          WHERE job_id = $1 AND collection_cycle = $2`,
+        [job.jobId, job.collectionCycle],
+      );
+      await this.bumpAdjudicationLoad(client, job.classId, openedAt);
+      return {
+        kind: settlement.kind === "charged" ? "opened_charged" : "opened_uncovered",
+        openedAt,
+        ...charge,
+      } as Awaited<ReturnType<Store["openResultAdjudication"]>>;
+    });
+  }
+
+  async getResultAdjudicationRequest(
+    id: Parameters<Store["getResultAdjudicationRequest"]>[0],
+  ): ReturnType<Store["getResultAdjudicationRequest"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.result_adjudications
+          WHERE request_id = $1`,
+        [id],
+      );
+      const row = result.rows[0];
+      return row === undefined
+        ? null
+        : decodeStoredRecord<{ readonly request: NonNullable<
+            Awaited<ReturnType<Store["getResultAdjudicationRequest"]>>
+          > }>(
+            row.record,
+            (record) => validResultAdjudicationRequest(record.request),
+            "result_adjudications.record",
+          ).request;
+    });
+  }
+
+  async inspectResultVerdictContext(
+    id: Parameters<Store["inspectResultVerdictContext"]>[0],
+  ): ReturnType<Store["inspectResultVerdictContext"]> {
+    return withPoolClient(this.#pool, (client) =>
+      this.loadResultVerdictContext(client, id));
+  }
+
+  async listPendingResultAdjudications(
+    classId: Parameters<Store["listPendingResultAdjudications"]>[0],
+  ): ReturnType<Store["listPendingResultAdjudications"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.result_adjudications
+          WHERE class_id = $1 AND state = 'pending_result_adjudication'
+          ORDER BY opened_at, request_id COLLATE "C"`,
+        [classId],
+      );
+      return result.rows.map((row) => {
+        const record = decodeStoredRecord<{
+          readonly request: Awaited<ReturnType<
+            Store["listPendingResultAdjudications"]
+          >>[number]["request"];
+          readonly openedAt: string;
+        }>(
+          row.record,
+          (stored) => validResultAdjudicationRequest(stored.request) &&
+            isString(stored.openedAt),
+          "result_adjudications.record",
+        );
+        return { request: record.request, openedAt: record.openedAt };
+      });
+    });
+  }
+
+  async applyResultAdjudicationVerdict(
+    input: Parameters<Store["applyResultAdjudicationVerdict"]>[0],
+  ): ReturnType<Store["applyResultAdjudicationVerdict"]> {
+    return this.transact(input, async (client, captured) => {
+      const requestId = captured.verdict.resultAdjudicationRequestId;
+      const verdictFingerprint = commandFingerprint({
+        verdict: captured.verdict,
+        verdictHash: captured.verdictHash,
+      });
+      const priorResult = await client.query<{
+        readonly fingerprint: string;
+        readonly record: unknown;
+      }>(
+        `SELECT fingerprint, record FROM ${this.quotedSchema}.verdict_history
+          WHERE request_id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      const prior = priorResult.rows[0];
+      if (prior !== undefined) {
+        const record = decodeStoredRecord<VerdictHistoryRecord>(
+          prior.record,
+          validVerdictHistory,
+          "verdict_history.record",
+        );
+        return prior.fingerprint === verdictFingerprint
+          ? { kind: "replayed", receipt: record.receipt } as const
+          : { kind: "conflict" } as const;
+      }
+      const adjudicationResult = await client.query<{
+        readonly state: string;
+        readonly class_id: string;
+        readonly record: unknown;
+      }>(
+        `SELECT state, class_id, record
+           FROM ${this.quotedSchema}.result_adjudications
+          WHERE request_id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      const adjudicationRow = adjudicationResult.rows[0];
+      if (adjudicationRow === undefined ||
+          adjudicationRow.state !== "pending_result_adjudication") {
+        return { kind: "terminal" } as const;
+      }
+      const adjudication = decodeStoredRecord<{
+        readonly request: ResultVerdictContext["request"];
+        readonly openedAt: string;
+        readonly state: string;
+        readonly charge: unknown;
+      }>(
+        adjudicationRow.record,
+        (record) => validResultAdjudicationRequest(record.request) &&
+          isString(record.openedAt) &&
+          record.state === "pending_result_adjudication" &&
+          isObject(record.charge),
+        "result_adjudications.record",
+      );
+      const request = adjudication.request;
+      const verdictMatches = captured.verdict.reason === request.reason &&
+        captured.verdict.jobId === request.jobId &&
+        captured.verdict.collectionCycle === request.collectionCycle &&
+        captured.verdict.inputHash === request.inputHash &&
+        equal(captured.verdict.candidateResultHashes, request.candidateResultHashes) &&
+        equal(captured.verdict.evidence, request.evidence) &&
+        captured.verdict.contractVersion === request.contractVersion &&
+        captured.verdict.permitEpoch === request.permitEpoch &&
+        captured.verdict.decision.kind === captured.decision;
+      if (!verdictMatches) return { kind: "conflict" } as const;
+      const context = await this.loadResultVerdictContext(client, requestId, true);
+      const expected = {
+        request: captured.expectedContext.request,
+        jobCycle: captured.expectedContext.jobCycle,
+        currentJob: captured.expectedContext.currentJob,
+        resultState: captured.expectedContext.resultState,
+        classVersion: captured.expectedContext.classVersion,
+      };
+      if (context === null || !equal(context, expected) ||
+          context.currentJob.collectionCycle !== request.collectionCycle ||
+          context.resultState !== "pending_result_adjudication" ||
+          !this.contextEligible(
+            context.classVersion,
+            captured.processedAt,
+            captured.expectedContext.maxInFlightDeadline,
+          )) {
+        return { kind: "freshness_conflict" } as const;
+      }
+      let receipt: Extract<Awaited<ReturnType<
+        Store["applyResultAdjudicationVerdict"]
+      >>, { kind: "applied" }>["receipt"];
+      let adjudicationState: string;
+      if (captured.decision === "resolve") {
+        const resolved = captured.resolved;
+        if (resolved.jobId !== request.jobId ||
+            resolved.collectionCycle !== request.collectionCycle ||
+            resolved.inputHash !== request.inputHash ||
+            resolved.contractVersion !== request.contractVersion ||
+            resolved.permitEpoch !== request.permitEpoch ||
+            resolved.resultAdjudicationVerdictHash !== captured.verdictHash ||
+            resolved.verifiedAt !== captured.processedAt ||
+            !equal(resolved.evidence, request.evidence)) {
+          return { kind: "conflict" } as const;
+        }
+        const inserted = await client.query(
+          `INSERT INTO ${this.quotedSchema}.decisions
+             (decision_result_hash, job_id, collection_cycle, verified_at, record)
+           VALUES ($1, $2, $3, $4::timestamptz, $5::jsonb)
+           ON CONFLICT (decision_result_hash) DO NOTHING`,
+          [resolved.decisionResultHash, resolved.jobId, resolved.collectionCycle,
+            resolved.verifiedAt, JSON.stringify(resolved)],
+        );
+        if (inserted.rowCount !== 1) return { kind: "conflict" } as const;
+        await client.query(
+          `UPDATE ${this.quotedSchema}.job_cycles SET result_state = 'verified'
+            WHERE job_id = $1 AND collection_cycle = $2`,
+          [request.jobId, request.collectionCycle],
+        );
+        adjudicationState = "resolved";
+        receipt = {
+          requestId,
+          verdictHash: captured.verdictHash,
+          decidedAt: captured.verdict.decidedAt,
+          outcome: "resolved",
+        };
+      } else {
+        const oldJob = context.jobCycle;
+        const requeue = oldJob.rejectedDisputeRequeues < captured.onReject.cap;
+        if (requeue && (captured.onReject.newCycleEpoch.length === 0 ||
+            captured.onReject.newCycleInputHash.length === 0 ||
+            captured.onReject.cycleStartedAt !== captured.processedAt)) {
+          return { kind: "conflict" } as const;
+        }
+        await client.query(
+          `UPDATE ${this.quotedSchema}.job_cycles SET result_state = 'rejected'
+            WHERE job_id = $1 AND collection_cycle = $2`,
+          [request.jobId, request.collectionCycle],
+        );
+        adjudicationState = "rejected";
+        if (requeue) {
+          const next: JobRecord = {
+            ...oldJob,
+            collectionCycle: oldJob.collectionCycle + 1,
+            permitEpoch: captured.onReject.newCycleEpoch,
+            inputHash: captured.onReject.newCycleInputHash,
+            cycleStartedAt: captured.onReject.cycleStartedAt,
+            rejectedDisputeRequeues: oldJob.rejectedDisputeRequeues + 1,
+          };
+          const collision = await client.query(
+            `SELECT 1 FROM ${this.quotedSchema}.job_cycles
+              WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+            [next.jobId, next.collectionCycle],
+          );
+          if (collision.rows[0] !== undefined) return { kind: "conflict" } as const;
+          await client.query(
+            `UPDATE ${this.quotedSchema}.jobs
+                SET input_hash = $2, collection_cycle = $3, record = $4::jsonb
+              WHERE job_id = $1`,
+            [next.jobId, next.inputHash, next.collectionCycle, JSON.stringify(next)],
+          );
+          await client.query(
+            `INSERT INTO ${this.quotedSchema}.job_cycles
+               (job_id, collection_cycle, permit_epoch, input_hash,
+                cycle_started_at, result_state, record)
+             VALUES ($1, $2, $3, $4, $5::timestamptz, 'collecting', $6::jsonb)`,
+            [next.jobId, next.collectionCycle, next.permitEpoch, next.inputHash,
+              next.cycleStartedAt, JSON.stringify(next)],
+          );
+          const attempts: JobCycleAttemptSnapshot = {
+            attemptCount: 0,
+            openLeaseIds: [],
+            acceptedWorkerIds: [],
+            acceptedDiversity: [],
+            splitObserved: false,
+          };
+          await client.query(
+            `INSERT INTO ${this.quotedSchema}.attempts
+               (job_id, collection_cycle, candidate_revision,
+                attempt_count, split_observed, record)
+             VALUES ($1, $2, 1, 0, false, $3::jsonb)`,
+            [next.jobId, next.collectionCycle, JSON.stringify(attempts)],
+          );
+        }
+        receipt = {
+          requestId,
+          verdictHash: captured.verdictHash,
+          decidedAt: captured.verdict.decidedAt,
+          outcome: "rejected",
+          rejectOutcome: requeue ? "requeued" : "cap_exhausted",
+        };
+      }
+      const nextRecord = { ...adjudication, state: adjudicationState };
+      await client.query(
+        `UPDATE ${this.quotedSchema}.result_adjudications
+            SET state = $2, record = $3::jsonb WHERE request_id = $1`,
+        [requestId, adjudicationState, JSON.stringify(nextRecord)],
+      );
+      const history = {
+        kind: "result" as const,
+        requestId,
+        verdictHash: captured.verdictHash,
+        verdict: structuredClone(captured.verdict),
+        receipt,
+      };
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.verdict_history
+           (request_id, kind, verdict_hash, processed_at, fingerprint, record)
+         VALUES ($1, 'result', $2, $3::timestamptz, $4, $5::jsonb)`,
+        [requestId, captured.verdictHash, captured.processedAt,
+          verdictFingerprint, JSON.stringify(history)],
+      );
+      await this.bumpAdjudicationLoad(
+        client,
+        adjudicationRow.class_id,
+        captured.processedAt,
+      );
+      return { kind: "applied", receipt } as const;
+    });
+  }
+  async getActionAdjudicationRequest(
+    authorizationRequestId: Parameters<Store["getActionAdjudicationRequest"]>[0],
+  ): ReturnType<Store["getActionAdjudicationRequest"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<{ readonly request: unknown }>(
+        `SELECT request FROM ${this.quotedSchema}.action_adjudications
+          WHERE authorization_request_id = $1`,
+        [authorizationRequestId],
+      );
+      return result.rows[0] === undefined
+        ? null
+        : decodeStoredRecord<ActionAdjudicationRequest>(
+            result.rows[0].request,
+            validActionAdjudicationRequest,
+            "action_adjudications.request",
+          );
+    });
+  }
+
+  async getPendingAuthorizationContext(
+    authorizationRequestId: Parameters<Store["getPendingAuthorizationContext"]>[0],
+  ): ReturnType<Store["getPendingAuthorizationContext"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<{ readonly context: unknown }>(
+        `SELECT context FROM ${this.quotedSchema}.action_adjudications
+          WHERE authorization_request_id = $1`,
+        [authorizationRequestId],
+      );
+      return result.rows[0] === undefined
+        ? null
+        : decodeStoredRecord<PendingAuthorizationContext>(
+            result.rows[0].context,
+            validAuthorizationContext,
+            "action_adjudications.context",
+          );
+    });
+  }
+
+  async listPendingActionAdjudications(
+    classId: Parameters<Store["listPendingActionAdjudications"]>[0],
+  ): ReturnType<Store["listPendingActionAdjudications"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<{
+        readonly request: unknown;
+        readonly opened_at: unknown;
+      }>(
+        `SELECT aa.request, aa.opened_at
+           FROM ${this.quotedSchema}.action_adjudications aa
+           JOIN ${this.quotedSchema}.authorization_status ast
+             ON ast.authorization_request_id = aa.authorization_request_id
+          WHERE aa.class_id = $1 AND ast.state = 'pending_adjudication'
+          ORDER BY aa.opened_at, aa.authorization_request_id COLLATE "C"`,
+        [classId],
+      );
+      return result.rows.map((row) => ({
+        request: decodeStoredRecord<Awaited<ReturnType<
+          Store["listPendingActionAdjudications"]
+        >>[number]["request"]>(
+          row.request,
+          validActionAdjudicationRequest,
+          "action_adjudications.request",
+        ),
+        openedAt: row.opened_at instanceof Date
+          ? row.opened_at.toISOString()
+          : String(row.opened_at),
+      }));
+    });
+  }
+
+  async getVerdictHistory(
+    requestId: Parameters<Store["getVerdictHistory"]>[0],
+  ): ReturnType<Store["getVerdictHistory"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.verdict_history
+          WHERE request_id = $1`,
+        [requestId],
+      );
+      return result.rows[0] === undefined
+        ? null
+        : decodeStoredRecord<VerdictHistoryRecord>(
+            result.rows[0].record,
+            validVerdictHistory,
+            "verdict_history.record",
+          );
+    });
+  }
+  async applyActionAdjudicationVerdict(
+    input: Parameters<Store["applyActionAdjudicationVerdict"]>[0],
+  ): ReturnType<Store["applyActionAdjudicationVerdict"]> {
+    return this.transact(input, async (client, captured) => {
+      const requestId = captured.verdict.authorizationRequestId;
+      const verdictFingerprint = commandFingerprint({
+        verdict: captured.verdict,
+        verdictHash: captured.verdictHash,
+      });
+      const priorResult = await client.query<{
+        readonly fingerprint: string;
+        readonly record: unknown;
+      }>(
+        `SELECT fingerprint, record FROM ${this.quotedSchema}.verdict_history
+          WHERE request_id = $1 FOR UPDATE`,
+        [requestId],
+      );
+      const prior = priorResult.rows[0];
+      if (prior !== undefined) {
+        const record = decodeStoredRecord<VerdictHistoryRecord>(
+          prior.record,
+          validVerdictHistory,
+          "verdict_history.record",
+        );
+        return prior.fingerprint === verdictFingerprint
+          ? { kind: "replayed", receipt: record.receipt } as const
+          : { kind: "conflict" } as const;
+      }
+      const pendingResult = await client.query<{
+        readonly request: unknown;
+        readonly context: unknown;
+        readonly class_id: string;
+        readonly status_record: unknown;
+        readonly status_revision: string;
+        readonly status_state: string;
+      }>(
+        `SELECT aa.request, aa.context, aa.class_id,
+                ast.record AS status_record, ast.revision AS status_revision,
+                ast.state AS status_state
+           FROM ${this.quotedSchema}.action_adjudications aa
+           JOIN ${this.quotedSchema}.authorization_status ast
+             ON ast.authorization_request_id = aa.authorization_request_id
+          WHERE aa.authorization_request_id = $1
+          FOR UPDATE OF aa, ast`,
+        [requestId],
+      );
+      const pendingRow = pendingResult.rows[0];
+      if (pendingRow === undefined || pendingRow.status_state !== "pending_adjudication") {
+        return { kind: "terminal" } as const;
+      }
+      const request = decodeStoredRecord<ActionAdjudicationRequest>(
+        pendingRow.request,
+        validActionAdjudicationRequest,
+        "action_adjudications.request",
+      );
+      const persisted = decodeStoredRecord<PendingAuthorizationContext>(
+        pendingRow.context,
+        validAuthorizationContext,
+        "action_adjudications.context",
+      );
+      const verdictMatches = captured.verdict.jobId === request.jobId &&
+        captured.verdict.collectionCycle === request.collectionCycle &&
+        captured.verdict.effectIntentId === request.effectIntent.id &&
+        captured.verdict.effectIntentHash === request.effectIntentHash &&
+        captured.verdict.inputHash === request.inputHash &&
+        captured.verdict.decisionResultHash === request.decisionResultHash &&
+        equal(captured.verdict.evidence, request.evidence) &&
+        captured.verdict.resultAdjudicationVerdictHash ===
+          request.resultAdjudicationVerdictHash &&
+        captured.verdict.contractVersion === request.contractVersion &&
+        captured.verdict.permitEpoch === request.permitEpoch &&
+        captured.verdict.decision === captured.decision;
+      if (!verdictMatches) return { kind: "conflict" } as const;
+      const current = await this.loadAuthorizationContext(
+        client,
+        request.decisionResultHash,
+        true,
+      );
+      const expectedCurrent = {
+        decision: captured.expectedContext.current.decision,
+        jobCycle: captured.expectedContext.current.jobCycle,
+        currentJob: captured.expectedContext.current.currentJob,
+        resultState: captured.expectedContext.current.resultState,
+        classVersion: captured.expectedContext.current.classVersion,
+      };
+      if (current === null ||
+          !equal(persisted, captured.expectedContext.persisted) ||
+          !equal(current, expectedCurrent) ||
+          current.currentJob.collectionCycle !== request.collectionCycle ||
+          current.resultState !== "verified" ||
+          !this.contextEligible(
+            current.classVersion,
+            captured.processedAt,
+            captured.expectedContext.persisted.maxInFlightDeadline,
+          )) {
+        return { kind: "freshness_conflict" } as const;
+      }
+      const receipt = captured.decision === "approve"
+        ? {
+            requestId,
+            verdictHash: captured.verdictHash,
+            decidedAt: captured.verdict.decidedAt,
+            outcome: "approved" as const,
+          }
+        : {
+            requestId,
+            verdictHash: captured.verdictHash,
+            decidedAt: captured.verdict.decidedAt,
+            outcome: "denied" as const,
+          };
+      let status: AuthorizationStatus;
+      if (captured.decision === "approve") {
+        const authorization = captured.authorization;
+        if (authorization.authorizationRequestId !== requestId ||
+            authorization.effectIntentId !== request.effectIntent.id ||
+            authorization.effectIntentHash !== request.effectIntentHash ||
+            authorization.jobId !== request.jobId ||
+            authorization.collectionCycle !== request.collectionCycle ||
+            authorization.inputHash !== request.inputHash ||
+            authorization.decisionResultHash !== request.decisionResultHash ||
+            !equal(authorization.evidence, request.evidence) ||
+            authorization.resultAdjudicationVerdictHash !==
+              request.resultAdjudicationVerdictHash ||
+            authorization.actionAdjudicationVerdictHash !== captured.verdictHash ||
+            authorization.contractVersion !== request.contractVersion ||
+            authorization.permitEpoch !== request.permitEpoch ||
+            !equal(authorization.actions, captured.verdict.actions)) {
+          return { kind: "conflict" } as const;
+        }
+        const effect = await client.query<{ readonly effect_intent_id: string }>(
+          `SELECT effect_intent_id FROM ${this.quotedSchema}.effect_intents
+            WHERE authorization_request_id = $1 FOR UPDATE`,
+          [requestId],
+        );
+        if (effect.rows[0] === undefined) {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            `authorization ${requestId} has no effect intent`,
+          );
+        }
+        await client.query(
+          `INSERT INTO ${this.quotedSchema}.authorizations
+             (authorization_request_id, effect_intent_id, class_id, job_id,
+              collection_cycle, record)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+          [requestId, effect.rows[0].effect_intent_id, pendingRow.class_id,
+            authorization.jobId, authorization.collectionCycle,
+            JSON.stringify(authorization)],
+        );
+        status = { state: "authorized", validity: { kind: "valid" } };
+      } else {
+        status = { state: "denied", reason: "human_rejected" };
+      }
+      const revision = decodePositiveRevision(
+        pendingRow.status_revision,
+        "authorization_status.revision",
+      );
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.authorization_status
+            SET state = $2, revision = $3, record = $4::jsonb
+          WHERE authorization_request_id = $1 AND revision = $5`,
+        [requestId, status.state, revision + 1, JSON.stringify(status), revision],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+      const history: VerdictHistoryRecord = {
+        kind: "action",
+        requestId,
+        verdictHash: captured.verdictHash,
+        verdict: structuredClone(captured.verdict),
+        receipt,
+      };
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.verdict_history
+           (request_id, kind, verdict_hash, processed_at, fingerprint, record)
+         VALUES ($1, 'action', $2, $3::timestamptz, $4, $5::jsonb)`,
+        [requestId, captured.verdictHash, captured.processedAt,
+          verdictFingerprint, JSON.stringify(history)],
+      );
+      await this.bumpAdjudicationLoad(client, pendingRow.class_id, captured.processedAt);
+      return { kind: "applied", receipt } as const;
+    });
+  }
+  async inspectAdjudicationLoad(
+    input: Parameters<Store["inspectAdjudicationLoad"]>[0],
+  ): ReturnType<Store["inspectAdjudicationLoad"]> {
+    return withPoolClient(this.#pool, (client) =>
+      this.loadAdjudicationLoad(client, input));
+  }
+
+  async refreshClassHealth(
+    input: Parameters<Store["refreshClassHealth"]>[0],
+  ): ReturnType<Store["refreshClassHealth"]> {
+    return this.transact(input, async (client, captured) => {
+      const replayKey = commandFingerprint(captured);
+      const replay = await this.readReplay<{
+        readonly kind: "applied";
+        readonly health: ClassHealthSnapshot;
+        readonly load: AdjudicationLoadSnapshot;
+      }>(
+        client,
+        "refresh_class_health",
+        replayKey,
+        replayKey,
+        validOutcome("applied"),
+      );
+      if (replay !== null) return { ...replay, kind: "replayed" } as const;
+      const healthResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.class_health
+          WHERE class_id = $1 FOR UPDATE`,
+        [captured.expectedHealth.classId],
+      );
+      const healthRow = healthResult.rows[0];
+      if (healthRow === undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `class ${captured.expectedHealth.classId} has no health snapshot`,
+        );
+      }
+      const current = decodeHealth(healthRow);
+      const load = await this.loadAdjudicationLoad(client, {
+        classId: captured.expectedLoad.classId,
+        windowStartsAt: captured.expectedLoad.windowStartsAt,
+      });
+      const versionsResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.class_versions
+          WHERE class_id = $1 ORDER BY contract_version COLLATE "C"
+          FOR UPDATE`,
+        [current.classId],
+      );
+      const versions = versionsResult.rows.map((row) => decodeClassVersion(row));
+      if (!equal(current, captured.expectedHealth) ||
+          !equal(load, captured.expectedLoad) ||
+          !equal(versions, captured.expectedClassVersions) ||
+          current.classId !== load.classId) {
+        return { kind: "conflict", health: current, load } as const;
+      }
+      const next: ClassHealthSnapshot = {
+        revision: current.revision + 1,
+        classId: current.classId,
+        health: {
+          ...structuredClone(captured.next.health),
+          reserves: structuredClone(current.health.reserves),
+        },
+        updatedAt: captured.next.updatedAt,
+        source: captured.next.source,
+        ...(captured.next.adjudicationUnsafeSince === undefined
+          ? {}
+          : { adjudicationUnsafeSince: captured.next.adjudicationUnsafeSince }),
+      };
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.class_health
+            SET revision = $2, operating = $3, updated_at = $4::timestamptz,
+                adjudication_unsafe_since = $5::timestamptz, record = $6::jsonb
+          WHERE class_id = $1 AND revision = $7`,
+        [current.classId, next.revision, next.health.operating, next.updatedAt,
+          next.adjudicationUnsafeSince ?? null, JSON.stringify(next), current.revision],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+      const outcome = { kind: "applied" as const, health: next, load };
+      await this.writeReplay(
+        client,
+        "refresh_class_health",
+        replayKey,
+        replayKey,
+        outcome,
+      );
+      return outcome;
+    });
+  }
+  async enterEmergencyHalt(
+    input: Parameters<Store["enterEmergencyHalt"]>[0],
+  ): ReturnType<Store["enterEmergencyHalt"]> {
+    return this.transact(input, async (client, captured) => {
+      const replayKey = commandFingerprint(captured);
+      const replay = await this.readReplay<Extract<
+        Awaited<ReturnType<Store["enterEmergencyHalt"]>>,
+        { kind: "applied" }
+      >>(
+        client,
+        "enter_emergency_halt",
+        replayKey,
+        replayKey,
+        validOutcome("applied"),
+      );
+      if (replay !== null) return replay;
+      const queueResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.queue_state
+          WHERE singleton = true FOR UPDATE`,
+      );
+      const queueRow = queueResult.rows[0];
+      if (queueRow === undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "queue state is missing",
+        );
+      }
+      const queue = decodeQueue(queueRow);
+      const healthResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.class_health
+          ORDER BY class_id COLLATE "C" FOR UPDATE`,
+      );
+      const classHealth = healthResult.rows.map((row) => decodeHealth(row));
+      const currentInvalidations = await Promise.all(captured.invalidations.map((entry) =>
+        this.loadInvalidationSnapshot(client, entry.scope, true)));
+      const expectedHealth = [...captured.expectedClassHealth].sort((left, right) =>
+        compareWireIds(left.classId, right.classId));
+      const classIds = classHealth.map((entry) => entry.classId);
+      const nextIds = captured.nextClassHealth.map((entry) => entry.classId);
+      const invalidationIds = captured.invalidations.map((entry) => entry.scope.classId);
+      const invalidationsMatch = equal(invalidationIds, [...invalidationIds].sort(compareWireIds)) &&
+        equal(invalidationIds, classIds) &&
+        captured.invalidations.every((entry, index) => {
+          const expectedTargets = [...entry.expectedTargets].sort((left, right) =>
+            compareWireIds(left.jobId, right.jobId) ||
+            left.collectionCycle - right.collectionCycle);
+          return equal(currentInvalidations[index]?.targets, expectedTargets);
+        });
+      if (!equal(queue, captured.expectedQueue) ||
+          !equal(classHealth, expectedHealth) ||
+          !equal(nextIds, classIds) || !invalidationsMatch) {
+        return {
+          kind: "conflict",
+          queue,
+          classHealth,
+          invalidations: currentInvalidations,
+        } as const;
+      }
+      const invalidations = [] as Extract<Awaited<ReturnType<
+        Store["enterEmergencyHalt"]
+      >>, { kind: "applied" }>["invalidations"] extends readonly (infer Entry)[]
+        ? Entry[]
+        : never;
+      for (let index = 0; index < captured.invalidations.length; index += 1) {
+        const entry = captured.invalidations[index]!;
+        invalidations.push(await this.applyInvalidation(
+          client,
+          currentInvalidations[index]!,
+          "emergency_halted",
+          entry.requeuePlans,
+          captured.at,
+        ));
+      }
+      const nextQueue: QueueModeSnapshot = {
+        revision: queue.revision + 1,
+        mode: "emergency_halted",
+        cause: captured.nextQueue.cause,
+        updatedAt: captured.nextQueue.updatedAt,
+      };
+      await client.query(
+        `UPDATE ${this.quotedSchema}.queue_state
+            SET revision = $1, mode = $2, cause = $3,
+                updated_at = $4::timestamptz, record = $5::jsonb
+          WHERE singleton = true`,
+        [nextQueue.revision, nextQueue.mode, nextQueue.cause,
+          nextQueue.updatedAt, JSON.stringify(nextQueue)],
+      );
+      const nextHealth: ClassHealthSnapshot[] = [];
+      for (let index = 0; index < classHealth.length; index += 1) {
+        const current = classHealth[index]!;
+        const prepared = captured.nextClassHealth[index]!;
+        const next: ClassHealthSnapshot = {
+          revision: current.revision + 1,
+          classId: current.classId,
+          health: {
+            ...structuredClone(prepared.health),
+            reserves: structuredClone(current.health.reserves),
+          },
+          updatedAt: prepared.updatedAt,
+          source: prepared.source,
+          ...(current.adjudicationUnsafeSince === undefined
+            ? {}
+            : { adjudicationUnsafeSince: current.adjudicationUnsafeSince }),
+        };
+        await client.query(
+          `UPDATE ${this.quotedSchema}.class_health
+              SET revision = $2, operating = $3, updated_at = $4::timestamptz,
+                  adjudication_unsafe_since = $5::timestamptz, record = $6::jsonb
+            WHERE class_id = $1`,
+          [next.classId, next.revision, next.health.operating, next.updatedAt,
+            next.adjudicationUnsafeSince ?? null, JSON.stringify(next)],
+        );
+        nextHealth.push(next);
+      }
+      const outcome = {
+        kind: "applied" as const,
+        queue: nextQueue,
+        classHealth: nextHealth,
+        invalidations,
+      };
+      await this.writeReplay(
+        client,
+        "enter_emergency_halt",
+        replayKey,
+        replayKey,
+        outcome,
+      );
+      return outcome;
+    });
+  }
+  async getReservePolicy(
+    input: Parameters<Store["getReservePolicy"]>[0],
+  ): ReturnType<Store["getReservePolicy"]> {
+    return withPoolClient(this.#pool, (client) =>
+      this.loadReservePolicy(client, input));
+  }
+
+  async initializeReservePolicy(
+    input: Parameters<Store["initializeReservePolicy"]>[0],
+  ): ReturnType<Store["initializeReservePolicy"]> {
+    return this.transact(input, async (client, captured) => {
+      const key = `${captured.policy.classId}:${captured.policy.contractVersion}:${captured.policy.lane}`;
+      const fingerprint = commandFingerprint(captured.policy);
+      const replayResult = await client.query<ReplayRow>(
+        `SELECT fingerprint, outcome FROM ${this.quotedSchema}.command_replays
+          WHERE command_kind = 'initialize_reserve_policy' AND command_key = $1`,
+        [key],
+      );
+      const prior = replayResult.rows[0];
+      if (prior !== undefined && prior.fingerprint === fingerprint) {
+        const outcome = decodeOpaqueRecord<{
+          readonly current: ReservePolicyRecord;
+          readonly classHealth: ClassHealthSnapshot;
+        }>(prior.outcome, "initialize_reserve_policy.outcome");
+        return { ...outcome, kind: "replayed" } as const;
+      }
+      const existing = await this.loadReservePolicy(client, captured.policy, true);
+      if (existing !== null) return { kind: "conflict", current: existing } as const;
+      const versionResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.class_versions
+          WHERE class_id = $1 AND contract_version = $2 FOR UPDATE`,
+        [captured.policy.classId, captured.policy.contractVersion],
+      );
+      const versionRow = versionResult.rows[0];
+      if (versionRow === undefined) {
+        return { kind: "refused", reason: "class_version_not_found" } as const;
+      }
+      const version = decodeClassVersion(versionRow);
+      if (version.state === "retired") {
+        return { kind: "refused", reason: "class_version_retired" } as const;
+      }
+      const healthResult = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.class_health
+          WHERE class_id = $1 FOR UPDATE`,
+        [captured.policy.classId],
+      );
+      if (healthResult.rows[0] === undefined) {
+        return { kind: "refused", reason: "class_health_missing" } as const;
+      }
+      if (!this.validReservePolicy(captured.policy)) {
+        return { kind: "refused", reason: "invalid_policy" } as const;
+      }
+      const current: ReservePolicyRecord = {
+        revision: 1,
+        policy: structuredClone(captured.policy),
+        used: 0,
+        workerUsage: [],
+        updatedAt: captured.at,
+      };
+      const inserted = await client.query(
+        `INSERT INTO ${this.quotedSchema}.reserve_policies
+           (class_id, contract_version, lane, revision, window_id,
+            window_starts_at, window_ends_at, record)
+         VALUES ($1, $2, $3, 1, $4, $5::timestamptz, $6::timestamptz, $7::jsonb)
+         ON CONFLICT (class_id, contract_version, lane) DO NOTHING`,
+        [
+          current.policy.classId,
+          current.policy.contractVersion,
+          current.policy.lane,
+          current.policy.windowId,
+          current.policy.windowStartsAt,
+          current.policy.windowEndsAt,
+          JSON.stringify(current),
+        ],
+      );
+      if (inserted.rowCount !== 1) restartSerializableTransaction();
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.reserve_window_history
+           (class_id, contract_version, lane, window_id)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          current.policy.classId,
+          current.policy.contractVersion,
+          current.policy.lane,
+          current.policy.windowId,
+        ],
+      );
+      const classHealth = await this.publishReserveHealth(
+        client,
+        current.policy.classId,
+        captured.at,
+      );
+      const outcome = { kind: "initialized" as const, current, classHealth };
+      await this.writeReplay(
+        client,
+        "initialize_reserve_policy",
+        key,
+        fingerprint,
+        outcome,
+      );
+      return outcome;
+    });
+  }
+
+  async transitionReservePolicy(
+    input: Parameters<Store["transitionReservePolicy"]>[0],
+  ): ReturnType<Store["transitionReservePolicy"]> {
+    return this.transact(input, async (client, captured) => {
+      const replayKey = commandFingerprint({
+        expected: captured.expected,
+        next: captured.next,
+      });
+      const replay = await this.readReplay<{
+        readonly kind: "applied";
+        readonly current: ReservePolicyRecord;
+        readonly classHealth: ClassHealthSnapshot;
+      }>(
+        client,
+        "transition_reserve_policy",
+        replayKey,
+        replayKey,
+        validOutcome("applied"),
+      );
+      if (replay !== null) return { ...replay, kind: "replayed" } as const;
+      const current = await this.loadReservePolicy(
+        client,
+        captured.expected.policy,
+        true,
+      );
+      if (current === null) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "reserve policy is missing",
+        );
+      }
+      if (!equal(current, captured.expected)) {
+        return { kind: "conflict", current } as const;
+      }
+      const versionResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.class_versions
+          WHERE class_id = $1 AND contract_version = $2 FOR UPDATE`,
+        [captured.next.classId, captured.next.contractVersion],
+      );
+      const versionRow = versionResult.rows[0];
+      if (versionRow !== undefined && decodeClassVersion(versionRow).state === "retired") {
+        return { kind: "refused", reason: "class_version_retired" } as const;
+      }
+      const health = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.class_health
+          WHERE class_id = $1 FOR UPDATE`,
+        [captured.next.classId],
+      );
+      if (health.rows[0] === undefined) {
+        return { kind: "refused", reason: "class_health_missing" } as const;
+      }
+      const sameKey = captured.next.classId === current.policy.classId &&
+        captured.next.contractVersion === current.policy.contractVersion &&
+        captured.next.lane === current.policy.lane;
+      if (!sameKey || !this.validReservePolicy(captured.next)) {
+        return { kind: "refused", reason: "invalid_policy" } as const;
+      }
+      const sameWindow = captured.next.windowId === current.policy.windowId;
+      if (sameWindow &&
+          (captured.next.windowStartsAt !== current.policy.windowStartsAt ||
+            captured.next.windowEndsAt !== current.policy.windowEndsAt)) {
+        return { kind: "refused", reason: "window_not_forward" } as const;
+      }
+      if (!sameWindow) {
+        const reused = await client.query(
+          `SELECT 1 FROM ${this.quotedSchema}.reserve_window_history
+            WHERE class_id = $1 AND contract_version = $2 AND lane = $3
+              AND window_id = $4 FOR UPDATE`,
+          [
+            captured.next.classId,
+            captured.next.contractVersion,
+            captured.next.lane,
+            captured.next.windowId,
+          ],
+        );
+        if (reused.rows[0] !== undefined ||
+            Date.parse(captured.next.windowStartsAt) <
+              Date.parse(current.policy.windowEndsAt)) {
+          return { kind: "refused", reason: "window_not_forward" } as const;
+        }
+      }
+      const next: ReservePolicyRecord = {
+        revision: current.revision + 1,
+        policy: structuredClone(captured.next),
+        used: sameWindow ? current.used : 0,
+        workerUsage: sameWindow ? structuredClone(current.workerUsage) : [],
+        updatedAt: captured.at,
+      };
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.reserve_policies
+            SET revision = $4, window_id = $5,
+                window_starts_at = $6::timestamptz,
+                window_ends_at = $7::timestamptz, record = $8::jsonb
+          WHERE class_id = $1 AND contract_version = $2 AND lane = $3
+            AND revision = $9`,
+        [
+          next.policy.classId,
+          next.policy.contractVersion,
+          next.policy.lane,
+          next.revision,
+          next.policy.windowId,
+          next.policy.windowStartsAt,
+          next.policy.windowEndsAt,
+          JSON.stringify(next),
+          current.revision,
+        ],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+      if (!sameWindow) {
+        await client.query(
+          `INSERT INTO ${this.quotedSchema}.reserve_window_history
+             (class_id, contract_version, lane, window_id)
+           VALUES ($1, $2, $3, $4)`,
+          [next.policy.classId, next.policy.contractVersion, next.policy.lane,
+            next.policy.windowId],
+        );
+      }
+      const classHealth = await this.publishReserveHealth(
+        client,
+        next.policy.classId,
+        captured.at,
+      );
+      const outcome = { kind: "applied" as const, current: next, classHealth };
+      await this.writeReplay(
+        client,
+        "transition_reserve_policy",
+        replayKey,
+        replayKey,
+        outcome,
+      );
+      return outcome;
+    });
+  }
+
+  async chargeReserve(
+    charge: Parameters<Store["chargeReserve"]>[0],
+  ): ReturnType<Store["chargeReserve"]> {
+    return this.transact(charge, (client, captured) =>
+      this.settleReserve(client, captured));
+  }
   readonly appendLedger = notImplemented<Store["appendLedger"]>("appendLedger");
   readonly listLedger = notImplemented<Store["listLedger"]>("listLedger");
   readonly recordReputationEvidence = notImplemented<Store["recordReputationEvidence"]>("recordReputationEvidence");

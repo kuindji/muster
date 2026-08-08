@@ -59,9 +59,13 @@ atomic claim/suspension/abandonment/expiry behavior. Task 5 now persists
 holder-bound accepted submissions and invalid settlements with durable replay,
 optional reputation evidence, canary-excluding same-cycle replica projection,
 absorbing split markers, automatic decisions, result requeues, old-cycle
-isolation, and live authorization-context reads. Reserves, adjudication,
-authorization, and invalidation are the next bounded unit. MCP planning remains
-separate.
+isolation, and live authorization-context reads. Task 6 now persists reserve
+policy windows and atomic charges, composite authorization settlements,
+result/action adjudications and canonical verdict history, immutable initial
+authorization receipts plus mutable live validity, complete class-qualified
+invalidation and requeue batches, adjudication load/health refresh, and
+queue-wide emergency halt. Ledger, privacy, and reputation evidence are the
+next bounded adapter unit. MCP planning remains separate.
 
 ## Specs
 
