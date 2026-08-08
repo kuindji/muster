@@ -41,6 +41,49 @@ if (existsSync(postgresPkgPath)) {
     fail("muster-store-postgres must not depend directly on muster-contract");
 }
 
+// --- MCP transport dependency and package boundaries ---
+const mcpPkgPath = "packages/mcp/package.json";
+if (existsSync(mcpPkgPath)) {
+  const pkg = JSON.parse(readFileSync(mcpPkgPath, "utf8"));
+  const deps = Object.keys(pkg.dependencies ?? {}).sort();
+  const expected = [
+    "@kuindji/muster-contract",
+    "@kuindji/muster-core",
+    "@modelcontextprotocol/server",
+    "jose",
+  ];
+  if (JSON.stringify(deps) !== JSON.stringify(expected))
+    fail(
+      `muster-mcp runtime deps must be exactly ${JSON.stringify(expected)}, got: ${JSON.stringify(deps)}`,
+    );
+  if (pkg.engines?.node !== ">=20")
+    fail("muster-mcp must require Node >=20");
+  if (
+    pkg.type !== "module" ||
+    pkg.main !== "./dist/index.cjs" ||
+    pkg.module !== "./dist/index.js" ||
+    pkg.types !== "./dist/index.d.ts"
+  ) {
+    fail("muster-mcp must expose ESM, CJS, and declaration outputs");
+  }
+}
+
+function scanMcpBoundary(dir) {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    if (statSync(p).isDirectory()) {
+      scanMcpBoundary(p);
+      continue;
+    }
+    if (!/\.(ts|js|mjs|cjs)$/.test(entry)) continue;
+    const text = readFileSync(p, "utf8");
+    if (/gate\/stub-mcp|muster-gate-stub/.test(text))
+      fail(`${p} imports or references the throwaway MCP gate`);
+  }
+}
+scanMcpBoundary("packages/mcp/src");
+
 // --- §8.3: no network or filesystem API references in contract/core sources ---
 const FORBIDDEN = [
   /from\s+["']node:/,

@@ -189,7 +189,7 @@ apply corrections, and tag the reviewed boundary before Task 2.
 Checkpoint: every MCP-visible fact and failure has one reviewed owner; no MCP
 runtime package exists yet.
 
-## Task 2: Package boundary and protocol harness
+## Task 2: Package boundary and protocol harness (complete 2026-08-08)
 
 Create the package skeleton:
 
@@ -216,6 +216,19 @@ Create the package skeleton:
 Checkpoint: the package builds and its unauthenticated transport/protocol suite
 passes; tools are listed from frozen schemas but no authenticated handler calls
 core yet.
+
+Implementation checkpoint: `@kuindji/muster-mcp` now exposes the immutable
+configuration and framework-neutral web handler, serves both canonical RFC 9728
+protected-resource metadata paths, and lists the six frozen tools through the
+official v2 SDK. The package pins the supported eras to `2026-07-28` and
+`2025-11-25`, keeps protocol sessions absent, validates request size before JSON
+parsing, and rejects invalid resource/Host/Origin, method, media type, Accept,
+protocol/header, and version boundaries before any future authentication,
+MCP-state, or core dispatch. The real SDK client harness covers JSON,
+request-scoped SSE, legacy compatibility, concurrency, cancellation, and exact
+modern schema identity. The SDK's specified legacy projection wraps only
+non-object-root output schemas in `{ result }`; it does not change the modern
+frozen catalog. Authentication and identity resolution remain Task 3.
 
 ## Task 3: OAuth resource server, JWKS, and per-call identity
 

@@ -83,8 +83,16 @@ own coarse status buckets and next-slot projection, canonical complete-class
 skill releases, singular availability-invariant v1 leasing, transport-body
 padding, exact OAuth scopes, atomic MCP mapping/rate/slot state, ordered
 revocation checks, and tool outcome projection. The worker wire remains `1.1.0`
-and the reviewed boundary is tagged locally as `contract-freeze-16`. No MCP
-runtime package exists yet; Task 2 is the next bounded unit.
+and the reviewed boundary is tagged locally as `contract-freeze-16`. MCP Task
+2 now adds the `@kuindji/muster-mcp` package boundary, immutable HTTPS/resource,
+issuer/JWKS, algorithm, Origin, body-limit, clock-skew, and closed-description
+configuration, a framework-neutral stateless web handler, exact RFC 9728
+metadata routes, and the frozen six-tool catalog. Its real v2 SDK harness passes
+the `2026-07-28` JSON and request-scoped SSE paths plus the `2025-11-25`
+compatibility path, concurrency, cancellation, unsupported-version, header,
+body, method, media-type, and no-session cases. Tool dispatch still returns a
+generic pending error and makes no authentication, MCP-state, or core call;
+Task 3 is the next bounded unit.
 
 ## PostgreSQL adapter verification
 
