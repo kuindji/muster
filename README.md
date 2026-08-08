@@ -74,7 +74,12 @@ owner, and fresh plus checked-in-prefix migration paths run in CI. The adapter's
 documentation and independent semantic review are complete. Review corrections
 add forward-only invalidation-scope indexes and fail-loud durable reserve replay
 decoding without changing the frozen Store boundary. The PostgreSQL adapter
-milestone is complete; MCP planning remains separate.
+milestone is complete. The
+[MCP implementation plan](docs/superpowers/plans/2026-08-08-muster-mcp.md)
+is now drafted against the live boundary. Its first implementation gate is a
+narrow contract amendment for the remaining unowned status, availability,
+rate-limit, revocation, and side-channel semantics; runtime work cannot begin
+until that amendment is independently reviewed and tagged.
 
 ## PostgreSQL adapter verification
 
