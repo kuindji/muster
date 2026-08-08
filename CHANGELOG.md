@@ -1,5 +1,19 @@
 # Changelog
 
+## MCP Task 5 — 2026-08-08
+
+Implemented the authenticated `lease_job`, `submit_result`, `abandon_job`, and
+`extend_lease` handlers against the reviewed `contract-freeze-17` boundary.
+Every call validates closed input before state or core work, atomically applies
+mapping/rate/slot/availability policy, invokes only public core services, and
+validates its exact structured output before returning a canonical JSON text
+mirror. Lease responses receive complete encoded-body padding outside the
+parsed value; long extension horizons use the frozen coarse continuation; and
+abandonment refusal exposes only `lease_not_held`. Focused transport, policy,
+race, replay, projection, and leakage tests pass, as does the same authenticated
+real-core flow over the in-memory and PostgreSQL Stores. Worker tools, skill
+releases, publication, deployment, and push remain separate.
+
 ## contract-freeze-17 — reviewed and tagged 2026-08-08
 
 Revision 28 corrects two MCP job projections discovered by the first Task-5

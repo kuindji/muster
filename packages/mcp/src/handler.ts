@@ -1,4 +1,5 @@
 import {
+  mcpLeasePaddingTargetBytes,
   MUSTER_MCP_SCOPES,
   MUSTER_MCP_TOOL_NAMES,
   MUSTER_MCP_TOOL_SCOPES,
@@ -11,6 +12,7 @@ import {
 import type { MusterMcpConfig } from "./config.js";
 import {
   MusterMcpAuthenticator,
+  type MusterMcpAuthenticatedRequest,
   type MusterMcpAuthenticationDependencies,
 } from "./auth.js";
 import {
@@ -19,12 +21,19 @@ import {
   plainErrorResponse,
 } from "./errors.js";
 import { createMusterMcpServer } from "./server.js";
+import {
+  MusterMcpJobToolDispatcher,
+  type MusterMcpJobToolDependencies,
+} from "./job-tools.js";
 
 export interface CreateMusterMcpHandlerOptions {
   readonly authentication: MusterMcpAuthenticationDependencies;
+  readonly jobTools: MusterMcpJobToolDependencies;
   readonly responseMode?: PerRequestResponseMode;
   readonly onerror?: (error: Error) => void;
 }
+
+const AUTHENTICATED_CONTEXT_KEY = "muster.authenticated-request.v1";
 
 const PRE_AUTH_PROTOCOL_METHODS = new Set([
   "initialize",
@@ -55,6 +64,16 @@ function toolScope(value: unknown): MusterMcpScope | undefined {
     return undefined;
   }
   return MUSTER_MCP_TOOL_SCOPES[name as keyof typeof MUSTER_MCP_TOOL_SCOPES];
+}
+
+function toolName(value: unknown): string | undefined {
+  if (messageMethod(value) !== "tools/call") return undefined;
+  const params = (value as { readonly params?: unknown }).params;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    return undefined;
+  }
+  const name = (params as { readonly name?: unknown }).name;
+  return typeof name === "string" ? name : undefined;
 }
 
 function hasProtocolHeaderMismatch(request: Request, value: unknown): boolean {
@@ -156,6 +175,29 @@ async function boundedRequestBody(
   return bytes;
 }
 
+async function padLeaseResponse(response: Response): Promise<Response> {
+  if (response.body === null) return response;
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]
+    ?.trim().toLowerCase();
+  if (contentType !== "application/json" && contentType !== "text/event-stream") {
+    return response;
+  }
+  const body = new Uint8Array(await response.arrayBuffer());
+  const target = mcpLeasePaddingTargetBytes(body.byteLength);
+  if (target === body.byteLength) return response;
+  const padded = new Uint8Array(target);
+  padded.set(body);
+  padded.fill(0x20, body.byteLength);
+  if (contentType === "text/event-stream") padded[body.byteLength] = 0x3a;
+  const headers = new Headers(response.headers);
+  headers.set("content-length", String(target));
+  return new Response(padded, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function createMusterMcpHandler(
   config: MusterMcpConfig,
   options: CreateMusterMcpHandlerOptions,
@@ -164,8 +206,17 @@ export function createMusterMcpHandler(
     config,
     options.authentication,
   );
+  const jobTools = new MusterMcpJobToolDispatcher(options.jobTools);
   const sdkHandler = createMcpHandler(
-    () => createMusterMcpServer(config),
+    (context) => {
+      const authenticated = context.authInfo?.extra?.[AUTHENTICATED_CONTEXT_KEY] as
+        | MusterMcpAuthenticatedRequest
+        | undefined;
+      return createMusterMcpServer(config, {
+        jobTools,
+        ...(authenticated === undefined ? {} : { authenticated }),
+      });
+    },
     {
       legacy: "stateless",
       ...(options.responseMode === undefined
@@ -239,6 +290,7 @@ export function createMusterMcpHandler(
         signal: request.signal,
       });
       const method = messageMethod(message);
+      let authenticated: MusterMcpAuthenticatedRequest | undefined;
       if (
         method !== null &&
         PRE_AUTH_PROTOCOL_METHODS.has(method) &&
@@ -249,16 +301,32 @@ export function createMusterMcpHandler(
           toolScope(message),
         );
         if (!authentication.ok) return authentication.response;
+        authenticated = authentication.authenticated;
       }
-      const response = await sdkHandler.fetch(forwarded);
+      const response = await sdkHandler.fetch(forwarded, {
+        ...(authenticated === undefined
+          ? {}
+          : {
+              authInfo: {
+                token: "",
+                clientId: authenticated.workerId,
+                scopes: [...authenticated.scopes],
+                resource: new URL(config.resourceUrl),
+                extra: { [AUTHENTICATED_CONTEXT_KEY]: authenticated },
+              },
+            }),
+      });
       const headers = new Headers(response.headers);
       headers.set("cache-control", "no-store");
       headers.delete("mcp-session-id");
-      return new Response(response.body, {
+      const normalized = new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
         headers,
       });
+      return toolName(message) === "lease_job"
+        ? padLeaseResponse(normalized)
+        : normalized;
     },
     close: () => sdkHandler.close(),
   };

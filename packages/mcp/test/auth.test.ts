@@ -26,6 +26,7 @@ import {
 import {
   TEST_NOW,
   TEST_WORKER_ID,
+  createTestJobTools,
   validConfigInput,
 } from "./helpers.js";
 
@@ -231,7 +232,10 @@ async function fixture(options: {
       return fetch(`${jwksServer.url}/jwks`, init);
     },
   };
-  const handler = createMusterMcpHandler(config, { authentication });
+  const handler = createMusterMcpHandler(config, {
+    authentication,
+    jobTools: createTestJobTools(),
+  });
   return {
     config,
     rawSubject,

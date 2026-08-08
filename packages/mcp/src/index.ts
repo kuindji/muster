@@ -2,6 +2,7 @@ export * from "./auth.js";
 export * from "./config.js";
 export * from "./errors.js";
 export * from "./handler.js";
+export * from "./job-tools.js";
 export * from "./results.js";
 export * from "./server.js";
 export * from "./state-conformance.js";

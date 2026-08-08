@@ -321,7 +321,7 @@ authenticated handler integration proves severance fails closed while
 pseudonymous usage survives without retaining the raw subject. Job tool
 dispatch and core mutations remain Task 5.
 
-## Task 5: Job tool handlers
+## Task 5: Job tool handlers (complete 2026-08-08)
 
 Freeze interruption: the first runtime trace proved that core can successfully
 extend a lease beyond the fixed 7,200-second TTL table, while revision 27 had no
@@ -362,6 +362,17 @@ buckets, timing-work equivalence hooks, and zero leakage of precise causes.
 
 Checkpoint: all four job tools pass over the reference in-memory Store and the
 PostgreSQL Store through the same authenticated MCP suite.
+
+Implementation checkpoint: `MusterMcpJobToolDispatcher` validates the four
+closed inputs before durable state, atomically authorizes mapping, rate, slot,
+and availability policy, invokes the public lease/submission services, and
+validates every exact result before emitting its canonical JSON mirror. The
+request handler pads the complete JSON or SSE `lease_job` response outside the
+parsed result. Focused tests cover zero-budget behavior, monotonic availability,
+last-unit rate races, precise-cause suppression, exact submission replay,
+abandon classifications and refusal, fixed and overflow expiry buckets, and
+both transport modes. One authenticated real-core suite passes unchanged over
+the reference in-memory Store and the PostgreSQL Store.
 
 ## Task 6: Worker tools and canonical skill releases
 

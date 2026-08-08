@@ -5,7 +5,11 @@ import {
   readMcpJson,
   type CreateMusterMcpHandlerOptions,
 } from "../src/index.js";
-import { createTestAuthentication, validConfigInput } from "./helpers.js";
+import {
+  createTestAuthentication,
+  createTestJobTools,
+  validConfigInput,
+} from "./helpers.js";
 
 const accept = "application/json, text/event-stream";
 
@@ -36,7 +40,10 @@ const legacyList = JSON.stringify({
 });
 
 async function authenticatedHandler(
-  options: Omit<CreateMusterMcpHandlerOptions, "authentication"> = {},
+  options: Omit<
+    CreateMusterMcpHandlerOptions,
+    "authentication" | "jobTools"
+  > = {},
 ) {
   const config = createMusterMcpConfig(validConfigInput());
   const auth = await createTestAuthentication(config);
@@ -45,6 +52,7 @@ async function authenticatedHandler(
     handler: createMusterMcpHandler(config, {
       ...options,
       authentication: auth.authentication,
+      jobTools: createTestJobTools(),
     }),
     authorizationHeader: auth.authorizationHeader,
   };

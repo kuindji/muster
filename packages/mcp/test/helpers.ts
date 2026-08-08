@@ -5,14 +5,69 @@ import {
   type MusterMcpConfigInput,
 } from "../src/index.js";
 import type {
+  AuthorizeMcpCallInput,
+  McpRateLimitPolicy,
   McpSubjectBinding,
   MusterMcpScope,
 } from "@kuindji/muster-contract";
+import type { MusterMcpJobToolDependencies } from "../src/index.js";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
 export const TEST_NOW = "2026-08-08T10:00:00.000Z";
 export const TEST_SUBJECT = "subject-test-1";
 export const TEST_WORKER_ID = "worker-test-1";
+
+export const TEST_RATE_LIMIT_POLICY: McpRateLimitPolicy = {
+  version: "rate-test-1",
+  windowSeconds: 60,
+  maxCallsPerWindow: {
+    lease_job: 20,
+    submit_result: 20,
+    abandon_job: 20,
+    extend_lease: 20,
+    get_worker_status: 20,
+    set_availability: 20,
+  },
+  maxLeaseAttemptsPerSlot: 20,
+};
+
+export function createTestJobTools(
+  overrides: Partial<MusterMcpJobToolDependencies> = {},
+): MusterMcpJobToolDependencies {
+  return {
+    stateStore: {
+      authorizeCall: async (input: AuthorizeMcpCallInput) => ({
+        kind: "authorized" as const,
+        current: {
+          workerId: input.expectedBinding.workerId,
+          bindingRevision: input.expectedBinding.revision,
+          tool: input.tool,
+          ratePolicyVersion: input.policy.version,
+          rateWindowId: input.window.id,
+          assignedSlotOccurrence: input.assignedSlotOccurrence,
+          callsUsed: 1,
+          leaseAttemptsUsed: input.tool === "lease_job" ? 1 : 0,
+          ...(input.availabilityBudgetBucket === undefined
+            ? {}
+            : { availabilityBudgetBucket: input.availabilityBudgetBucket }),
+        },
+      }),
+    },
+    rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
+    leaseService: {
+      leaseJob: async () => ({ outcome: "no_work" as const }),
+      extendLease: async () => ({ outcome: "refused" as const }),
+      abandonLease: async () => ({ outcome: "refused" as const }),
+    },
+    submissionService: {
+      submitResult: async () => ({
+        ok: false as const,
+        error: "lease_not_held" as const,
+      }),
+    },
+    ...overrides,
+  };
+}
 
 const keyMaterial = generateKeyPair("RS256").then(async ({ privateKey, publicKey }) => {
   const publicJwk = await exportJWK(publicKey);

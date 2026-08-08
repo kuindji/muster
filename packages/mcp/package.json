@@ -30,8 +30,12 @@
     "jose": "^6.2.8"
   },
   "devDependencies": {
+    "@kuindji/muster-store-postgres": "workspace:*",
     "@modelcontextprotocol/client": "2.0.0",
+    "@testcontainers/postgresql": "^12.1.0",
     "@types/node": "^22",
+    "@types/pg": "^8.21.0",
+    "pg": "^8.22.0",
     "typescript": "^5.9.2"
   }
 }

@@ -110,7 +110,13 @@ worker projections: a successful extension beyond the fixed TTL table and the
 exact abandon-refusal code. Revision 28 now continues long expiry buckets by
 doubling and maps every abandonment refusal to `lease_not_held`; the corrected
 boundary is reviewed and tagged locally as `contract-freeze-17`. Task 5 handler
-completion is the next bounded unit.
+completion now implements the four job tools through the authenticated MCP
+boundary, with closed input and output validation, atomic MCP-state preflight,
+canonical text mirrors, complete-response lease padding, coarse expiry
+projection, exact core submission replay, and uniform abandon/extension
+refusals. The same authenticated real-core suite passes over the in-memory and
+PostgreSQL Stores. Task 6 worker tools and canonical skill releases are the next
+bounded unit.
 
 ## PostgreSQL adapter verification
 

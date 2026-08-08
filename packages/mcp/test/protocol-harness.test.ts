@@ -12,7 +12,11 @@ import {
   createMusterMcpConfig,
   createMusterMcpHandler,
 } from "../src/index.js";
-import { createTestAuthentication, validConfigInput } from "./helpers.js";
+import {
+  createTestAuthentication,
+  createTestJobTools,
+  validConfigInput,
+} from "./helpers.js";
 
 async function connectClient(input: {
   readonly mode: "modern" | "legacy";
@@ -23,6 +27,7 @@ async function connectClient(input: {
   const auth = await createTestAuthentication(config);
   const handler = createMusterMcpHandler(config, {
     authentication: auth.authentication,
+    jobTools: createTestJobTools(),
     responseMode: input.responseMode,
   });
   const seen: Response[] = [];
@@ -106,6 +111,7 @@ describe("real MCP SDK protocol harness", () => {
     const auth = await createTestAuthentication(config);
     const handler = createMusterMcpHandler(config, {
       authentication: auth.authentication,
+      jobTools: createTestJobTools(),
       responseMode: "sse",
     });
     const handlerFetch = createHandlerFetch(handler);
@@ -166,6 +172,7 @@ describe("real MCP SDK protocol harness", () => {
     const auth = await createTestAuthentication(config);
     const handler = createMusterMcpHandler(config, {
       authentication: auth.authentication,
+      jobTools: createTestJobTools(),
     });
     const transport = new StreamableHTTPClientTransport(
       new URL(config.resourceUrl),

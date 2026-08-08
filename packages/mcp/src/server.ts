@@ -4,13 +4,23 @@ import {
 } from "@kuindji/muster-contract";
 import { Server, type ListToolsResult } from "@modelcontextprotocol/server";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
+import type { MusterMcpAuthenticatedRequest } from "./auth.js";
 import {
   MUSTER_MCP_PROTOCOL_VERSIONS,
   type MusterMcpConfig,
 } from "./config.js";
+import type { MusterMcpJobToolDispatcher } from "./job-tools.js";
 import { pendingToolResult } from "./results.js";
 
-export function createMusterMcpServer(config: MusterMcpConfig): Server {
+export interface MusterMcpServerRequestOptions {
+  readonly authenticated?: MusterMcpAuthenticatedRequest;
+  readonly jobTools?: MusterMcpJobToolDispatcher;
+}
+
+export function createMusterMcpServer(
+  config: MusterMcpConfig,
+  options: MusterMcpServerRequestOptions = {},
+): Server {
   const validator = new AjvJsonSchemaValidator();
   const server = new Server(
     { name: "muster", version: "0.1.0" },
@@ -34,8 +44,18 @@ export function createMusterMcpServer(config: MusterMcpConfig): Server {
         })),
       }) as unknown as ListToolsResult,
   );
-  server.setRequestHandler("tools/call", async () =>
-    server.projectCallToolResult(pendingToolResult(), undefined),
-  );
+  server.setRequestHandler("tools/call", async (request) => {
+    const result = options.jobTools === undefined
+      ? pendingToolResult()
+      : await options.jobTools.call(
+          request.params.name,
+          request.params.arguments ?? {},
+          options.authenticated,
+        );
+    const schema = TOOL_SCHEMAS[
+      request.params.name as keyof typeof TOOL_SCHEMAS
+    ]?.outputSchema;
+    return server.projectCallToolResult(result, schema);
+  });
   return server;
 }
