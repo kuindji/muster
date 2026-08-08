@@ -8,6 +8,7 @@ export type PostgresInfrastructureErrorCode =
   | "migration_checksum_mismatch"
   | "migration_unknown"
   | "migration_failed"
+  | "not_implemented"
   | "transaction_failed"
   | "transaction_retry_exhausted"
   | "unexpected_constraint_violation";

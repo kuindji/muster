@@ -246,7 +246,7 @@ PostgreSQL 16 migration races and isolation, bootstrap replay, manifest/history
 drift, failure rollback, codec rejection, retry/exhaustion paths, and packaged
 asset presence.
 
-## Task 3: Class, worker, routing, and operational control state
+## Task 3: Class, worker, routing, and operational control state (complete 2026-08-08)
 
 Implement the control-plane slice first:
 
@@ -279,6 +279,22 @@ join Task 4 after lease persistence exists.
 
 Checkpoint: every control-state case selected for Task 3 passes through
 PostgreSQL and the in-memory suite remains green.
+
+Completion note: `PostgresStore` is now structurally assignable to the complete
+frozen `Store`; later-task methods remain explicit `not_implemented`
+infrastructure failures. The Task-3 slice persists class versions and lifecycle
+cutoffs, class-qualified permit epochs, atomic worker plus routing registration,
+worker-state fencing, full routing snapshots, queue modes, and class health.
+Every mutation runs in one bounded serializable transaction, compares the
+complete frozen predecessor, records its original typed outcome for replay
+after later transitions or adapter restart, and uses stable row ordering for
+whole-set work. Retirement republishes accounting-owned reserve health while
+ordinary health transitions preserve it. The three lease-independent frozen
+Task-1 cases pass unchanged against PostgreSQL 16; focused two-client tests also
+cover state/revision races, canonical class-version locking, lifecycle cutoffs,
+reserve-health retirement, detached reads, and durable replay. Lease-backed
+worker suspension and the other Task-1 cases remain intentionally deferred to
+Task 4.
 
 ## Task 4: Job, payload, routing snapshot, and lease lifecycle
 
