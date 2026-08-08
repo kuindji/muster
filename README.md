@@ -76,10 +76,15 @@ add forward-only invalidation-scope indexes and fail-loud durable reserve replay
 decoding without changing the frozen Store boundary. The PostgreSQL adapter
 milestone is complete. The
 [MCP implementation plan](docs/superpowers/plans/2026-08-08-muster-mcp.md)
-is now drafted against the live boundary. Its first implementation gate is a
-narrow contract amendment for the remaining unowned status, availability,
-rate-limit, revocation, and side-channel semantics; runtime work cannot begin
-until that amendment is independently reviewed and tagged.
+is now drafted against the live boundary. Its first implementation gate is
+complete: revision 27 and the reviewed
+[freeze-16 MCP-boundary amendment](docs/superpowers/plans/2026-08-08-muster-contract-freeze-16-mcp-boundary.md)
+own coarse status buckets and next-slot projection, canonical complete-class
+skill releases, singular availability-invariant v1 leasing, transport-body
+padding, exact OAuth scopes, atomic MCP mapping/rate/slot state, ordered
+revocation checks, and tool outcome projection. The worker wire remains `1.1.0`
+and the reviewed boundary is tagged locally as `contract-freeze-16`. No MCP
+runtime package exists yet; Task 2 is the next bounded unit.
 
 ## PostgreSQL adapter verification
 
@@ -120,7 +125,7 @@ and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 26) | `oneshot` scope; tagged `contract-freeze-15` | What Muster does and does not guarantee, honest pull-based reputation eligibility, truthful degraded-mode behavior, class-qualified invalidation including epoch changes, proven diversity adjudication, class-health live-version policy aggregation, queue-wide atomic emergency batches, operations observations and queue causes, atomic starvation/load comparison, privacy-safe ledger records, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, replay-stable receipts, live validity, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 27) | `oneshot` scope; tagged `contract-freeze-16` | What Muster does and does not guarantee, exact MCP scopes/status/skill/rate/revocation/side-channel ownership, honest pull-based reputation eligibility, truthful degraded-mode behavior, class-qualified invalidation including epoch changes, proven diversity adjudication, class-health live-version policy aggregation, queue-wide atomic emergency batches, operations observations and queue causes, atomic starvation/load comparison, privacy-safe ledger records, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -142,9 +147,9 @@ and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 ## Contract freeze
 
 The wire contract remains frozen at version `1.1.0`. The current tagged
-internal boundary is revision 26 at `contract-freeze-15`. The binding scope is
+internal boundary is revision 27 at `contract-freeze-16`. The binding scope is
 defined
-by [spec §11.1–11.15](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+by [spec §11.1–11.16](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
 the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
 the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md),
@@ -180,6 +185,11 @@ The reviewed
 [freeze-15 Task-10 correction amendment](docs/superpowers/plans/2026-08-07-muster-contract-freeze-15-task10-review.md)
 removes unrepresentable policy promises and fences cross-class invalidation and
 unproven diversity adjudication; the corrected boundary is tagged locally.
+The reviewed
+[freeze-16 MCP-boundary amendment](docs/superpowers/plans/2026-08-08-muster-contract-freeze-16-mcp-boundary.md)
+freezes the remaining status, skill, availability, rate, scope, revocation,
+output, and side-channel semantics without changing worker wire `1.1.0`; no MCP
+runtime code is part of that tag.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

@@ -1141,5 +1141,227 @@
     "conditions": ["adjudication_starved"],
     "steps": [{ "command": "refreshClassHealth", "args": { "classId": "c1", "expectedHealthRevision": 1, "expectedLoadRevision": 1, "expectedClassVersions": ["v1", "v2"], "starvationDwell": 60 }, "expect": { "requiredRatePerWeek": 5, "operating": "ready" } }],
     "expectFinal": { "states": { "class-health:c1": "ready" } }
+  },
+  {
+    "id": "mcp-side-channel-availability-monotonic",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Availability is durable MCP state that can stay equal or decrease within one slot occurrence and never changes v1 job selection.",
+    "setup": { "mcp-binding:b1": { "revision": 1, "workerId": "w1" }, "mcp-slot:w1:s1": { "availabilityBudgetBucket": 2 } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeMcpCall", "args": { "bindingRevision": 1, "workerId": "w1", "tool": "lease_job", "policyVersion": "rate-1", "windowId": "rate-1:1", "assignedSlotOccurrence": "s1", "availabilityBudgetBucket": 1, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "authorized", "availabilityBudgetBucket": 1 } }],
+    "expectFinal": { "states": { "mcp-slot:w1:s1": "availability-1" } }
+  },
+  {
+    "id": "mcp-side-channel-no-work-coarse",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "All lease-domain refusals return the content-free no_work success value.",
+    "setup": { "worker:w1": { "state": "active" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "outcome": "no_work", "reason": "absent" } }],
+    "expectFinal": { "states": { "worker-output": "no_work" } }
+  },
+  {
+    "id": "mcp-side-channel-lease-attempt-rate-slot-bound",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Repeated lease attempts are counted atomically by mapped worker and deployment-owned slot occurrence.",
+    "setup": { "mcp-binding:b1": { "revision": 1, "workerId": "w1" } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeMcpCall", "args": { "bindingRevision": 1, "workerId": "w1", "tool": "lease_job", "policyVersion": "rate-1", "windowId": "rate-1:1", "assignedSlotOccurrence": "s1", "availabilityBudgetBucket": 2, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "authorized", "leaseAttemptsUsed": 1 } }],
+    "expectFinal": { "charges": { "mcp-lease-attempt:w1:s1": 1 } }
+  },
+  {
+    "id": "mcp-side-channel-selection-timing-invariant",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Candidate selection is independent of request timing and the availability bucket.",
+    "setup": { "candidate:j1": { "priority": 1 } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 1 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "jobId": "j1" } }],
+    "expectFinal": { "states": { "selection": "j1" } }
+  },
+  {
+    "id": "mcp-side-channel-ttl-batch-quantized",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "The singular v1 lease and TTL expose only frozen quantized values.",
+    "setup": { "lease:l1": { "ttlSeconds": 240 } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 3 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "batchSize": 1, "ttlBucketSeconds": 300 } }],
+    "expectFinal": { "states": { "lease:l1": "disclosed" } }
+  },
+  {
+    "id": "mcp-side-channel-payload-response-padding",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "The complete encoded lease response is padded outside the parsed value without changing payload or input hash.",
+    "setup": { "lease:l1": { "inputHash": "ih1" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "encodedResponseBytes": 4097, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "paddedBytes": 16384, "inputHash": "ih1" } }],
+    "expectFinal": { "states": { "lease-response": "padded" } }
+  },
+  {
+    "id": "mcp-side-channel-schema-policy-routing-invariant",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Public schema and policy versions do not participate in candidate routing order.",
+    "setup": { "candidate:j1": { "schemaVersion": "a", "priority": 1 }, "candidate:j2": { "schemaVersion": "b", "priority": 0 } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "jobId": "j1" } }],
+    "expectFinal": { "states": { "selection": "j1" } }
+  },
+  {
+    "id": "mcp-side-channel-source-language-minimized",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Worker output contains only sanitized task fields and no undeclared source or language metadata.",
+    "setup": { "candidate:j1": { "source": "private-source", "language": "en" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "sourceMetadata": "absent", "languageMetadata": "absent" } }],
+    "expectFinal": { "states": { "lease-response": "minimized" } }
+  },
+  {
+    "id": "mcp-side-channel-canary-real-resolved",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "A canary disclosed through MCP remains drawn from bound real resolved work and carries no canary marker.",
+    "setup": { "canary:c1": { "sourceJobId": "source-j1" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "canaryMarker": "absent", "sourceJobId": "internal-only" } }],
+    "expectFinal": { "states": { "canary:c1": "disclosed-as-work" } }
+  },
+  {
+    "id": "mcp-side-channel-extend-refusal-uniform",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Every domain-level extension refusal returns the same successful refusal value.",
+    "setup": { "lease:l1": { "state": "closed" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "extend_lease", "workerId": "w1", "input": { "lease_id": "l1" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "outcome": "refused", "reason": "absent" } }],
+    "expectFinal": { "states": { "worker-output": "uniform-refused" } }
+  },
+  {
+    "id": "mcp-side-channel-submit-error-uniform",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Submission failures expose only frozen worker-wire error codes and never validation detail.",
+    "setup": { "lease:l1": { "state": "open" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result": {} }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "error": "invalid_result", "detail": "absent" } }],
+    "expectFinal": { "states": { "worker-output": "uniform-wire-error" } }
+  },
+  {
+    "id": "mcp-side-channel-status-buckets-coarse",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Worker status exposes only the frozen usage and next-slot bucket indices.",
+    "setup": { "worker:w1": { "contributionUsed": 3, "declaredCapPerWeek": 4 } },
+    "conditions": [],
+    "steps": [{ "command": "getWorkerStatus", "args": { "workerId": "w1", "at": "2026-08-08T10:00:00.000Z" }, "expect": { "capUsageBucket": 2, "nextSlotBucket": 0, "exactUsage": "absent", "exactNextSlot": "absent" } }],
+    "expectFinal": { "states": { "worker-status:w1": "coarse" } }
+  },
+  {
+    "id": "mcp-side-channel-degraded-no-work-coarse",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Degraded and empty-queue lease attempts remain indistinguishable through the no_work body.",
+    "setup": { "queue": { "mode": "degraded" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "outcome": "no_work", "queueMode": "absent" } }],
+    "expectFinal": { "states": { "worker-output": "no_work" } }
+  },
+  {
+    "id": "mcp-direct-call-same-boundary",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "A hand-written direct MCP call passes the same authentication, scope, mapping, input, state, and core boundaries as a skill call.",
+    "setup": { "mcp-binding:b1": { "revision": 1, "workerId": "w1" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "get_worker_status", "workerId": "w1", "input": {}, "scope": "muster:worker", "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "success" } }],
+    "expectFinal": { "states": { "direct-call": "authorized" } }
+  },
+  {
+    "id": "mcp-exact-retry-byte-identical",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "An exact accepted submission retry returns the same canonical structured value and text mirror without a second core row.",
+    "setup": { "submission:l1": { "resultHash": "rh1" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "requestId": "r1", "input": { "lease_id": "l1", "input_hash": "ih1", "result": { "answer": "ok" } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "replayed", "bytes": "identical" } }],
+    "expectFinal": { "receipts": { "submission:l1": "byte_identical" } }
+  },
+  {
+    "id": "mcp-mapping-severance-fails-closed",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Severance deletes the raw subject link, preserves pseudonymous core history, and makes later authentication fail closed.",
+    "setup": { "mcp-binding:b1": { "revision": 1, "workerId": "w1" }, "worker:w1": { "state": "active" } },
+    "conditions": [],
+    "steps": [{ "command": "severMcpSubject", "args": { "severanceId": "s1", "bindingId": "b1", "expectedRevision": 1, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "severed" } }, { "command": "invokeMcpTool", "args": { "tool": "get_worker_status", "workerId": "w1", "input": {}, "at": "2026-08-08T10:00:01.000Z" }, "expect": { "kind": "unauthenticated" } }],
+    "expectFinal": { "states": { "mcp-binding:b1": "absent", "worker:w1": "active" } }
+  },
+  {
+    "id": "mcp-scope-refusal-step-up",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "A valid endpoint token lacking the exact tool scope receives insufficient_scope with only the required step-up scope.",
+    "setup": { "token:t1": { "scopes": ["muster:access"] } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "scope": "muster:access", "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "insufficient_scope", "requiredScope": "muster:jobs" } }],
+    "expectFinal": { "states": { "core-call": "absent" } }
+  },
+  {
+    "id": "mcp-rate-limit-race-single-winner",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Competing calls for the last rate-window unit have one authorized winner and one refusal with no partial counters.",
+    "setup": { "mcp-rate:w1:rate-1:1": { "used": 3, "limit": 4 } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeMcpCall", "args": { "bindingRevision": 1, "workerId": "w1", "tool": "get_worker_status", "policyVersion": "rate-1", "windowId": "rate-1:1", "assignedSlotOccurrence": "s1", "at": "2026-08-08T10:00:00.000Z" }, "barrier": "rate-last" }, { "command": "authorizeMcpCall", "args": { "bindingRevision": 1, "workerId": "w1", "tool": "get_worker_status", "policyVersion": "rate-1", "windowId": "rate-1:1", "assignedSlotOccurrence": "s1", "at": "2026-08-08T10:00:00.000Z" }, "barrier": "rate-last" }],
+    "expectFinal": { "charges": { "mcp-rate:w1:rate-1:1": 1 } },
+    "expectOneOf": [{ "states": { "call:a": "authorized", "call:b": "rate_limited" } }, { "states": { "call:a": "rate_limited", "call:b": "authorized" } }]
+  },
+  {
+    "id": "mcp-availability-race-monotonic",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Competing availability values never increase the durable value; the lower value is absorbing for the slot occurrence.",
+    "setup": { "mcp-slot:w1:s1": { "availabilityBudgetBucket": 3 } },
+    "conditions": [],
+    "steps": [{ "command": "authorizeMcpCall", "args": { "bindingRevision": 1, "workerId": "w1", "tool": "lease_job", "policyVersion": "rate-1", "windowId": "rate-1:1", "assignedSlotOccurrence": "s1", "availabilityBudgetBucket": 2, "at": "2026-08-08T10:00:00.000Z" }, "barrier": "availability" }, { "command": "authorizeMcpCall", "args": { "bindingRevision": 1, "workerId": "w1", "tool": "lease_job", "policyVersion": "rate-1", "windowId": "rate-1:1", "assignedSlotOccurrence": "s1", "availabilityBudgetBucket": 1, "at": "2026-08-08T10:00:00.000Z" }, "barrier": "availability" }],
+    "expectFinal": { "states": { "mcp-slot:w1:s1": "availability-1" } },
+    "expectOneOf": [{ "states": { "call:a": "authorized", "call:b": "authorized" } }, { "states": { "call:a": "availability_increase", "call:b": "authorized" } }]
+  },
+  {
+    "id": "mcp-token-revocation-request-boundary",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Token revocation committed before its mandatory dispatch check prevents a core call; a concurrent later revocation does not retroactively cancel a started core operation.",
+    "setup": { "token:t1": { "state": "valid" } },
+    "conditions": [],
+    "steps": [{ "command": "revokeMcpToken", "args": { "tokenId": "t1", "at": "2026-08-08T10:00:00.000Z" } }, { "command": "invokeMcpTool", "args": { "tool": "get_worker_status", "workerId": "w1", "input": {}, "at": "2026-08-08T10:00:01.000Z" }, "expect": { "kind": "unauthenticated" } }],
+    "expectFinal": { "states": { "core-call": "absent" } }
+  },
+  {
+    "id": "mcp-worker-revocation-request-boundary",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Missing and revoked workers fail through the same pre-dispatch authentication path.",
+    "setup": { "worker:w1": { "state": "revoked" } },
+    "conditions": [],
+    "steps": [{ "command": "getWorkerStatus", "args": { "workerId": "w1", "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "unavailable" } }],
+    "expectFinal": { "states": { "core-call": "absent" } }
+  },
+  {
+    "id": "mcp-skill-release-complete-class-set",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "The accepted contract and canonical complete enrolled-class set select exactly one immutable skill release.",
+    "setup": { "skill-release:1.1.0:classes-a-b": { "sha256": "sha1" } },
+    "conditions": [],
+    "steps": [{ "command": "selectSkillRelease", "args": { "contractVersion": "1.1.0", "jobClassIds": ["class-b", "class-a"] }, "expect": { "skillSha256": "sha1", "selection": "unique" } }],
+    "expectFinal": { "states": { "skill-release": "sha1" } }
   }
 ]

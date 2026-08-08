@@ -12,3 +12,4 @@ export * from "./registration.js";
 export * from "./store-conformance.js";
 export * from "./submission-service.js";
 export * from "./testing.js";
+export * from "./worker-status.js";

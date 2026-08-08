@@ -12,12 +12,12 @@ describe("tool surface (spec 5.2)", () => {
       "abandon_job", "extend_lease", "get_worker_status", "lease_job",
       "set_availability", "submit_result",
     ]);
-    expect(TOOL_SCHEMAS.lease_job.scope).toBe("jobs");
-    expect(TOOL_SCHEMAS.submit_result.scope).toBe("jobs");
-    expect(TOOL_SCHEMAS.abandon_job.scope).toBe("jobs");
-    expect(TOOL_SCHEMAS.extend_lease.scope).toBe("jobs");
-    expect(TOOL_SCHEMAS.get_worker_status.scope).toBe("worker");
-    expect(TOOL_SCHEMAS.set_availability.scope).toBe("worker");
+    expect(TOOL_SCHEMAS.lease_job.scope).toBe("muster:jobs");
+    expect(TOOL_SCHEMAS.submit_result.scope).toBe("muster:jobs");
+    expect(TOOL_SCHEMAS.abandon_job.scope).toBe("muster:jobs");
+    expect(TOOL_SCHEMAS.extend_lease.scope).toBe("muster:jobs");
+    expect(TOOL_SCHEMAS.get_worker_status.scope).toBe("muster:worker");
+    expect(TOOL_SCHEMAS.set_availability.scope).toBe("muster:worker");
   });
 
   it("every input schema is closed", () => {
@@ -71,5 +71,6 @@ describe("coarse wire shapes (spec 5.7)", () => {
       "cap_usage_bucket", "contract_version", "next_slot_bucket",
       "skill_sha256", "status",
     ]);
+    expect(properties.next_slot_bucket).toEqual({ type: "integer", minimum: 0 });
   });
 });

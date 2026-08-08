@@ -1,5 +1,19 @@
 # Changelog
 
+## contract-freeze-16 — reviewed and tagged 2026-08-08
+
+Revision 27 closes the MCP planning gate while preserving worker wire `1.1.0`.
+It freezes exact endpoint/job/worker scopes; cap-usage and next-slot bucket
+tables; deployment-owned next-slot projection; a read-only coarse worker-status
+service; canonical accepted-contract plus complete-class skill-release keys;
+singular availability-invariant v1 leasing; complete-response transport
+padding; MCP-owned subject/rate/slot/availability state and atomic outcomes;
+ordered token, mapping, and worker revocation checks; and per-tool success versus
+generic-error projection. Twenty-two stable lifecycle fixtures cover every
+section 5.7 row plus direct calls, exact retries, severance, scope step-up, rate
+and availability races, revocation, and skill selection. No MCP runtime package,
+core Store change, publication, deployment, or push is included.
+
 ## PostgreSQL adapter Task 9 — 2026-08-08
 
 Completed public construction and operations documentation for explicit

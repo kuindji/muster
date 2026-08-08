@@ -144,6 +144,10 @@ const workerPolicy: WorkerControlPolicy = {
     assignedSlotOccurrence: `${at.slice(0, 10)}-slot-${slot}`,
     slotOpen: true,
   }),
+  nextSlot: ({ slot, at }) => ({
+    assignedSlotOccurrence: `${at.slice(0, 10)}-slot-${slot}`,
+    startsInSeconds: 0,
+  }),
 };
 
 const reputationPolicy: ReputationPolicy = {

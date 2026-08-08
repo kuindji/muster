@@ -14,6 +14,7 @@ export * from "./job-class.js";
 export * from "./jsonpath.js";
 export * from "./lifecycle-fixtures.js";
 export * from "./mcp-schemas.js";
+export * from "./mcp-boundary.js";
 export * from "./oracle.js";
 export * from "./primitives.js";
 export * from "./schema.js";

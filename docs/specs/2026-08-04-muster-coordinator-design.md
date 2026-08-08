@@ -1,12 +1,13 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 26)
+**Date:** 2026-08-04 (revision 27)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
-The platform gate passed on 2026-08-06. Contract-freeze amendment 15 corrects
-the four gaps found by the Milestone 2 Task-10 semantic review. The reviewed
-boundary is tagged locally as `contract-freeze-15`; Milestone 2 is implemented
-against it pending final independent review.
+The platform gate, Milestone 2, and PostgreSQL Store adapter are complete.
+Contract-freeze amendment 16 assigns the remaining MCP status, skill-release,
+availability, rate, scope, revocation, output, and side-channel facts while
+preserving worker wire `1.1.0`. The reviewed revision-27 boundary is tagged
+locally as `contract-freeze-16`; MCP runtime implementation remains separate.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -886,18 +887,41 @@ After validation, `muster-mcp` resolves the authenticated issuer and `sub`
 through its severable subject mapping and passes only the pseudonymous
 `WorkerId` into core. A missing mapping fails closed.
 
+The exact scopes are `muster:access` for endpoint access, `muster:jobs` for the
+four job tools, and `muster:worker` for the two worker tools. A protected call
+requires the endpoint scope plus its exact tool scope; there are no wildcard
+scope strings. A valid token missing the tool scope receives the OAuth
+`insufficient_scope` path naming only the required step-up scope. Invalid token,
+revoked token, missing or severed mapping, missing worker, and revoked worker use
+the same unauthenticated path. They do not invoke MCP state or core.
+
+For every protected request, the dispatch gate is ordered: cryptographic token
+validation; mandatory token-revocation read; endpoint and tool scope checks;
+subject mapping; coarse core worker-status read; complete closed input
+validation; then the atomic MCP call-state command. A revocation or severance
+committed before its corresponding gate read is observed and refuses the call.
+A change concurrent with a gate read may linearize before or after that read;
+once the atomic call-state command authorizes dispatch, a later revocation does
+not retroactively cancel a core operation already started. It still governs the
+next request. This is the request-start boundary; it does not claim a distributed
+transaction across the authorization server, MCP state, and core Store.
+`McpTokenRevocationSource` receives only the canonical issuer, SHA-256
+fingerprint of the verified bearer bytes, and request time. It receives neither
+the bearer bytes nor a raw subject, and it is mandatory rather than a
+best-effort cache.
+
 ### 5.2 Tools
 
-Job surface, scope `jobs:*`:
+Job surface, scope `muster:jobs` (plus `muster:access`):
 
 ```text
-lease_job(availability)                     -> lease and sanitized batch, or no_work
+lease_job(availability)                     -> lease and one sanitized job, or no_work
 submit_result(lease_id, input_hash, result) -> receipt or validation errors
 abandon_job(lease_id, reason)               -> attempt receipt
 extend_lease(lease_id)                      -> new expiry, or refusal
 ```
 
-Worker surface, scope `worker:*`:
+Worker surface, scope `muster:worker` (plus `muster:access`):
 
 ```text
 get_worker_status()      -> coarse status, contract_version, skill_sha256,
@@ -907,11 +931,36 @@ set_availability(state)  -> active | maintenance
 
 `availability` is a closed schema with exactly one field: a **coarse, monotonic
 budget bucket** for this run. It carries nothing that maps to job content.
+Revision 27 makes v1 deliberately singular: every successful `lease_job`
+contains exactly one job, and availability changes neither candidate selection,
+batch size, payload, nor input hash. The MCP state adapter records the bucket
+atomically with rate and slot-attempt state. Within one assigned-slot occurrence
+an equal or lower bucket is accepted and a higher bucket is refused; a new
+deployment-owned occurrence begins a new monotonic record. Bucket zero authorizes
+no core lease call. Availability therefore never crosses into core.
 
 **Every `lease_id` is bound to the pseudonymous `WorkerId` that holds it.**
 `muster-mcp` maps the current authenticated subject before calling core;
 submit, abandon, and extend from any other worker ID are rejected regardless
 of token validity.
+
+Successful values are returned as `structuredContent` and as one canonical JSON
+text mirror. Authentication and scope failures are HTTP/MCP authorization
+errors; malformed closed input is JSON-RPC invalid params. A rate, slot-attempt,
+availability-monotonicity, stale-mapping, or policy refusal is
+one generic tool execution error with no structured value. Domain behavior is
+tool-specific and frozen: lease refusal is successful `no_work`; submit and
+abandon use only frozen worker-wire error values; extend uses the successful
+uniform refusal; status is success-only; and invalid availability transitions
+use the same generic tool error. Generic errors contain no precise cause.
+
+The atomic MCP call-state command preflights the binding revision, complete rate
+policy and UTC window, worker/slot occurrence, per-tool count, lease-attempt
+count, and optional availability value. A refusal changes no binding, counter,
+slot, or availability state. Authorization increments every applicable counter
+and applies the equal-or-lower availability replacement in one transaction.
+Binding and severance command IDs are operator-supplied, wire-safe,
+raw-subject-free identities and never worker tool inputs.
 
 ### 5.3 The skill as a Resource
 
@@ -928,6 +977,14 @@ The stable `get_worker_status` schema exposes the canonical skill hash, not a
 Resource URI. The experimental adapter may expose its URI only in its own
 versioned extension surface; disabling that adapter does not change the base
 tool schema.
+
+One release is selected by the worker's accepted wire contract and the complete
+canonical sorted non-empty set of enrolled class IDs. Array order is not
+identity. A
+deployment release registry must contain exactly one immutable rendered skill
+and verified SHA-256 for that key; duplicate, missing, or ambiguous releases fail
+closed. This selection happens outside core, using only the coarse status
+operation's accepted contract and class-set facts.
 
 **A served skill is remote instruction text entering a member's agent.**
 Releases are versioned and hash-pinned, the Resource carries its hash, results
@@ -975,12 +1032,12 @@ managed rather than denied.
 
 | Channel | Mitigation |
 |---|---|
-| `availability` budget steering batch shape | Coarse monotonic buckets; job chosen **before** batch sizing |
+| `availability` budget steering batch shape | Coarse monotonic MCP state; v1 is singular and job/payload are invariant |
 | `no_work` reasons | Coarse to the worker; precise in the ledger |
 | Repeated lease attempts | Rate-limited and bound to the assigned slot |
 | Lease timing, response latency | Slot randomization; no timing-dependent selection |
-| TTL, batch size | Quantized into buckets, not derived per payload |
-| Payload byte size | Padded into buckets |
+| TTL, batch size | TTL is quantized; v1 batch size is the constant one |
+| Payload byte size | Complete encoded lease response padded into frozen byte buckets outside the parsed value |
 | Schema and policy version | Public by necessity; excluded from routing decisions |
 | Source and language metadata | Minimized to what the task needs; `PrivacyClass` governs |
 | Canary statistical oddities | Canaries drawn from real resolved work, not synthesized |
@@ -988,6 +1045,14 @@ managed rather than denied.
 | `submit_result` validation errors | Uniform error shapes to the worker; detail in the ledger |
 | `get_worker_status` cap and slot data | Coarse buckets |
 | Degraded and `no_work` frequency | Coarse; uncorrelated to queue composition |
+
+For JSON, padding is insignificant trailing ASCII whitespace after the complete
+JSON-RPC value. For request-scoped SSE it is an ignored trailing comment. The
+smallest `PAYLOAD_PAD_BUCKETS_BYTES` value at least as large as the complete
+encoded response is used, so the parsed structured value and canonical text
+mirror remain unchanged and `input_hash` is untouched. Responses above the
+largest listed bucket continue the same power-of-four series, so a valid lease
+is never claimed and then withheld because a finite padding table overflowed.
 
 **The limit, stated plainly.** Pre-lease selection is not expressible in the
 protocol. **Post-lease withholding is unpreventable and, for sparse
@@ -1029,6 +1094,19 @@ assigned-slot-occurrence identities plus whether that occurrence is open at the
 supplied instant. Invalid policy configuration or output fails closed before
 registration or lease selection. The functions are deterministic and I/O-free;
 deployment policy, not Store, owns their calendar semantics.
+
+Revision 27 adds `nextSlot({ workerId, slot, at })`, with the same closed,
+job-free input, returning a wire-safe next occurrence identity and finite
+non-negative seconds until it starts. An open current occurrence must return
+zero and the same occurrence identity; a closed occurrence must return a
+positive distance. `WorkerStatusService` reads the worker and routing snapshot,
+applies `routingAt` and `nextSlot` at one explicit time, and exposes only the
+worker state, accepted contract, canonical enrolled class set, cap-usage bucket,
+next-slot bucket, and internal occurrence identities. Missing and revoked
+workers are both `unavailable`; invalid policy output fails closed. The cap
+buckets are unused, used at most half, used over half below cap, and at cap; a
+zero cap is at cap. The next-slot indices are open now, within one hour, within
+six hours, within one day, within three days, and later than three days.
 
 Core, not Store, derives contribution-window and assigned-slot occurrences
 from explicit deterministic deployment policy and time. When either period
@@ -2437,7 +2515,7 @@ by `detailHash`; arbitrary canonical detail is not part of the audit union.
 | Member edits the skill or calls MCP directly | Tools are the entire surface; scopes enforced independently; `availability` is a closed one-field schema; capabilities server-held |
 | Queue probing | Every row of section 5.7's table has a conformance test |
 | Post-lease withholding | Not preventable and not detectable for sparse contributors; population-level correlation only |
-| Stolen token | Short-lived tokens; revocation invalidates open leases; raw OAuth subjects stop at `muster-mcp` and never enter core audit data |
+| Stolen token | Short-lived tokens; mandatory per-call revocation blocks new dispatch, worker revocation requeues open leases, and raw OAuth subjects stop at `muster-mcp` |
 | Leaked lease identifier | Submit, abandon, extend rejected from any mapped worker ID but the holder |
 | Fabricated results | Core derives achieved strength, requires action-specific payload and result coverage, and issues no under-strength authorization; canaries affect worker risk only |
 | Suppression by omission | Automatic `suppress` requires a completeness oracle with a declared absence domain; human-only suppression binds that domain plus complete effect-review coverage; every `drop` is human-only |
@@ -2573,6 +2651,12 @@ reserve batches, mixed human/automatic action requests, early verdict replay,
 first-verdict invalidation races, contract-cutoff equality, half-open maximum
 lifetime, and distinct signed decision versus processing timestamps. Wire
 version `1.1.0` remains unchanged.
+Revision-27 fixtures additionally pin every section 5.7 mitigation, direct tool
+calls, byte-identical core retries, mapping severance, exact scope step-up,
+last-unit rate races, monotonic availability races, revocation ordering, and
+complete-class skill-release selection. `McpStateStore` conformance owns those
+fixtures when the MCP package is implemented; the revision-27 freeze itself adds
+no process-local or durable adapter implementation.
 
 ### 8.3 The invariant
 
@@ -2634,6 +2718,10 @@ minimum:
 `AuthenticatedWorkerSubject`, `WorkerId`, `Store`, `EventSink`, `AdmissionHook`,
 `AdjudicationSource`, `ReputationPolicy`, `IdSource`, `CoreIdentityKind`,
 `CoreDeploymentPolicy`, `WorkerControlPolicy`, `WorkerRoutingPeriod`,
+`WorkerNextSlot`, `WorkerStatusSnapshot`, `McpRateLimitPolicy`, `McpRateWindow`,
+`McpSubjectBinding`, `McpSubjectSeveranceReceipt`, `McpStateStore`,
+`McpTokenRevocationSource`,
+`AuthorizeMcpCallInput`, `AuthorizeMcpCallOutcome`,
 `QueuePriority`, `LeaseCandidateSnapshot`,
 `WorkerRegistration`, `RegisterWorkerOutcome`, `WorkerRoutingSnapshot`,
 `WorkerRoutingTransitionOutcome`, `LeaseAssignment`, `LeaseRoutingSnapshot`,
@@ -2669,7 +2757,10 @@ escalation reserve accounting and urgent fail-closed behaviour (6.4);
 collection-cycle assignment across result-level requeues versus lease-level
 retries; permit epoch assignment across requeue, split-evidence reroute, pending human review,
 emergency authorization invalidation, and draining (6.6); `availability`
-bucket quantization and every mitigation in the side-channel table (5.7).
+monotonicity, status bucket tables, exact OAuth scopes, mapping, rate/slot
+atomicity, request-start revocation ordering, tool outcome projection,
+skill-release selection, response padding, and every mitigation in the
+side-channel table (5.7).
 
 **Fixtures.** Golden input, result, both adjudication-verdict, and decision
 hashes; MCP tool and error schemas; exact retries after every terminal lease
@@ -2710,6 +2801,9 @@ independently reviewed, corrected, and tagged `contract-freeze-14`.
 
 Revision 26 implements the Task-10 review corrections and is reviewed,
 corrected, and tagged `contract-freeze-15`.
+
+Revision 27 implements the MCP boundary correction and is reviewed, corrected,
+and tagged `contract-freeze-16`.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -2965,7 +3059,20 @@ epoch refusal, and premature adjudication refusal. The amendment leaves the
 worker wire at `1.1.0` and is reviewed before the local `contract-freeze-15`
 tag.
 
-### 11.16 Open
+### 11.16 Contract-freeze amendment 16: MCP boundary
+
+Revision 27 is complete only when each MCP-visible fact has one deterministic
+owner. The amendment freezes exact endpoint/tool scopes, status bucket tables,
+deployment-owned next-slot projection, canonical complete-class skill selection,
+singular availability-invariant v1 leasing, transport-body padding, MCP-owned
+subject/rate/slot/availability state and outcomes, request-start revocation
+ordering, and per-tool success versus generic-error projection. It adds one
+stable fixture for every section 5.7 row plus direct calls, exact retries,
+mapping severance, scope step-up, last-unit rate races, monotonic availability
+races, and token/worker revocation. Raw OAuth identity remains outside core and
+the worker wire remains `1.1.0`. No MCP runtime package exists at this boundary.
+
+### 11.17 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

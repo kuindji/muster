@@ -1,7 +1,7 @@
 # Muster MCP implementation plan
 
 **Goal:** Implement `@kuindji/muster-mcp` as a production-shaped, mountable
-OAuth-protected MCP resource server for the reviewed revision-26 coordinator,
+OAuth-protected MCP resource server for the reviewed revision-27 coordinator,
 while preserving worker wire version `1.1.0`, keeping raw OAuth identity outside
 core, and translating the six frozen tools into the existing public core
 operations without adding worker-controlled policy.
@@ -21,7 +21,9 @@ outcome stops runtime work and requires a separate normative amendment.
 `847c316d92061844fe8ffaf4f15515b55ca4eaab` when this plan was drafted.
 Milestone 2 and the PostgreSQL Store adapter are complete. Revision 26 is the
 active internal boundary and is tagged locally as `contract-freeze-15`; the
-worker wire remains `1.1.0`. No `packages/mcp` implementation exists yet.
+worker wire remains `1.1.0`. Amendment 16 subsequently froze the MCP-owned
+semantics at revision 27 and `contract-freeze-16`; no `packages/mcp`
+implementation exists yet.
 
 **Protocol baseline:** Use the official MCP TypeScript v2 packages and expose a
 web-standard Node 20+ handler. Support the current stateless `2026-07-28`
@@ -43,7 +45,7 @@ and [server examples](https://github.com/modelcontextprotocol/typescript-sdk/blo
 [RFC 9068 JWT access tokens](https://www.rfc-editor.org/rfc/rfc9068), and
 [RFC 9700 OAuth security best current practice](https://www.rfc-editor.org/rfc/rfc9700).
 
-## Entry gate: freeze the remaining MCP-owned semantics
+## Entry gate: freeze the remaining MCP-owned semantics (complete 2026-08-08)
 
 The first repository trace found facts that the frozen schemas require but no
 current port or table can compute safely:
@@ -82,6 +84,12 @@ instead of silently widening a schema.
 No package or transport implementation may begin until that amendment is
 independently reviewed, corrected, and tagged at the next contract-freeze
 boundary. The tag is a review boundary, not permission to publish or push.
+
+Revision 27 and amendment 16 resolve the gate with exact status buckets,
+deployment-owned next-slot projection, complete-class skill selection, singular
+availability-invariant v1 leasing, transport-body padding, exact scopes,
+MCP-state atomic outcomes, ordered revocation checks, and per-tool result/error
+projection. The reviewed boundary is tagged `contract-freeze-16`.
 
 ## Fixed architecture decisions
 
@@ -127,6 +135,11 @@ boundary. The tag is a review boundary, not permission to publish or push.
   Failed preconditions do not allocate core IDs or consume a lease. A rate or
   availability comparison that is defined to count an attempt commits exactly
   once through its atomic MCP-state command.
+- Require `muster:access` plus exactly `muster:jobs` or `muster:worker` for the
+  selected tool. Use OAuth insufficient-scope step-up without wildcard scopes.
+- Keep v1 leases singular. Availability never enters core or changes selection,
+  batch size, payload, or input hash; bucket zero dispatches no core lease call.
+  Pad only the complete encoded response outside the parsed MCP value.
 - Return successful tool values in `structuredContent` and mirror the same
   canonical JSON value in one text content item for compatible clients. Apply
   output-schema validation before returning. Authentication/protocol failures
@@ -144,7 +157,7 @@ boundary. The tag is a review boundary, not permission to publish or push.
   uses only the same rendered bytes, and may be removed without changing the
   six base tools.
 
-## Task 1: Revision-27 MCP boundary amendment
+## Task 1: Revision-27 MCP boundary amendment (complete 2026-08-08)
 
 Create a separate contract-freeze amendment before runtime code:
 
@@ -271,9 +284,10 @@ Implement `lease_job`, `submit_result`, `abandon_job`, and `extend_lease`:
 - validate each input against the exact frozen input schema before MCP-state or
   core mutation and reject additional properties;
 - for `lease_job`, authorize the attempt and monotonic availability atomically,
-  call the reviewed post-selection core operation, apply only the reviewed
-  quantized batch/padding projection, and return either the exact lease shape or
-  the content-free `{ outcome: "no_work" }`;
+  call core only for a nonzero bucket, preserve singular selection and payload
+  invariance, pad the complete encoded response outside its parsed value, and
+  return either the exact lease shape or the content-free
+  `{ outcome: "no_work" }`;
 - derive `ttl_bucket_seconds` from the durable lease snapshot through the
   frozen bucket function, never from payload type, queue depth, or response
   latency;
@@ -428,8 +442,8 @@ remain separate commands if they are not part of a workspace script.
 
 ## Stop boundaries
 
-1. Stop after Task 1 until the revision-27 correction is independently reviewed
-   and tagged.
+1. Task 1 is reviewed and tagged at `contract-freeze-16`; stop after each later
+   task at its own checkpoint.
 2. Stop any runtime task that needs a new worker-visible field, caller-chosen
    policy value, non-atomic state comparison, or raw identity in core.
 3. Keep stable tools independent of SEP-2640 and of any specific provider.

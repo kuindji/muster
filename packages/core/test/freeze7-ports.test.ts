@@ -19,6 +19,10 @@ describe("revision-18 worker-control policy freeze", () => {
         assignedSlotOccurrence: `${at.slice(0, 10)}-slot-${slot}`,
         slotOpen: true,
       }),
+      nextSlot: ({ slot, at }) => ({
+        assignedSlotOccurrence: `${at.slice(0, 10)}-slot-${slot}`,
+        startsInSeconds: 0,
+      }),
     };
     const slot = policy.assignSlot({ workerId: "worker-1", enrolledAt: now });
     expect(policy.routingAt({ workerId: "worker-1", slot, at: now }))

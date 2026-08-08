@@ -139,6 +139,19 @@ describe("lifecycle fixture pack (spec 11.1)", () => {
           authorizationRequestId: "a1", processAt: "typo",
         } },
       ] }],
+      ["missing revision-27 MCP snapshot arg", { ...wellFormed, steps: [
+        { command: "authorizeMcpCall", args: {
+          bindingRevision: 1, workerId: "w1", tool: "lease_job",
+          policyVersion: "rate-1", windowId: "rate-1:1",
+          at: "2026-08-08T10:00:00.000Z",
+        } },
+      ] }],
+      ["unknown revision-27 raw identity arg", { ...wellFormed, steps: [
+        { command: "getWorkerStatus", args: {
+          workerId: "w1", at: "2026-08-08T10:00:00.000Z",
+          subject: "raw-sub",
+        } },
+      ] }],
       ["non-finite charge", {
         ...wellFormed, expectFinal: { charges: { urgent: NaN } },
       }],

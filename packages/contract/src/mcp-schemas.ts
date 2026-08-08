@@ -1,5 +1,6 @@
 import { deepFreeze } from "./deep-freeze.js";
 import { WORKER_WIRE_ERROR_CODES } from "./errors.js";
+import { MUSTER_MCP_TOOL_SCOPES } from "./mcp-boundary.js";
 
 /** Spec 5.2/5.7. All schemas are closed and expose buckets, not precision. */
 export const AVAILABILITY_SCHEMA = deepFreeze({
@@ -56,7 +57,7 @@ const LEASE_BATCH_SHAPE = deepFreeze({
 
 export const TOOL_SCHEMAS = deepFreeze({
   lease_job: {
-    scope: "jobs",
+    scope: MUSTER_MCP_TOOL_SCOPES.lease_job,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -66,7 +67,7 @@ export const TOOL_SCHEMAS = deepFreeze({
     outputSchema: { oneOf: [LEASE_BATCH_SHAPE, NO_WORK_SHAPE] },
   },
   submit_result: {
-    scope: "jobs",
+    scope: MUSTER_MCP_TOOL_SCOPES.submit_result,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -104,7 +105,7 @@ export const TOOL_SCHEMAS = deepFreeze({
     },
   },
   abandon_job: {
-    scope: "jobs",
+    scope: MUSTER_MCP_TOOL_SCOPES.abandon_job,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -129,7 +130,7 @@ export const TOOL_SCHEMAS = deepFreeze({
     },
   },
   extend_lease: {
-    scope: "jobs",
+    scope: MUSTER_MCP_TOOL_SCOPES.extend_lease,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -154,7 +155,7 @@ export const TOOL_SCHEMAS = deepFreeze({
     },
   },
   get_worker_status: {
-    scope: "worker",
+    scope: MUSTER_MCP_TOOL_SCOPES.get_worker_status,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -182,7 +183,7 @@ export const TOOL_SCHEMAS = deepFreeze({
     },
   },
   set_availability: {
-    scope: "worker",
+    scope: MUSTER_MCP_TOOL_SCOPES.set_availability,
     inputSchema: {
       type: "object",
       additionalProperties: false,

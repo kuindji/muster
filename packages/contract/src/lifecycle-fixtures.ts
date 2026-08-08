@@ -24,6 +24,7 @@ export const LIFECYCLE_FIXTURE_AREAS = deepFreeze([
   "lease_bounds",
   "reserve_policy",
   "fixture_coverage",
+  "mcp_boundary",
 ] as const);
 
 export type LifecycleFixtureArea =
@@ -71,6 +72,13 @@ export const LIFECYCLE_COMMANDS = deepFreeze([
   "compareAndClaimLease",
   "transitionQueueMode",
   "transitionClassHealth",
+  "getWorkerStatus",
+  "selectSkillRelease",
+  "bindMcpSubject",
+  "severMcpSubject",
+  "authorizeMcpCall",
+  "invokeMcpTool",
+  "revokeMcpToken",
 ] as const);
 
 export type LifecycleCommand = (typeof LIFECYCLE_COMMANDS)[number];
@@ -416,6 +424,63 @@ export const REVISION_24_COMMAND_ARGUMENT_KEYS = deepFreeze({
   },
 } as const);
 
+/** Closed MCP-boundary command shapes added by revision 27. */
+export const REVISION_27_COMMAND_ARGUMENT_KEYS = deepFreeze({
+  getWorkerStatus: {
+    required: ["workerId", "at"],
+    allowed: ["workerId", "at"],
+  },
+  selectSkillRelease: {
+    required: ["contractVersion", "jobClassIds"],
+    allowed: ["contractVersion", "jobClassIds"],
+  },
+  bindMcpSubject: {
+    required: ["bindingId", "issuer", "subject", "workerId", "at"],
+    allowed: ["bindingId", "issuer", "subject", "workerId", "at"],
+  },
+  severMcpSubject: {
+    required: ["severanceId", "bindingId", "expectedRevision", "at"],
+    allowed: ["severanceId", "bindingId", "expectedRevision", "at"],
+  },
+  authorizeMcpCall: {
+    required: [
+      "bindingRevision",
+      "workerId",
+      "tool",
+      "policyVersion",
+      "windowId",
+      "assignedSlotOccurrence",
+      "at",
+    ],
+    allowed: [
+      "bindingRevision",
+      "workerId",
+      "tool",
+      "policyVersion",
+      "windowId",
+      "assignedSlotOccurrence",
+      "availabilityBudgetBucket",
+      "at",
+    ],
+  },
+  invokeMcpTool: {
+    required: ["tool", "workerId", "input", "at"],
+    allowed: [
+      "tool",
+      "workerId",
+      "input",
+      "at",
+      "requestId",
+      "scope",
+      "encodedResponseBytes",
+    ],
+  },
+  revokeMcpToken: {
+    required: ["tokenId", "at"],
+    allowed: ["tokenId", "at"],
+  },
+} as const);
+
 export const LIFECYCLE_CONDITIONS: readonly string[] = deepFreeze(
   PRECEDENCE_TABLE.map((rule) => rule.id),
 );
@@ -621,6 +686,28 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "audit-contract-transition-detail-is-hash-only",
   "emergency-halt-multi-class-atomic",
   "class-health-live-version-policy-aggregate",
+  "mcp-side-channel-availability-monotonic",
+  "mcp-side-channel-no-work-coarse",
+  "mcp-side-channel-lease-attempt-rate-slot-bound",
+  "mcp-side-channel-selection-timing-invariant",
+  "mcp-side-channel-ttl-batch-quantized",
+  "mcp-side-channel-payload-response-padding",
+  "mcp-side-channel-schema-policy-routing-invariant",
+  "mcp-side-channel-source-language-minimized",
+  "mcp-side-channel-canary-real-resolved",
+  "mcp-side-channel-extend-refusal-uniform",
+  "mcp-side-channel-submit-error-uniform",
+  "mcp-side-channel-status-buckets-coarse",
+  "mcp-side-channel-degraded-no-work-coarse",
+  "mcp-direct-call-same-boundary",
+  "mcp-exact-retry-byte-identical",
+  "mcp-mapping-severance-fails-closed",
+  "mcp-scope-refusal-step-up",
+  "mcp-rate-limit-race-single-winner",
+  "mcp-availability-race-monotonic",
+  "mcp-token-revocation-request-boundary",
+  "mcp-worker-revocation-request-boundary",
+  "mcp-skill-release-complete-class-set",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -716,6 +803,11 @@ export function isLifecycleFixture(
     if (!isRecord(step.args)) return false;
     const args = step.args;
     const closedShape = (
+      REVISION_27_COMMAND_ARGUMENT_KEYS as Record<string, {
+        readonly required: readonly string[];
+        readonly allowed: readonly string[];
+      }>
+    )[step.command as string] ?? (
       REVISION_24_COMMAND_ARGUMENT_KEYS as Record<string, {
         readonly required: readonly string[];
         readonly allowed: readonly string[];

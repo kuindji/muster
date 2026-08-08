@@ -86,6 +86,13 @@ export interface WorkerRoutingPeriod {
   readonly slotOpen: boolean;
 }
 
+/** Deployment-owned next assigned-slot projection used only for coarse status. */
+export interface WorkerNextSlot {
+  readonly assignedSlotOccurrence: string;
+  /** Exact internal distance; worker output receives only nextSlotBucket(). */
+  readonly startsInSeconds: Seconds;
+}
+
 /**
  * Deployment-owned worker policy. Functions are deterministic and I/O-free;
  * their closed inputs deliberately contain no job or payload selector.
@@ -102,6 +109,11 @@ export interface WorkerControlPolicy {
     readonly slot: number;
     readonly at: Timestamp;
   }): WorkerRoutingPeriod;
+  nextSlot(input: {
+    readonly workerId: WorkerId;
+    readonly slot: number;
+    readonly at: Timestamp;
+  }): WorkerNextSlot;
 }
 
 export interface EventSink {
