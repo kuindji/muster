@@ -27,6 +27,20 @@ if (existsSync(corePkgPath)) {
     );
 }
 
+// --- PostgreSQL adapter dependency and trust boundaries ---
+const postgresPkgPath = "packages/store-postgres/package.json";
+if (existsSync(postgresPkgPath)) {
+  const pkg = JSON.parse(readFileSync(postgresPkgPath, "utf8"));
+  const deps = Object.keys(pkg.dependencies ?? {}).sort();
+  const expected = ["@kuindji/muster-core", "pg"];
+  if (JSON.stringify(deps) !== JSON.stringify(expected))
+    fail(
+      `muster-store-postgres runtime deps must be exactly ${JSON.stringify(expected)}, got: ${JSON.stringify(deps)}`,
+    );
+  if (Object.hasOwn(pkg.dependencies ?? {}, "@kuindji/muster-contract"))
+    fail("muster-store-postgres must not depend directly on muster-contract");
+}
+
 // --- §8.3: no network or filesystem API references in contract/core sources ---
 const FORBIDDEN = [
   /from\s+["']node:/,
@@ -81,5 +95,6 @@ function scanCoreIdentity(dir) {
   }
 }
 scanCoreIdentity("packages/core/src");
+scanCoreIdentity("packages/store-postgres/src");
 
 if (process.exitCode !== 1) console.log("invariants ok");

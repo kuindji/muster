@@ -47,9 +47,10 @@ reference in-memory Store. The Task-10 semantic-review corrections also fence
 cross-class emergency epoch changes and unproven diversity adjudication. The
 final independent review passed. The
 [PostgreSQL Store implementation plan](docs/superpowers/plans/2026-08-07-muster-store-postgres.md)
-is independently reviewed and corrected against that boundary. Its package,
-connection boundary, and real-PostgreSQL harness are the next bounded unit.
-MCP planning remains separate.
+is independently reviewed and corrected against that boundary. Its Task 1
+package, caller-owned connection boundary, and real-PostgreSQL 16 harness are
+complete. Forward migrations, bootstrap, codecs, and the serializable
+transaction runner are the next bounded unit. MCP planning remains separate.
 
 ## Specs
 

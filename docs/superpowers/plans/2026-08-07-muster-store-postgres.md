@@ -141,7 +141,7 @@ structurally assignable to `Store`; staged conformance must never call outside
 its implemented slice. Task 7 removes every stub, and a source/package scan
 fails the complete gate if any remains.
 
-## Task 1: Package, connection boundary, and real-PostgreSQL harness
+## Task 1: Package, connection boundary, and real-PostgreSQL harness (complete 2026-08-08)
 
 Create the package skeleton before domain tables or commands:
 
@@ -172,6 +172,15 @@ Create the package skeleton before domain tables or commands:
 
 Checkpoint: package build/typecheck and harness smoke tests pass against
 PostgreSQL 16; no `Store` method is implemented yet.
+
+Completion note: `@kuindji/muster-store-postgres` now builds Node 20+ ESM,
+CommonJS, and declarations; validates the closed schema/timeout/retry boundary;
+borrows and releases clients without owning pool shutdown; and exposes typed
+infrastructure failures separately from future Store outcomes. The test-only
+harness defaults to a real PostgreSQL 16 Testcontainer, permits an explicit
+managed-PostgreSQL override, and creates and drops only unique validated test
+schemas. Migration and bootstrap exports fail explicitly as unimplemented until
+Task 2, so no schema or frozen Store behavior is fabricated at this checkpoint.
 
 ## Task 2: Forward migrations, bootstrap, codecs, and transaction runner
 
