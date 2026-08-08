@@ -265,8 +265,10 @@ const classLifecycleAndEpoch: StoreConformanceCase = {
       store.registerClassVersion(registration),
       store.registerClassVersion(registration),
     ]);
-    assert(first.kind === "registered", "first class registration must win");
-    assert(second.kind === "replayed", "identical class registration must replay");
+    assert(
+      [first.kind, second.kind].sort().join(",") === "registered,replayed",
+      "concurrent identical class registration must register once and replay once",
+    );
     const conflict = await store.registerClassVersion({
       ...registration,
       outputSchemaHash: "different-output-schema",
@@ -319,14 +321,21 @@ const workerRegistrationCase: StoreConformanceCase = {
   run: async (factory) => {
     const store = await factory();
     const registration = workerRegistration();
-    const [first, replay] = await Promise.all([
+    const [first, second] = await Promise.all([
       store.registerWorker(registration),
       store.registerWorker(registration),
     ]);
-    assert(first.kind === "registered", "first worker registration must win");
-    assert(replay.kind === "replayed", "identical worker registration must replay");
-    assert(first.routing.revision === 1, "routing revision must start at one");
-    assert(first.routing.openLeaseIds.length === 0, "new routing must have no leases");
+    assert(
+      [first.kind, second.kind].sort().join(",") === "registered,replayed",
+      "concurrent identical worker registration must register once and replay once",
+    );
+    const registered = first.kind === "registered" ? first : second;
+    assert(registered.kind === "registered", "one worker registration must win");
+    assert(registered.routing.revision === 1, "routing revision must start at one");
+    assert(
+      registered.routing.openLeaseIds.length === 0,
+      "new routing must have no leases",
+    );
 
     registration.worker.capabilities.languages.push("fr");
     const persisted = await store.getWorker("worker-1");
@@ -404,13 +413,20 @@ const routingTransitionCase: StoreConformanceCase = {
       store.transitionWorkerRouting({ expected, next: firstNext }),
       store.transitionWorkerRouting({ expected, next: secondNext }),
     ]);
-    assert(first.kind === "applied", "first routing transition must apply");
-    assert(second.kind === "conflict", "stale routing transition must conflict");
     assert(
-      first.current.openLeaseIds.includes("lease-routing"),
+      [first.kind, second.kind].sort().join(",") === "applied,conflict",
+      "one routing transition must apply and one stale transition must conflict",
+    );
+    const applied = first.kind === "applied" ? first : second;
+    assert(applied.kind === "applied", "one routing transition must apply");
+    assert(
+      applied.current.openLeaseIds.includes("lease-routing"),
       "routing transition must preserve Store-owned open leases",
     );
-    const replay = await store.transitionWorkerRouting({ expected, next: firstNext });
+    const replay = await store.transitionWorkerRouting({
+      expected,
+      next: first.kind === "applied" ? firstNext : secondNext,
+    });
     assert(replay.kind === "replayed", "routing transition must replay exactly");
   },
 };
@@ -438,13 +454,19 @@ const claimRaceCase: StoreConformanceCase = {
         preparedPayload: { instruction: "process job-1" },
       }),
     ]);
-    assert(first.kind === "claimed", "one prepared lease must win");
-    assert(second.kind === "conflict", "the stale prepared lease must lose");
-    assert(await store.getLease("lease-losing") === null, "losing ID must leave no state");
+    assert(
+      [first.kind, second.kind].sort().join(",") === "claimed,conflict",
+      "one prepared lease must win and one stale lease must lose",
+    );
+    const winningLease = first.kind === "claimed" ? firstLease : losingLease;
+    const losingLeaseId = first.kind === "claimed"
+      ? losingLease.leaseId
+      : firstLease.leaseId;
+    assert(await store.getLease(losingLeaseId) === null, "losing ID must leave no state");
     const replay = await store.compareAndClaimLease({
       expectedCandidate: candidate,
       expectedWorker: worker,
-      preparedLease: firstLease,
+      preparedLease: winningLease,
       preparedPayload: { instruction: "process job-1" },
     });
     assert(replay.kind === "claimed", "exact claim must replay the persisted identity");
@@ -1070,14 +1092,20 @@ const submissionIdempotencyCase: StoreConformanceCase = {
         impact: "positive" as const,
       },
     };
-    const [first, replay] = await Promise.all([
+    const [first, second] = await Promise.all([
       store.acceptOrReplaySubmission(input),
       store.acceptOrReplaySubmission(input),
     ]);
-    assert(first.kind === "accepted", "first submission must accept");
-    assert(replay.kind === "replayed", "exact concurrent submit must replay");
     assert(
-      JSON.stringify(first.receipt) === JSON.stringify(replay.receipt),
+      [first.kind, second.kind].sort().join(",") === "accepted,replayed",
+      "concurrent exact submission must accept once and replay once",
+    );
+    const accepted = first.kind === "accepted" ? first : second;
+    const replayed = first.kind === "replayed" ? first : second;
+    assert(accepted.kind === "accepted", "one submission must accept");
+    assert(replayed.kind === "replayed", "one exact submission must replay");
+    assert(
+      JSON.stringify(accepted.receipt) === JSON.stringify(replayed.receipt),
       "submission replay receipt must be byte-identical",
     );
     const persisted = await store.getAcceptedSubmission(lease.leaseId);

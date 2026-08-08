@@ -7,6 +7,8 @@ import { Pool } from "pg";
 import { quoteSchemaName, validateSchemaName } from "../src/config.js";
 
 const TEST_CONNECTION_URL_ENV = "MUSTER_POSTGRES_TEST_URL";
+const TEST_IMAGE_ENV = "MUSTER_POSTGRES_TEST_IMAGE";
+const DEFAULT_TEST_IMAGE = "postgres:16-alpine";
 
 export interface PostgresTestHarness {
   readonly pool: Pool;
@@ -26,7 +28,9 @@ export async function startPostgresHarness(): Promise<PostgresTestHarness> {
   let connectionString: string;
 
   if (explicitConnectionUrl === undefined || explicitConnectionUrl === "") {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
+    container = await new PostgreSqlContainer(
+      process.env[TEST_IMAGE_ENV] || DEFAULT_TEST_IMAGE,
+    ).start();
     connectionString = container.getConnectionUri();
   } else {
     connectionString = explicitConnectionUrl;

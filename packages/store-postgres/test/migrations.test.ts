@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { QueryableClient, QueryablePool } from "../src/config.js";
+import { quoteSchemaName } from "../src/config.js";
 import {
   bootstrapMusterPostgres,
   migrateMusterPostgres,
@@ -147,6 +148,50 @@ describe("PostgreSQL migrations and bootstrap", () => {
     expect(createHash("sha256").update(sql).digest("hex")).toBe(
       migration.checksum,
     );
+  });
+
+  it.each(
+    Array.from(
+      { length: MUSTER_POSTGRES_MIGRATIONS.length + 1 },
+      (_value, prefixLength) => prefixLength,
+    ),
+  )("upgrades from checked-in migration prefix %i", async (prefixLength) => {
+    const schema = allocate();
+    const quotedSchema = quoteSchemaName(schema);
+    await harness.pool.query(`CREATE SCHEMA ${quotedSchema}`);
+    await harness.pool.query(
+      `CREATE TABLE ${quotedSchema}.muster_migrations (
+        version integer PRIMARY KEY CHECK (version > 0),
+        name text COLLATE "C" NOT NULL UNIQUE,
+        checksum text COLLATE "C" NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
+        applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+      )`,
+    );
+
+    for (const migration of MUSTER_POSTGRES_MIGRATIONS.slice(0, prefixLength)) {
+      const sql = await readFile(
+        new URL(`../migrations/${migration.name}`, import.meta.url),
+        "utf8",
+      );
+      await harness.pool.query(sql.replaceAll("{{schema}}", quotedSchema));
+      await harness.pool.query(
+        `INSERT INTO ${quotedSchema}.muster_migrations
+           (version, name, checksum) VALUES ($1, $2, $3)`,
+        [migration.version, migration.name, migration.checksum],
+      );
+    }
+
+    await expect(migrateMusterPostgres({ pool: harness.pool, schema }))
+      .resolves.toEqual({
+        applied: MUSTER_POSTGRES_MIGRATIONS
+          .slice(prefixLength)
+          .map(({ name }) => name),
+      });
+    await expect(bootstrapMusterPostgres({
+      pool: harness.pool,
+      schema,
+      initialQueue: { mode: "normal", updatedAt: NOW },
+    })).resolves.toMatchObject({ kind: "created" });
   });
 });
 

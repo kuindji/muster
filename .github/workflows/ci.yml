@@ -6,6 +6,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: muster_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d muster_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MUSTER_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/muster_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -19,3 +35,35 @@ jobs:
       - run: pnpm build
       - run: pnpm -r --if-present typecheck
       - run: pnpm test
+      - run: pnpm --filter @kuindji/muster-store-postgres test:packed
+
+  postgres-18:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: muster_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d muster_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MUSTER_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/muster_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @kuindji/muster-store-postgres typecheck
+      - run: pnpm --filter @kuindji/muster-store-postgres test
+      - run: pnpm --filter @kuindji/muster-store-postgres test:packed

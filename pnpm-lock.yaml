@@ -77,6 +77,9 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
     devDependencies:
+      '@kuindji/muster-contract':
+        specifier: workspace:*
+        version: link:../contract
       '@testcontainers/postgresql':
         specifier: ^12.1.0
         version: 12.1.0

@@ -67,10 +67,42 @@ invalidation and requeue batches, adjudication load/health refresh, and
 queue-wide emergency halt. Task 7 completes the Store surface with closed-key,
 privacy-safe ledger persistence, stable filtered ledger reads, globally unique
 and replay-safe reputation evidence, and frozen bytewise evidence ordering.
-The complete exported Store conformance suite passes unchanged against
-PostgreSQL 16 with real concurrent connections. Protocol conformance,
-migration compatibility, and CI are the next bounded adapter unit. MCP planning
+The complete exported Store and public-operation protocol conformance suites
+pass unchanged across adapter restarts on PostgreSQL 16 and 18, from both source
+and the packed package. Every frozen concurrency case has one exact executable
+owner, and fresh plus checked-in-prefix migration paths run in CI. Documentation
+and an independent adapter review are the next bounded unit. MCP planning
 remains separate.
+
+## PostgreSQL adapter verification
+
+The adapter package uses PostgreSQL 16 through Docker/Testcontainers by default.
+Test files run serially, while each frozen race still uses independent clients:
+
+```sh
+pnpm --filter @kuindji/muster-store-postgres test
+pnpm --filter @kuindji/muster-store-postgres test:packed
+```
+
+Use PostgreSQL 18 locally by selecting its disposable Testcontainers image:
+
+```sh
+MUSTER_POSTGRES_TEST_IMAGE=postgres:18-alpine pnpm --filter @kuindji/muster-store-postgres test
+MUSTER_POSTGRES_TEST_IMAGE=postgres:18-alpine pnpm --filter @kuindji/muster-store-postgres test:packed
+```
+
+An explicitly managed test database can be reused instead. Keep its URL in the
+shell or CI secret store rather than the repository:
+
+```sh
+MUSTER_POSTGRES_TEST_URL="$YOUR_POSTGRES_TEST_URL" pnpm --filter @kuindji/muster-store-postgres test
+MUSTER_POSTGRES_TEST_URL="$YOUR_POSTGRES_TEST_URL" pnpm --filter @kuindji/muster-store-postgres test:packed
+```
+
+The harness passes the external URL to `node-postgres` without weakening its TLS
+configuration. Put the required TLS mode in the URL and any private trust
+material in the process environment, such as `NODE_EXTRA_CA_CERTS`. Tests create
+and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 
 ## Specs
 

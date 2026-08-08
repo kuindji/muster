@@ -469,7 +469,7 @@ persistence, malformed rows, sensitive-ledger ordinal preservation, and the
 absence of staged Store stubs, core policy evaluators, and OAuth subject fields.
 Task 8 is the next bounded adapter slice.
 
-## Task 8: Protocol conformance, migration compatibility, and CI
+## Task 8: Protocol conformance, migration compatibility, and CI (complete 2026-08-08)
 
 Prove the adapter through public core operations rather than Store calls alone:
 
@@ -497,6 +497,24 @@ Prove the adapter through public core operations rather than Store calls alone:
 
 Checkpoint: all Store and protocol cases pass on PostgreSQL 16 and 18, both
 from source and the packed package.
+
+Completion note: the published schema and prompt-injection fixture packs now
+drive the unchanged Task-9 public-operation suite against fresh PostgreSQL
+schemas. A restart proxy constructs a new `PostgresStore` for every command, so
+the cumulative 31-case Store suite and seven protocol cases prove durable typed
+replay after later transitions rather than instance-local behavior. An exact
+manifest gives every `REQUIRED_CONCURRENCY_CASE_IDS` entry one executable Store
+case or named PostgreSQL multi-client owner, with missing, invented, and stale
+owners rejected. The reusable Store suite now treats concurrent winner position
+as scheduler-independent while still requiring exactly one typed winner and one
+typed replay or conflict. Migration tests cover fresh installation, every
+checked-in prefix, checksum drift, and database-newer-than-package refusal.
+Adapter test files are serial while their internal races retain separate
+clients. CI now runs the ordinary workspace and packed-package gates against
+PostgreSQL 16 and a separate complete adapter source/packed gate against
+PostgreSQL 18. Both versions pass locally from source (13 files, 91 tests) and
+from the packed tarball (31 Store and seven protocol cases). Task 9 is the next
+bounded adapter slice.
 
 ## Task 9: Documentation, full validation, and independent review
 

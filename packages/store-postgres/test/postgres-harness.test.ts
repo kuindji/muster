@@ -4,7 +4,7 @@ import {
   type PostgresTestHarness,
 } from "./postgres-harness.js";
 
-describe("PostgreSQL 16 harness", () => {
+describe("PostgreSQL compatibility harness", () => {
   let harness: PostgresTestHarness;
 
   beforeAll(async () => {
