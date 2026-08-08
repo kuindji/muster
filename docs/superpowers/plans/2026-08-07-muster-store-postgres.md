@@ -296,7 +296,7 @@ reserve-health retirement, detached reads, and durable replay. Lease-backed
 worker suspension and the other Task-1 cases remain intentionally deferred to
 Task 4.
 
-## Task 4: Job, payload, routing snapshot, and lease lifecycle
+## Task 4: Job, payload, routing snapshot, and lease lifecycle (complete 2026-08-08)
 
 Implement the enqueue and lease slice:
 
@@ -324,6 +324,19 @@ deferred intact to Task 6 rather than receiving a partial implementation.
 
 Checkpoint: every lease-lifecycle case selected for Task 4 passes against
 PostgreSQL 16.
+
+Completion note: enqueue now atomically compares the complete operational,
+class-version, permit-epoch, job, and payload state before creating the current
+cycle and attempt snapshot. Candidate reads expose storage facts without
+ranking them. Claims durably replay their first typed outcome and atomically
+bind the supplied lease, exact ordinary or canary payload, attempt revision,
+worker routing, contribution, and global lease identity. Extension,
+abandonment, expiry, suspension requeue, and coarse no-work accounting preserve
+the frozen deadline, sticky-epoch, and fair-attempt rules. All twelve selected
+Task-4 lease/routing/worker-requeue cases pass unchanged against PostgreSQL 16;
+focused tests additionally prove adapter-restart replay, multi-table rollback,
+and use of the candidate and open-lease indexes. Task 5 is the next bounded
+adapter slice.
 
 ## Task 5: Submission, replicas, result state, and decisions
 

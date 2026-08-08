@@ -279,13 +279,9 @@ describe("PostgreSQL control-state Store slice", () => {
 
     const restarted = new PostgresStore({ pool: harness.pool, schema: store.schema });
     const replay = await restarted.transitionClassVersion(retirements[0]!);
-    expect(replay.kind).toBe("replayed");
-    if (replay.kind === "replayed" && replay.record.state === "retired") {
-      if (replay.classHealth === undefined) {
-        throw new Error("retirement replay must include class health");
-      }
-      expect(replay.classHealth.revision).toBeLessThan(3);
-    }
+    const original = outcomes[0];
+    if (original?.kind !== "applied") throw new Error("first retirement did not apply");
+    expect(replay).toEqual({ ...original, kind: "replayed" });
   });
 
   it("preserves lifecycle cutoffs and republishes reserve health on retirement", async () => {

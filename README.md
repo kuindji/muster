@@ -50,11 +50,14 @@ final independent review passed. The
 is independently reviewed and corrected against that boundary. Its package,
 caller-owned connection boundary, real-PostgreSQL 16 harness, checksummed
 forward migration, explicit queue bootstrap, defensive stored-record codecs,
-and bounded serializable transaction runner are complete. Task 3 now persists
-class, permit-epoch, worker, routing, queue, and class-health control state with
-durable exact replay and real-database concurrency coverage. Job, payload,
-routing-snapshot, and lease lifecycle persistence are the next bounded unit.
-MCP planning remains separate.
+and bounded serializable transaction runner are complete. Task 3 persists class,
+permit-epoch, worker, routing, queue, and class-health control state with durable
+exact replay and real-database concurrency coverage. Task 4 now persists jobs,
+payloads, current-cycle attempts, candidate snapshots, leases, no-work
+contributions, extension deadlines, and sticky-epoch same-cycle requeues with
+atomic claim/suspension/abandonment/expiry behavior. Submission, replica,
+result-state, and decision persistence are the next bounded unit. MCP planning
+remains separate.
 
 ## Specs
 

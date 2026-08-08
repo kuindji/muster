@@ -1,10 +1,15 @@
 import type {
   ClassHealthSnapshot,
   ClassVersionRecord,
+  ClaimLeaseOutcome,
   ContractTransitionOutcome,
+  EnqueueOutcome,
   InitializeClassHealthOutcome,
   JobCycleAttemptSnapshot,
+  JobRecord,
+  LeaseCandidateSnapshot,
   LeaseRecord,
+  NoWorkAttemptOutcome,
   OperationalTransitionOutcome,
   PermitEpochTransitionOutcome,
   QueueModeSnapshot,
@@ -51,6 +56,21 @@ interface RevisionedRecordRow extends RecordRow {
 interface ReplayRow {
   readonly fingerprint: string;
   readonly outcome: unknown;
+}
+
+interface PayloadRow {
+  readonly input_hash: unknown;
+  readonly body: unknown;
+}
+
+interface CandidateRow {
+  readonly job_record: unknown;
+  readonly cycle_record: unknown;
+  readonly attempt_record: unknown;
+  readonly candidate_revision: string;
+  readonly result_state: unknown;
+  readonly queue_revision: string;
+  readonly health_revision: string;
 }
 
 const workerStates = new Set([
@@ -133,7 +153,14 @@ function validLeaseRecord(record: JsonRecord): boolean {
   return isString(record.leaseId) && isString(record.classId) &&
     isString(record.jobId) && Number.isSafeInteger(record.collectionCycle) &&
     Number(record.collectionCycle) > 0 && isString(record.contractVersion) &&
-    isString(record.permitEpoch) && typeof record.open === "boolean";
+    isString(record.permitEpoch) && isString(record.holder) &&
+    isString(record.inputHash) && isString(record.policyVersion) &&
+    isString(record.payloadRef) && isString(record.issuedAt) &&
+    isString(record.expiresAt) && isString(record.absoluteInFlightDeadline) &&
+    isNonNegativeSafeInteger(record.extensionsUsed) &&
+    isObject(record.extensionPolicy) && isObject(record.snapshot) &&
+    isObject(record.assignment) && isObject(record.routing) &&
+    typeof record.open === "boolean";
 }
 
 function validAttemptSnapshot(record: JsonRecord): boolean {
@@ -143,6 +170,80 @@ function validAttemptSnapshot(record: JsonRecord): boolean {
     record.acceptedWorkerIds.every(isString) &&
     Array.isArray(record.acceptedDiversity) &&
     typeof record.splitObserved === "boolean";
+}
+
+function validJobRecord(record: JsonRecord): boolean {
+  return isString(record.jobId) && isString(record.classId) &&
+    isString(record.contractVersion) && isString(record.inputHash) &&
+    isString(record.payloadRef) && isString(record.policyVersion) &&
+    isString(record.permitEpoch) && Number.isSafeInteger(record.collectionCycle) &&
+    Number(record.collectionCycle) > 0 && isString(record.firstEnqueuedAt) &&
+    isString(record.cycleStartedAt) &&
+    isNonNegativeSafeInteger(record.rejectedDisputeRequeues) &&
+    (record.notBefore === undefined || isString(record.notBefore)) &&
+    isObject(record.queuePriority) &&
+    (record.queuePriority.lane === "normal" || record.queuePriority.lane === "urgent") &&
+    Number.isSafeInteger(record.queuePriority.value) &&
+    isString(record.queuePriority.enqueuedAt) &&
+    isString(record.queuePriority.sequence);
+}
+
+function validClaimOutcome(record: JsonRecord): boolean {
+  return record.kind === "claimed" && isObject(record.lease) &&
+    isObject(record.job) && validLeaseRecord(record.lease) &&
+    validJobRecord(record.job);
+}
+
+function decodeJob(row: RecordRow, description = "jobs.record"): JobRecord {
+  return decodeStoredRecord<JobRecord>(row.record, validJobRecord, description);
+}
+
+function decodeLease(row: RecordRow, description = "leases.record"): LeaseRecord {
+  return decodeStoredRecord<LeaseRecord>(row.record, validLeaseRecord, description);
+}
+
+function decodeAttempt(
+  row: { readonly candidate_revision: string; readonly attempt_record: unknown },
+  description = "attempts.record",
+): { readonly revision: number; readonly attempts: JobCycleAttemptSnapshot } {
+  return {
+    revision: decodePositiveRevision(
+      row.candidate_revision,
+      "attempts.candidate_revision",
+    ),
+    attempts: decodeStoredRecord<JobCycleAttemptSnapshot>(
+      row.attempt_record,
+      validAttemptSnapshot,
+      description,
+    ),
+  };
+}
+
+function decodeCandidate(row: CandidateRow): LeaseCandidateSnapshot {
+  const job = decodeJob({ record: row.job_record });
+  const cycle = decodeJob({ record: row.cycle_record }, "job_cycles.record");
+  const attempt = decodeAttempt(row);
+  if (!equal(job, cycle) || row.result_state !== "collecting") {
+    throw new PostgresInfrastructureError(
+      "invalid_stored_value",
+      `job ${job.jobId} current-cycle projections disagree`,
+    );
+  }
+  return {
+    revision: attempt.revision,
+    job,
+    attempts: attempt.attempts,
+    operational: {
+      queueRevision: decodePositiveRevision(
+        row.queue_revision,
+        "queue_state.revision",
+      ),
+      classHealthRevision: decodePositiveRevision(
+        row.health_revision,
+        "class_health.revision",
+      ),
+    },
+  };
 }
 
 const validOutcome = (...kinds: string[]) => (record: JsonRecord): boolean =>
@@ -233,8 +334,9 @@ function notImplemented<Method extends AsyncStoreMethod>(method: string): Method
  * PostgreSQL implementation of the frozen Store boundary.
  *
  * The adapter borrows a client per operation and never owns caller pool
- * shutdown. Task 3 implements only control-plane state; later plan slices are
- * explicit infrastructure stubs so the class is already Store-assignable.
+ * shutdown. Tasks 3 and 4 implement control-plane plus lease-lifecycle state;
+ * later plan slices remain explicit infrastructure stubs so the class is
+ * already Store-assignable.
  */
 export class PostgresStore implements Store {
   readonly schema: string;
@@ -314,6 +416,131 @@ export class PostgresStore implements Store {
       [commandKind, commandKey, fingerprint, JSON.stringify(outcome)],
     );
     if (inserted.rowCount !== 1) restartSerializableTransaction();
+  }
+
+  private async loadCandidate(
+    client: QueryableClient,
+    jobId: string,
+    lock: boolean,
+  ): Promise<LeaseCandidateSnapshot | null> {
+    const result = await client.query<CandidateRow>(
+      `SELECT j.record AS job_record, jc.record AS cycle_record,
+              a.record AS attempt_record, a.candidate_revision,
+              jc.result_state, q.revision AS queue_revision,
+              h.revision AS health_revision
+         FROM ${this.quotedSchema}.jobs j
+         JOIN ${this.quotedSchema}.job_cycles jc
+           ON jc.job_id = j.job_id AND jc.collection_cycle = j.collection_cycle
+         JOIN ${this.quotedSchema}.attempts a
+           ON a.job_id = jc.job_id AND a.collection_cycle = jc.collection_cycle
+         JOIN ${this.quotedSchema}.class_health h ON h.class_id = j.class_id
+        CROSS JOIN ${this.quotedSchema}.queue_state q
+        WHERE j.job_id = $1 AND jc.result_state = 'collecting'
+        ${lock ? "FOR UPDATE OF j, jc, a, h, q" : ""}`,
+      [jobId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : decodeCandidate(row);
+  }
+
+  private async closeLeaseAttempt(
+    client: QueryableClient,
+    lease: LeaseRecord,
+    releaseContribution: boolean,
+  ): Promise<void> {
+    const attemptResult = await client.query<{
+      readonly candidate_revision: string;
+      readonly attempt_record: unknown;
+    }>(
+      `SELECT candidate_revision, record AS attempt_record
+         FROM ${this.quotedSchema}.attempts
+        WHERE job_id = $1 AND collection_cycle = $2
+        FOR UPDATE`,
+      [lease.jobId, lease.collectionCycle],
+    );
+    const attemptRow = attemptResult.rows[0];
+    if (attemptRow === undefined) {
+      throw new PostgresInfrastructureError(
+        "invalid_stored_value",
+        `lease ${lease.leaseId} has no attempt snapshot`,
+      );
+    }
+    const { revision, attempts } = decodeAttempt(attemptRow);
+    const routingResult = await client.query<RevisionedRecordRow>(
+      `SELECT revision, record FROM ${this.quotedSchema}.worker_routing
+        WHERE worker_id = $1 FOR UPDATE`,
+      [lease.holder],
+    );
+    const routingRow = routingResult.rows[0];
+    if (routingRow === undefined) {
+      throw new PostgresInfrastructureError(
+        "invalid_stored_value",
+        `lease ${lease.leaseId} holder has no routing snapshot`,
+      );
+    }
+    const routing = decodeRouting(routingRow);
+    if (!attempts.openLeaseIds.includes(lease.leaseId) ||
+        !routing.openLeaseIds.includes(lease.leaseId)) {
+      throw new PostgresInfrastructureError(
+        "invalid_stored_value",
+        `lease ${lease.leaseId} open projections disagree`,
+      );
+    }
+
+    const closedLease: LeaseRecord = { ...lease, open: false };
+    const nextAttempts: JobCycleAttemptSnapshot = {
+      ...attempts,
+      openLeaseIds: attempts.openLeaseIds.filter((id) => id !== lease.leaseId),
+    };
+    const mayRelease = releaseContribution &&
+      routing.contributionWindowId === lease.routing.contributionWindowId &&
+      routing.contributionUsed > 0;
+    const nextRouting: WorkerRoutingSnapshot = {
+      ...routing,
+      revision: routing.revision + 1,
+      contributionUsed: mayRelease
+        ? routing.contributionUsed - 1
+        : routing.contributionUsed,
+      openLeaseIds: routing.openLeaseIds.filter((id) => id !== lease.leaseId),
+    };
+
+    const closed = await client.query(
+      `UPDATE ${this.quotedSchema}.leases
+          SET open = false, record = $2::jsonb
+        WHERE lease_id = $1 AND open = true`,
+      [lease.leaseId, JSON.stringify(closedLease)],
+    );
+    if (closed.rowCount !== 1) restartSerializableTransaction();
+    const attempted = await client.query(
+      `UPDATE ${this.quotedSchema}.attempts
+          SET candidate_revision = $3, attempt_count = $4,
+              split_observed = $5, record = $6::jsonb
+        WHERE job_id = $1 AND collection_cycle = $2
+          AND candidate_revision = $7`,
+      [
+        lease.jobId,
+        lease.collectionCycle,
+        revision + 1,
+        nextAttempts.attemptCount,
+        nextAttempts.splitObserved,
+        JSON.stringify(nextAttempts),
+        revision,
+      ],
+    );
+    if (attempted.rowCount !== 1) restartSerializableTransaction();
+    const routed = await client.query(
+      `UPDATE ${this.quotedSchema}.worker_routing
+          SET revision = $2, contribution_used = $3, record = $4::jsonb
+        WHERE worker_id = $1 AND revision = $5`,
+      [
+        lease.holder,
+        nextRouting.revision,
+        nextRouting.contributionUsed,
+        JSON.stringify(nextRouting),
+        routing.revision,
+      ],
+    );
+    if (routed.rowCount !== 1) restartSerializableTransaction();
   }
 
   async getWorker(
@@ -1212,16 +1439,677 @@ export class PostgresStore implements Store {
     });
   }
 
-  readonly enqueueJob = notImplemented<Store["enqueueJob"]>("enqueueJob");
-  readonly getJob = notImplemented<Store["getJob"]>("getJob");
-  readonly getPayload = notImplemented<Store["getPayload"]>("getPayload");
-  readonly listLeaseCandidates = notImplemented<Store["listLeaseCandidates"]>("listLeaseCandidates");
-  readonly compareAndClaimLease = notImplemented<Store["compareAndClaimLease"]>("compareAndClaimLease");
-  readonly recordNoWorkAttempt = notImplemented<Store["recordNoWorkAttempt"]>("recordNoWorkAttempt");
-  readonly getLease = notImplemented<Store["getLease"]>("getLease");
-  readonly extendLease = notImplemented<Store["extendLease"]>("extendLease");
-  readonly abandonLease = notImplemented<Store["abandonLease"]>("abandonLease");
-  readonly expireAndRequeue = notImplemented<Store["expireAndRequeue"]>("expireAndRequeue");
+  async enqueueJob(
+    input: Parameters<Store["enqueueJob"]>[0],
+  ): ReturnType<Store["enqueueJob"]> {
+    const snapshot = snapshotCommandInput(input);
+    return this.inCreationOrder(() => this.transact(snapshot, async (client, captured) => {
+      const fingerprint = commandFingerprint(captured);
+      const historyResult = await client.query<ReplayRow>(
+        `SELECT fingerprint, outcome
+           FROM ${this.quotedSchema}.command_replays
+          WHERE command_kind = 'enqueue_job' AND command_key = $1
+          FOR UPDATE`,
+        [captured.job.jobId],
+      );
+      const history = historyResult.rows[0];
+      if (history !== undefined) {
+        const prior = decodeStoredRecord<EnqueueOutcome>(
+          history.outcome,
+          validOutcome("enqueued"),
+          "enqueue_job.outcome",
+        );
+        if (prior.kind !== "enqueued") {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            "enqueue_job receipt must contain the original enqueued outcome",
+          );
+        }
+        return history.fingerprint === fingerprint
+          ? { kind: "replayed" } as const
+          : { kind: "conflict" } as const;
+      }
+
+      const existingJobResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.jobs
+          WHERE job_id = $1 FOR UPDATE`,
+        [captured.job.jobId],
+      );
+      if (existingJobResult.rows[0] !== undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `job ${captured.job.jobId} is missing its enqueue receipt`,
+        );
+      }
+
+      const queueResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.queue_state
+          WHERE singleton = true FOR UPDATE`,
+      );
+      const healthResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.class_health
+          WHERE class_id = $1 FOR UPDATE`,
+        [captured.job.classId],
+      );
+      const queueRow = queueResult.rows[0];
+      const healthRow = healthResult.rows[0];
+      if (queueRow === undefined || healthRow === undefined) {
+        return { kind: "conflict" } as const;
+      }
+      const queue = decodeQueue(queueRow);
+      const health = decodeHealth(healthRow);
+      const currentOperational = {
+        queueRevision: queue.revision,
+        classHealthRevision: health.revision,
+      };
+      if (!equal(currentOperational, captured.expectedOperationalState)) {
+        return {
+          kind: "operational_state_conflict",
+          current: currentOperational,
+        } as const;
+      }
+      if (
+        queue.mode === "admission_halted" || queue.mode === "emergency_halted" ||
+        health.health.operating !== "ready" ||
+        health.health.reserves.urgent === "saturated" ||
+        health.health.reserves.splitAndAdjudication === "saturated" ||
+        health.health.reserves.audit === "saturated"
+      ) {
+        return {
+          kind: "refused",
+          queue: queue.mode,
+          health: health.health,
+        } as const;
+      }
+
+      const classResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.class_versions
+          WHERE class_id = $1 AND contract_version = $2 FOR UPDATE`,
+        [captured.job.classId, captured.job.contractVersion],
+      );
+      const epochResult = await client.query<{ readonly permit_epoch: unknown }>(
+        `SELECT permit_epoch FROM ${this.quotedSchema}.permit_epochs
+          WHERE class_id = $1 FOR UPDATE`,
+        [captured.job.classId],
+      );
+      const classRow = classResult.rows[0];
+      const epoch = epochResult.rows[0]?.permit_epoch;
+      if (classRow === undefined || !isString(epoch) ||
+          decodeClassVersion(classRow).state !== "active" ||
+          epoch !== captured.job.permitEpoch) {
+        return { kind: "conflict" } as const;
+      }
+
+      const identityResult = await client.query(
+        `SELECT identity_id FROM ${this.quotedSchema}.core_identities
+          WHERE identity_id = $1 FOR UPDATE`,
+        [captured.job.payloadRef],
+      );
+      if (identityResult.rows[0] !== undefined) return { kind: "conflict" } as const;
+      const payloadResult = await client.query<PayloadRow>(
+        `SELECT input_hash, body FROM ${this.quotedSchema}.payloads
+          WHERE payload_ref = $1 FOR UPDATE`,
+        [captured.job.payloadRef],
+      );
+      const payloadRow = payloadResult.rows[0];
+      if (payloadRow !== undefined) {
+        if (!isString(payloadRow.input_hash)) {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            "payloads.input_hash must be a string",
+          );
+        }
+        if (payloadRow.input_hash !== captured.job.inputHash ||
+            !equal(decodeStoredJson(payloadRow.body), captured.payload)) {
+          return { kind: "conflict" } as const;
+        }
+      }
+
+      if (payloadRow === undefined) {
+        const insertedPayload = await client.query(
+          `INSERT INTO ${this.quotedSchema}.payloads
+             (payload_ref, input_hash, body)
+           VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (payload_ref) DO NOTHING`,
+          [
+            captured.job.payloadRef,
+            captured.job.inputHash,
+            JSON.stringify(captured.payload),
+          ],
+        );
+        if (insertedPayload.rowCount !== 1) restartSerializableTransaction();
+      }
+      const insertedJob = await client.query(
+        `INSERT INTO ${this.quotedSchema}.jobs
+           (job_id, class_id, contract_version, payload_ref, input_hash,
+            collection_cycle, lane, priority_value, enqueued_at, sequence, record)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10, $11::jsonb)
+         ON CONFLICT (job_id) DO NOTHING`,
+        [
+          captured.job.jobId,
+          captured.job.classId,
+          captured.job.contractVersion,
+          captured.job.payloadRef,
+          captured.job.inputHash,
+          captured.job.collectionCycle,
+          captured.job.queuePriority.lane,
+          captured.job.queuePriority.value,
+          captured.job.queuePriority.enqueuedAt,
+          captured.job.queuePriority.sequence,
+          JSON.stringify(captured.job),
+        ],
+      );
+      if (insertedJob.rowCount !== 1) restartSerializableTransaction();
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.job_cycles
+           (job_id, collection_cycle, permit_epoch, input_hash,
+            cycle_started_at, result_state, record)
+         VALUES ($1, $2, $3, $4, $5::timestamptz, 'collecting', $6::jsonb)`,
+        [
+          captured.job.jobId,
+          captured.job.collectionCycle,
+          captured.job.permitEpoch,
+          captured.job.inputHash,
+          captured.job.cycleStartedAt,
+          JSON.stringify(captured.job),
+        ],
+      );
+      const attempts: JobCycleAttemptSnapshot = {
+        attemptCount: 0,
+        openLeaseIds: [],
+        acceptedWorkerIds: [],
+        acceptedDiversity: [],
+        splitObserved: false,
+      };
+      await client.query(
+        `INSERT INTO ${this.quotedSchema}.attempts
+           (job_id, collection_cycle, candidate_revision,
+            attempt_count, split_observed, record)
+         VALUES ($1, $2, 1, 0, false, $3::jsonb)`,
+        [captured.job.jobId, captured.job.collectionCycle, JSON.stringify(attempts)],
+      );
+      const outcome: EnqueueOutcome = { kind: "enqueued" };
+      await this.writeReplay(
+        client,
+        "enqueue_job",
+        captured.job.jobId,
+        fingerprint,
+        outcome,
+      );
+      return outcome;
+    }));
+  }
+
+  async getJob(
+    jobId: Parameters<Store["getJob"]>[0],
+  ): ReturnType<Store["getJob"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.jobs WHERE job_id = $1`,
+        [jobId],
+      );
+      const row = result.rows[0];
+      return row === undefined ? null : decodeJob(row);
+    });
+  }
+
+  async getPayload(
+    payloadRef: Parameters<Store["getPayload"]>[0],
+  ): ReturnType<Store["getPayload"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<{ readonly body: unknown }>(
+        `SELECT body FROM ${this.quotedSchema}.payloads WHERE payload_ref = $1`,
+        [payloadRef],
+      );
+      const row = result.rows[0];
+      return row === undefined
+        ? null
+        : decodeStoredJson(row.body) as Awaited<ReturnType<Store["getPayload"]>>;
+    });
+  }
+
+  async listLeaseCandidates(
+    input: Parameters<Store["listLeaseCandidates"]>[0],
+  ): ReturnType<Store["listLeaseCandidates"]> {
+    const captured = snapshotCommandInput(input);
+    if (captured.classIds.length === 0) return [];
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<CandidateRow>(
+        `SELECT j.record AS job_record, jc.record AS cycle_record,
+                a.record AS attempt_record, a.candidate_revision,
+                jc.result_state, q.revision AS queue_revision,
+                h.revision AS health_revision
+           FROM ${this.quotedSchema}.jobs j
+           JOIN ${this.quotedSchema}.job_cycles jc
+             ON jc.job_id = j.job_id AND jc.collection_cycle = j.collection_cycle
+           JOIN ${this.quotedSchema}.attempts a
+             ON a.job_id = jc.job_id AND a.collection_cycle = jc.collection_cycle
+           JOIN ${this.quotedSchema}.class_health h ON h.class_id = j.class_id
+          CROSS JOIN ${this.quotedSchema}.queue_state q
+          WHERE j.class_id = ANY($1::text[]) AND jc.result_state = 'collecting'
+          ORDER BY j.job_id COLLATE "C"`,
+        [captured.classIds],
+      );
+      return result.rows.map(decodeCandidate);
+    });
+  }
+
+  async compareAndClaimLease(
+    input: Parameters<Store["compareAndClaimLease"]>[0],
+  ): ReturnType<Store["compareAndClaimLease"]> {
+    return this.transact(input, async (client, captured) => {
+      const fingerprint = commandFingerprint(captured);
+      const replayed = await this.readReplay<ClaimLeaseOutcome>(
+        client,
+        "compare_and_claim_lease",
+        fingerprint,
+        fingerprint,
+        validClaimOutcome,
+      );
+      if (replayed !== null) return replayed;
+
+      const identityResult = await client.query(
+        `SELECT identity_id FROM ${this.quotedSchema}.core_identities
+          WHERE identity_id = $1 FOR UPDATE`,
+        [captured.preparedLease.leaseId],
+      );
+      if (identityResult.rows[0] !== undefined) {
+        return { kind: "conflict", reason: "identity_collision" } as const;
+      }
+      const existingLeaseResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.preparedLease.leaseId],
+      );
+      if (existingLeaseResult.rows[0] !== undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `lease ${captured.preparedLease.leaseId} is missing its core identity`,
+        );
+      }
+      if (captured.preparedLease.assignment.kind === "ordinary") {
+        const leasePayloadCollision = await client.query(
+          `SELECT payload_ref FROM ${this.quotedSchema}.payloads
+            WHERE payload_ref = $1 FOR UPDATE`,
+          [captured.preparedLease.leaseId],
+        );
+        if (leasePayloadCollision.rows[0] !== undefined) {
+          return { kind: "conflict", reason: "identity_collision" } as const;
+        }
+      }
+
+      const currentCandidate = await this.loadCandidate(
+        client,
+        captured.expectedCandidate.job.jobId,
+        true,
+      );
+      if (currentCandidate === null ||
+          currentCandidate.revision !== captured.expectedCandidate.revision ||
+          !equal(currentCandidate.job, captured.expectedCandidate.job) ||
+          !equal(currentCandidate.attempts, captured.expectedCandidate.attempts)) {
+        return { kind: "conflict", reason: "candidate_stale" } as const;
+      }
+
+      const workerResult = await client.query<{
+        readonly worker_record: unknown;
+        readonly revision: string;
+        readonly routing_record: unknown;
+      }>(
+        `SELECT w.record AS worker_record, r.revision,
+                r.record AS routing_record
+           FROM ${this.quotedSchema}.workers w
+           JOIN ${this.quotedSchema}.worker_routing r ON r.worker_id = w.worker_id
+          WHERE w.worker_id = $1
+          FOR UPDATE OF w, r`,
+        [captured.expectedWorker.workerId],
+      );
+      const workerRow = workerResult.rows[0];
+      if (workerRow === undefined) {
+        return { kind: "conflict", reason: "worker_snapshot_stale" } as const;
+      }
+      const worker = decodeWorker({ record: workerRow.worker_record });
+      const currentWorker = decodeRouting({
+        revision: workerRow.revision,
+        record: workerRow.routing_record,
+      });
+      if (!equal(currentWorker, captured.expectedWorker)) {
+        return { kind: "conflict", reason: "worker_snapshot_stale" } as const;
+      }
+      if (!equal(currentCandidate.operational, captured.expectedCandidate.operational)) {
+        return { kind: "conflict", reason: "operational_state_stale" } as const;
+      }
+
+      const queueResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.queue_state
+          WHERE singleton = true`,
+      );
+      const healthResult = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.class_health
+          WHERE class_id = $1`,
+        [currentCandidate.job.classId],
+      );
+      const classResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.class_versions
+          WHERE class_id = $1 AND contract_version = $2 FOR UPDATE`,
+        [currentCandidate.job.classId, currentCandidate.job.contractVersion],
+      );
+      const queueRow = queueResult.rows[0];
+      const healthRow = healthResult.rows[0];
+      const classRow = classResult.rows[0];
+      if (queueRow === undefined || healthRow === undefined || classRow === undefined) {
+        return { kind: "conflict", reason: "unclaimable" } as const;
+      }
+      const queue = decodeQueue(queueRow);
+      const health = decodeHealth(healthRow);
+      const classVersion = decodeClassVersion(classRow);
+      if (queue.mode === "admission_halted" || queue.mode === "emergency_halted" ||
+          health.health.operating === "admission_halted" ||
+          health.health.operating === "emergency_halted" ||
+          classVersion.state !== "active" || worker.state !== "active" ||
+          currentWorker.contributionUsed >= worker.declaredCapPerWeek) {
+        return { kind: "conflict", reason: "unclaimable" } as const;
+      }
+
+      const storedPayloadResult = await client.query<PayloadRow>(
+        `SELECT input_hash, body FROM ${this.quotedSchema}.payloads
+          WHERE payload_ref = $1 FOR UPDATE`,
+        [currentCandidate.job.payloadRef],
+      );
+      const storedPayload = storedPayloadResult.rows[0];
+      if (storedPayload !== undefined && !isString(storedPayload.input_hash)) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "payloads.input_hash must be a string",
+        );
+      }
+      const lease = captured.preparedLease;
+      const expectedAttempt = currentCandidate.attempts.attemptCount + 1;
+      const payloadBindingMatches = lease.assignment.kind === "ordinary"
+        ? lease.payloadRef === currentCandidate.job.payloadRef &&
+          lease.inputHash === currentCandidate.job.inputHash &&
+          storedPayload !== undefined &&
+          storedPayload.input_hash === currentCandidate.job.inputHash &&
+          equal(decodeStoredJson(storedPayload.body), captured.preparedPayload)
+        : lease.payloadRef === lease.leaseId &&
+          lease.payloadRef !== currentCandidate.job.payloadRef;
+      if (lease.assignment.kind === "canary") {
+        const canaryPayload = await client.query(
+          `SELECT payload_ref FROM ${this.quotedSchema}.payloads
+            WHERE payload_ref = $1 FOR UPDATE`,
+          [lease.payloadRef],
+        );
+        if (canaryPayload.rows[0] !== undefined) {
+          return { kind: "conflict", reason: "unclaimable" } as const;
+        }
+      }
+      const preparedMatches = lease.open &&
+        lease.jobId === currentCandidate.job.jobId &&
+        lease.collectionCycle === currentCandidate.job.collectionCycle &&
+        lease.classId === currentCandidate.job.classId &&
+        lease.holder === currentWorker.workerId &&
+        lease.contractVersion === currentCandidate.job.contractVersion &&
+        lease.policyVersion === currentCandidate.job.policyVersion &&
+        lease.permitEpoch === currentCandidate.job.permitEpoch &&
+        lease.routing.candidateRevision === currentCandidate.revision &&
+        lease.routing.workerRevision === currentWorker.revision &&
+        equal(lease.routing.operational, currentCandidate.operational) &&
+        lease.routing.contributionWindowId === currentWorker.contributionWindowId &&
+        lease.routing.contributionOrdinal === currentWorker.contributionUsed + 1 &&
+        lease.routing.assignedSlotOccurrence === currentWorker.assignedSlotOccurrence &&
+        lease.routing.attemptNumber === expectedAttempt &&
+        equal(lease.routing.queuePriority, currentCandidate.job.queuePriority) &&
+        payloadBindingMatches;
+      if (!preparedMatches || currentCandidate.attempts.openLeaseIds.length > 0 ||
+          currentCandidate.attempts.acceptedWorkerIds.includes(currentWorker.workerId)) {
+        return { kind: "conflict", reason: "unclaimable" } as const;
+      }
+
+      if (lease.assignment.kind === "canary") {
+        const insertedPayload = await client.query(
+          `INSERT INTO ${this.quotedSchema}.payloads
+             (payload_ref, input_hash, body)
+           VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (payload_ref) DO NOTHING`,
+          [lease.payloadRef, lease.inputHash, JSON.stringify(captured.preparedPayload)],
+        );
+        if (insertedPayload.rowCount !== 1) restartSerializableTransaction();
+      }
+      const insertedIdentity = await client.query(
+        `INSERT INTO ${this.quotedSchema}.core_identities
+           (identity_id, identity_kind) VALUES ($1, 'lease')
+         ON CONFLICT (identity_id) DO NOTHING`,
+        [lease.leaseId],
+      );
+      if (insertedIdentity.rowCount !== 1) restartSerializableTransaction();
+      const insertedLease = await client.query(
+        `INSERT INTO ${this.quotedSchema}.leases
+           (lease_id, job_id, collection_cycle, class_id, contract_version,
+            permit_epoch, holder, payload_ref, open, issued_at, expires_at,
+            absolute_in_flight_deadline, record)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true,
+                 $9::timestamptz, $10::timestamptz, $11::timestamptz, $12::jsonb)
+         ON CONFLICT (lease_id) DO NOTHING`,
+        [
+          lease.leaseId,
+          lease.jobId,
+          lease.collectionCycle,
+          lease.classId,
+          lease.contractVersion,
+          lease.permitEpoch,
+          lease.holder,
+          lease.payloadRef,
+          lease.issuedAt,
+          lease.expiresAt,
+          lease.absoluteInFlightDeadline,
+          JSON.stringify(lease),
+        ],
+      );
+      if (insertedLease.rowCount !== 1) restartSerializableTransaction();
+
+      const nextAttempts: JobCycleAttemptSnapshot = {
+        ...currentCandidate.attempts,
+        attemptCount: expectedAttempt,
+        openLeaseIds: [lease.leaseId],
+      };
+      const attemptUpdate = await client.query(
+        `UPDATE ${this.quotedSchema}.attempts
+            SET candidate_revision = $3, attempt_count = $4,
+                split_observed = $5, record = $6::jsonb
+          WHERE job_id = $1 AND collection_cycle = $2
+            AND candidate_revision = $7`,
+        [
+          lease.jobId,
+          lease.collectionCycle,
+          currentCandidate.revision + 1,
+          nextAttempts.attemptCount,
+          nextAttempts.splitObserved,
+          JSON.stringify(nextAttempts),
+          currentCandidate.revision,
+        ],
+      );
+      if (attemptUpdate.rowCount !== 1) restartSerializableTransaction();
+      const nextRouting: WorkerRoutingSnapshot = {
+        ...currentWorker,
+        revision: currentWorker.revision + 1,
+        contributionUsed: currentWorker.contributionUsed + 1,
+        openLeaseIds: [...currentWorker.openLeaseIds, lease.leaseId],
+      };
+      const routingUpdate = await client.query(
+        `UPDATE ${this.quotedSchema}.worker_routing
+            SET revision = $2, contribution_used = $3, record = $4::jsonb
+          WHERE worker_id = $1 AND revision = $5`,
+        [
+          currentWorker.workerId,
+          nextRouting.revision,
+          nextRouting.contributionUsed,
+          JSON.stringify(nextRouting),
+          currentWorker.revision,
+        ],
+      );
+      if (routingUpdate.rowCount !== 1) restartSerializableTransaction();
+      const outcome: ClaimLeaseOutcome = {
+        kind: "claimed",
+        lease: structuredClone(lease),
+        job: structuredClone(currentCandidate.job),
+      };
+      await this.writeReplay(
+        client,
+        "compare_and_claim_lease",
+        fingerprint,
+        fingerprint,
+        outcome,
+      );
+      return outcome;
+    });
+  }
+
+  async recordNoWorkAttempt(
+    input: Parameters<Store["recordNoWorkAttempt"]>[0],
+  ): ReturnType<Store["recordNoWorkAttempt"]> {
+    return this.transact(input, async (client, captured) => {
+      const result = await client.query<RevisionedRecordRow>(
+        `SELECT revision, record FROM ${this.quotedSchema}.worker_routing
+          WHERE worker_id = $1 FOR UPDATE`,
+        [captured.expectedWorker.workerId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `worker ${captured.expectedWorker.workerId} has no routing snapshot`,
+        );
+      }
+      const current = decodeRouting(row);
+      if (!equal(current, captured.expectedWorker)) {
+        return { kind: "conflict", current } as const;
+      }
+      const next: WorkerRoutingSnapshot = {
+        ...current,
+        revision: current.revision + 1,
+        contributionUsed: current.contributionUsed + 1,
+        openLeaseIds: [...current.openLeaseIds],
+      };
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.worker_routing
+            SET revision = $2, contribution_used = $3, record = $4::jsonb
+          WHERE worker_id = $1 AND revision = $5`,
+        [
+          current.workerId,
+          next.revision,
+          next.contributionUsed,
+          JSON.stringify(next),
+          current.revision,
+        ],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+      const outcome: NoWorkAttemptOutcome = { kind: "recorded", current: next };
+      return outcome;
+    });
+  }
+
+  async getLease(
+    leaseId: Parameters<Store["getLease"]>[0],
+  ): ReturnType<Store["getLease"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases WHERE lease_id = $1`,
+        [leaseId],
+      );
+      const row = result.rows[0];
+      return row === undefined ? null : decodeLease(row);
+    });
+  }
+
+  async extendLease(
+    input: Parameters<Store["extendLease"]>[0],
+  ): ReturnType<Store["extendLease"]> {
+    return this.transact(input, async (client, captured) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return { kind: "refused" } as const;
+      const lease = decodeLease(row);
+      if (!lease.open || lease.holder !== captured.workerId ||
+          lease.expiresAt !== captured.expectedExpiry ||
+          lease.extensionsUsed !== captured.expectedExtensionsUsed ||
+          !Number.isFinite(lease.extensionPolicy.extensionTtl) ||
+          lease.extensionPolicy.extensionTtl <= 0 ||
+          !Number.isSafeInteger(lease.extensionPolicy.maxExtensionsPerLease) ||
+          lease.extensionPolicy.maxExtensionsPerLease < 0 ||
+          captured.newExtensionsUsed !== lease.extensionsUsed + 1 ||
+          captured.newExtensionsUsed > lease.extensionPolicy.maxExtensionsPerLease) {
+        return { kind: "refused" } as const;
+      }
+      const expectedNewExpiry = Date.parse(lease.expiresAt) +
+        lease.extensionPolicy.extensionTtl * 1_000;
+      if (!Number.isFinite(expectedNewExpiry) ||
+          !Number.isFinite(Date.parse(lease.absoluteInFlightDeadline)) ||
+          !Number.isFinite(Date.parse(captured.newExpiry)) ||
+          Date.parse(captured.newExpiry) !== expectedNewExpiry ||
+          Date.parse(captured.newExpiry) >= Date.parse(lease.absoluteInFlightDeadline)) {
+        return { kind: "refused" } as const;
+      }
+      const next: LeaseRecord = {
+        ...lease,
+        expiresAt: captured.newExpiry,
+        extensionsUsed: captured.newExtensionsUsed,
+      };
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.leases
+            SET expires_at = $2::timestamptz, record = $3::jsonb
+          WHERE lease_id = $1 AND open = true`,
+        [captured.leaseId, next.expiresAt, JSON.stringify(next)],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+      return { kind: "extended", newExpiry: next.expiresAt } as const;
+    });
+  }
+
+  async abandonLease(
+    input: Parameters<Store["abandonLease"]>[0],
+  ): ReturnType<Store["abandonLease"]> {
+    return this.transact(input, async (client, captured) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return { kind: "refused" } as const;
+      const lease = decodeLease(row);
+      if (!lease.open || lease.holder !== captured.workerId ||
+          lease.permitEpoch !== captured.requeue.sameCyclePermitEpoch) {
+        return { kind: "refused" } as const;
+      }
+      await this.closeLeaseAttempt(
+        client,
+        lease,
+        captured.classification !== "provider_or_platform_failure",
+      );
+      return { kind: "recorded" } as const;
+    });
+  }
+
+  async expireAndRequeue(
+    leaseId: Parameters<Store["expireAndRequeue"]>[0],
+    under: Parameters<Store["expireAndRequeue"]>[1],
+  ): ReturnType<Store["expireAndRequeue"]> {
+    return this.transact({ leaseId, under }, async (client, captured) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return;
+      const lease = decodeLease(row);
+      if (!lease.open || lease.permitEpoch !== captured.under.sameCyclePermitEpoch) return;
+      await this.closeLeaseAttempt(client, lease, true);
+    });
+  }
   readonly acceptOrReplaySubmission = notImplemented<Store["acceptOrReplaySubmission"]>("acceptOrReplaySubmission");
   readonly rejectSubmission = notImplemented<Store["rejectSubmission"]>("rejectSubmission");
   readonly getAcceptedSubmission = notImplemented<Store["getAcceptedSubmission"]>("getAcceptedSubmission");
