@@ -717,4 +717,39 @@ describe("PostgreSQL submission and result-state Store slice", () => {
     await expect(store.getAuthorizationStatus(authorizationRequestId))
       .rejects.toMatchObject({ code: "invalid_stored_value" });
   });
+
+  it("fails loudly on a malformed durable reserve replay", async () => {
+    const store = await createStore();
+    await initializeDirectState(store);
+    const policy = {
+      classId: "class-direct",
+      contractVersion: "1.0.0",
+      policyVersion: "adjudication-corruption-1",
+      windowId: "2026-W32-corruption",
+      windowStartsAt: "2026-08-03T00:00:00.000Z",
+      windowEndsAt: "2026-08-10T00:00:00.000Z",
+      lane: "splitAndAdjudication" as const,
+      laneLimit: 1,
+    };
+    await expect(store.initializeReservePolicy({ policy, at: NOW }))
+      .resolves.toMatchObject({ kind: "initialized" });
+    const charge = {
+      chargeKey: "reserve-corruption-1",
+      workerIds: [],
+      policy,
+      at: NOW,
+    };
+    await expect(store.chargeReserve(charge)).resolves.toMatchObject({
+      kind: "charged",
+      status: "applied",
+    });
+    await harness.pool.query(
+      `UPDATE "${store.schema}".reserve_charges
+          SET record = '{"kind":"charged"}'::jsonb
+        WHERE charge_key = $1`,
+      [charge.chargeKey],
+    );
+    await expect(store.chargeReserve(charge))
+      .rejects.toMatchObject({ code: "invalid_stored_value" });
+  });
 });

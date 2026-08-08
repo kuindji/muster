@@ -44,8 +44,14 @@ describe("PostgreSQL migrations and bootstrap", () => {
       migrateMusterPostgres({ pool: harness.pool, schema: first }),
       migrateMusterPostgres({ pool: harness.pool, schema: second }),
     ]);
-    expect(firstResult.applied).toEqual(["0001_initial.sql"]);
-    expect(secondResult.applied).toEqual(["0001_initial.sql"]);
+    expect(firstResult.applied).toEqual([
+      "0001_initial.sql",
+      "0002_invalidation_scope_indexes.sql",
+    ]);
+    expect(secondResult.applied).toEqual([
+      "0001_initial.sql",
+      "0002_invalidation_scope_indexes.sql",
+    ]);
     await expect(
       migrateMusterPostgres({ pool: harness.pool, schema: first }),
     ).resolves.toEqual({ applied: [] });
@@ -84,7 +90,40 @@ describe("PostgreSQL migrations and bootstrap", () => {
     ]);
     expect(results.flatMap((result) => result.applied)).toEqual([
       "0001_initial.sql",
+      "0002_invalidation_scope_indexes.sql",
     ]);
+  });
+
+  it("uses the invalidation-scope discovery indexes", async () => {
+    const schema = allocate();
+    await migrateMusterPostgres({ pool: harness.pool, schema });
+    const quotedSchema = quoteSchemaName(schema);
+    const client = await harness.pool.connect();
+    try {
+      await client.query("SET enable_seqscan = off");
+      const cycles = await client.query<{ readonly "QUERY PLAN": string }>(
+        `EXPLAIN (COSTS OFF)
+         SELECT result_state, record FROM ${quotedSchema}.job_cycles
+          WHERE record->>'classId' = $1
+          ORDER BY job_id COLLATE "C", collection_cycle`,
+        ["class-review"],
+      );
+      const actions = await client.query<{ readonly "QUERY PLAN": string }>(
+        `EXPLAIN (COSTS OFF)
+         SELECT authorization_request_id
+           FROM ${quotedSchema}.action_adjudications
+          WHERE (request->>'jobId') = $1
+            AND (request->>'collectionCycle')::bigint = $2
+          ORDER BY authorization_request_id COLLATE "C"`,
+        ["job-review", 1],
+      );
+      expect(cycles.rows.map((row) => row["QUERY PLAN"]).join("\n"))
+        .toContain("job_cycles_invalidation_class_idx");
+      expect(actions.rows.map((row) => row["QUERY PLAN"]).join("\n"))
+        .toContain("action_adjudications_invalidation_scope_idx");
+    } finally {
+      client.release();
+    }
   });
 
   it("creates, replays, and conflicts explicit queue bootstrap", async () => {

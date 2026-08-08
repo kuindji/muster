@@ -3,5 +3,10 @@
     "version": 1,
     "name": "0001_initial.sql",
     "checksum": "d6ca933080ad050bbe8e263c3be59f49068e5eb8f410d231cea642a43b226dde"
+  },
+  {
+    "version": 2,
+    "name": "0002_invalidation_scope_indexes.sql",
+    "checksum": "aa38e34715561746a03310004ebfbc2e262e6d36c40359c229a957cce78cb5cc"
   }
 ]

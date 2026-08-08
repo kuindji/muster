@@ -70,11 +70,18 @@ and replay-safe reputation evidence, and frozen bytewise evidence ordering.
 The complete exported Store and public-operation protocol conformance suites
 pass unchanged across adapter restarts on PostgreSQL 16 and 18, from both source
 and the packed package. Every frozen concurrency case has one exact executable
-owner, and fresh plus checked-in-prefix migration paths run in CI. Documentation
-and an independent adapter review are the next bounded unit. MCP planning
-remains separate.
+owner, and fresh plus checked-in-prefix migration paths run in CI. The adapter's
+documentation and independent semantic review are complete. Review corrections
+add forward-only invalidation-scope indexes and fail-loud durable reserve replay
+decoding without changing the frozen Store boundary. The PostgreSQL adapter
+milestone is complete; MCP planning remains separate.
 
 ## PostgreSQL adapter verification
+
+See the package's
+[construction and operations guide](packages/store-postgres/README.md) for
+explicit migration/bootstrap, caller-owned pool shutdown, transaction retries,
+deployment roles, backup responsibility, and safe rollout order.
 
 The adapter package uses PostgreSQL 16 through Docker/Testcontainers by default.
 Test files run serially, while each frozen race still uses independent clients:

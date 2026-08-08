@@ -526,21 +526,42 @@ function decodeDecisionResult(
   };
 }
 
-function decodeOpaqueRecord<T>(value: unknown, description: string): T {
-  return decodeStoredRecord<T>(value, () => true, description);
+function validReservePolicySnapshot(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const lane = value.lane;
+  const windowStartsAt = isString(value.windowStartsAt)
+    ? Date.parse(value.windowStartsAt)
+    : Number.NaN;
+  const windowEndsAt = isString(value.windowEndsAt)
+    ? Date.parse(value.windowEndsAt)
+    : Number.NaN;
+  return isString(value.classId) && value.classId.length > 0 &&
+    isString(value.contractVersion) && value.contractVersion.length > 0 &&
+    isString(lane) &&
+    ["lowCost", "urgent", "splitAndAdjudication", "audit"].includes(lane) &&
+    isString(value.policyVersion) && value.policyVersion.length > 0 &&
+    isString(value.windowId) && value.windowId.length > 0 &&
+    Number.isFinite(windowStartsAt) && Number.isFinite(windowEndsAt) &&
+    windowStartsAt < windowEndsAt &&
+    isNonNegativeSafeInteger(value.laneLimit) &&
+    ((lane === "lowCost" || lane === "urgent")
+      ? isNonNegativeSafeInteger(value.perWorkerLimit)
+      : value.perWorkerLimit === undefined);
 }
 
 function validReservePolicyRecord(record: JsonRecord): boolean {
+  if (!Array.isArray(record.workerUsage)) return false;
+  const workerUsage = record.workerUsage;
   return decodePositiveRevision(record.revision) >= 1 &&
-    isObject(record.policy) && isString(record.policy.classId) &&
-    isString(record.policy.contractVersion) && isString(record.policy.lane) &&
-    isString(record.policy.policyVersion) && isString(record.policy.windowId) &&
-    isString(record.policy.windowStartsAt) && isString(record.policy.windowEndsAt) &&
-    isNonNegativeSafeInteger(record.policy.laneLimit) &&
-    isNonNegativeSafeInteger(record.used) && Array.isArray(record.workerUsage) &&
-    record.workerUsage.every((entry) => isObject(entry) &&
-      isString(entry.workerId) && isNonNegativeSafeInteger(entry.used)) &&
-    isString(record.updatedAt);
+    validReservePolicySnapshot(record.policy) &&
+    isNonNegativeSafeInteger(record.used) &&
+    workerUsage.every((entry) => isObject(entry) &&
+      isString(entry.workerId) && entry.workerId.length > 0 &&
+      isNonNegativeSafeInteger(entry.used)) &&
+    workerUsage.every((entry, index) => index === 0 ||
+      (entry as { readonly workerId: string }).workerId >
+        (workerUsage[index - 1] as { readonly workerId: string }).workerId) &&
+    isString(record.updatedAt) && Number.isFinite(Date.parse(record.updatedAt));
 }
 
 function decodeReservePolicy(value: unknown): ReservePolicyRecord {
@@ -549,6 +570,72 @@ function decodeReservePolicy(value: unknown): ReservePolicyRecord {
     validReservePolicyRecord,
     "reserve_policies.record",
   );
+}
+
+function validReserveCharge(value: unknown): boolean {
+  if (!isObject(value) || !Array.isArray(value.workerIds)) return false;
+  const workerIds = value.workerIds;
+  return isString(value.chargeKey) && value.chargeKey.length > 0 &&
+    workerIds.every((workerId) => isString(workerId) && workerId.length > 0) &&
+    workerIds.every((workerId, index) =>
+      index === 0 || workerId > workerIds[index - 1]!) &&
+    validReservePolicySnapshot(value.policy) && isString(value.at) &&
+    Number.isFinite(Date.parse(value.at));
+}
+
+function validReserveChargeRecord(value: unknown): boolean {
+  return isObject(value) && validReserveCharge(value.charge) &&
+    (value.outcome === "charged" || value.outcome === "exhausted");
+}
+
+function validReserveChargeOutcome(record: JsonRecord): boolean {
+  if ((record.kind !== "charged" && record.kind !== "exhausted") ||
+      (record.status !== "applied" && record.status !== "replayed") ||
+      !validReserveChargeRecord(record.charge) ||
+      !isObject(record.currentPolicy) ||
+      !validReservePolicyRecord(record.currentPolicy as JsonRecord) ||
+      !isObject(record.classHealth) ||
+      !validHealthSnapshot(record.classHealth as JsonRecord)) return false;
+  const chargeRecord = record.charge as JsonRecord;
+  const charge = chargeRecord.charge as JsonRecord;
+  const currentPolicy = record.currentPolicy as JsonRecord;
+  const policy = currentPolicy.policy as JsonRecord;
+  const classHealth = record.classHealth as JsonRecord;
+  return chargeRecord.outcome === record.kind &&
+    equal(charge.policy, currentPolicy.policy) &&
+    classHealth.classId === policy.classId;
+}
+
+function decodeReserveChargeOutcome(
+  value: unknown,
+  description = "reserve_charges.record",
+): Extract<ReserveChargeOutcome, { kind: "charged" | "exhausted" }> {
+  return decodeStoredRecord<Extract<
+    ReserveChargeOutcome,
+    { kind: "charged" | "exhausted" }
+  >>(value, validReserveChargeOutcome, description);
+}
+
+function validResultAdjudicationRecord(record: JsonRecord): boolean {
+  if (!validResultAdjudicationRequest(record.request) ||
+      !isString(record.openedAt) ||
+      !isString(record.state) || !resultStates.has(record.state) ||
+      !isObject(record.charge) ||
+      !validReserveChargeRecord(record.charge.charge) ||
+      !isObject(record.charge.currentPolicy) ||
+      !validReservePolicyRecord(record.charge.currentPolicy as JsonRecord) ||
+      !isObject(record.charge.classHealth) ||
+      !validHealthSnapshot(record.charge.classHealth as JsonRecord)) return false;
+  const charge = record.charge as JsonRecord;
+  const chargeRecord = charge.charge as JsonRecord;
+  const nestedCharge = chargeRecord.charge as JsonRecord;
+  const currentPolicy = charge.currentPolicy as JsonRecord;
+  const policy = currentPolicy.policy as JsonRecord;
+  const classHealth = charge.classHealth as JsonRecord;
+  return equal(
+    nestedCharge.policy,
+    currentPolicy.policy,
+  ) && classHealth.classId === policy.classId;
 }
 
 function validActionAuthorization(record: JsonRecord): boolean {
@@ -3365,10 +3452,7 @@ export class PostgresStore implements Store {
         [charge.chargeKey],
       );
       if (existing.rows[0] !== undefined) {
-        const record = decodeOpaqueRecord<Extract<
-          ReserveChargeOutcome,
-          { kind: "charged" | "exhausted" }
-        >>(existing.rows[0].record, "reserve_charges.record");
+        const record = decodeReserveChargeOutcome(existing.rows[0].record);
         if (!equal(record.charge.charge.policy, charge.policy) ||
             !equal(record.charge.charge.workerIds, charge.workerIds)) {
           return {
@@ -3488,10 +3572,7 @@ export class PostgresStore implements Store {
           `reserve charge ${result.chargeKey} disappeared`,
         );
       }
-      const record = decodeOpaqueRecord<Record<string, unknown>>(
-        stored.rows[0].record,
-        "reserve_charges.record",
-      );
+      const record = decodeReserveChargeOutcome(stored.rows[0].record);
       await client.query(
         `UPDATE ${this.quotedSchema}.reserve_charges
             SET record = $2::jsonb WHERE charge_key = $1`,
@@ -3625,10 +3706,7 @@ export class PostgresStore implements Store {
       );
       const row = result.rows[0];
       if (row === undefined) return null;
-      const existing = decodeOpaqueRecord<Extract<
-        ReserveChargeOutcome,
-        { kind: "charged" | "exhausted" }
-      >>(row.record, "reserve_charges.record");
+      const existing = decodeReserveChargeOutcome(row.record);
       const semanticMatches = equal(existing.charge.charge.policy, charge.policy) &&
         equal(existing.charge.charge.workerIds, charge.workerIds);
       if (!semanticMatches) {
@@ -4012,8 +4090,9 @@ export class PostgresStore implements Store {
         [target.jobId, target.collectionCycle],
       );
       for (const row of resultRequests.rows) {
-        const record = decodeOpaqueRecord<Record<string, unknown>>(
+        const record = decodeStoredRecord<JsonRecord>(
           row.record,
+          validResultAdjudicationRecord,
           "result_adjudications.record",
         );
         await client.query(
@@ -4464,9 +4543,14 @@ export class PostgresStore implements Store {
         [effectIntentId],
       );
       if (result.rows[0] === undefined) return null;
-      const stored = decodeOpaqueRecord<{
+      const stored = decodeStoredRecord<{
         readonly initialReceipt: AuthorizedIntentOutcome["initialReceipt"];
-      }>(result.rows[0].record, "effect_intents.record");
+      }>(
+        result.rows[0].record,
+        (record) => isObject(record.initialReceipt) &&
+          validInitialReceipt(record.initialReceipt as JsonRecord),
+        "effect_intents.record",
+      );
       return decodeStoredRecord<AuthorizedIntentOutcome["initialReceipt"]>(
         stored.initialReceipt,
         validInitialReceipt,
@@ -5475,10 +5559,19 @@ export class PostgresStore implements Store {
       );
       const prior = replayResult.rows[0];
       if (prior !== undefined && prior.fingerprint === fingerprint) {
-        const outcome = decodeOpaqueRecord<{
+        const outcome = decodeStoredRecord<{
+          readonly kind: "initialized";
           readonly current: ReservePolicyRecord;
           readonly classHealth: ClassHealthSnapshot;
-        }>(prior.outcome, "initialize_reserve_policy.outcome");
+        }>(
+          prior.outcome,
+          (record) => record.kind === "initialized" &&
+            isObject(record.current) &&
+            validReservePolicyRecord(record.current as JsonRecord) &&
+            isObject(record.classHealth) &&
+            validHealthSnapshot(record.classHealth as JsonRecord),
+          "initialize_reserve_policy.outcome",
+        );
         return { ...outcome, kind: "replayed" } as const;
       }
       const existing = await this.loadReservePolicy(client, captured.policy, true);

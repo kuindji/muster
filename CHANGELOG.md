@@ -1,5 +1,21 @@
 # Changelog
 
+## PostgreSQL adapter Task 9 — 2026-08-08
+
+Completed public construction and operations documentation for explicit
+migration/bootstrap, caller-owned pool shutdown, PostgreSQL 16/18 support,
+bounded serializable retries and timeouts, separate deployment/runtime roles,
+backup ownership, schema qualification, and safe forward rollout. The
+independent semantic review traced all 64 Store methods, transaction and replay
+boundaries, SQL interpolation, lock ordering, query predicates, indexes,
+migrations, and returned outcomes. It corrected two adapter-local gaps: a new
+checksummed forward migration indexes the JSON-backed class-cycle and pending
+action invalidation lookups, and durable reserve/adjudication replay codecs now
+fail loudly on malformed or future records. The frozen revision-26 Store and
+worker wire `1.1.0` are unchanged. Full source and packed-package gates pass on
+PostgreSQL 16 and 18; MCP work, publication, deployment, commit, tag, and push
+remain separate.
+
 ## Milestone 2 Task 10 — 2026-08-07
 
 Completed the final independent review from revision 26 prose through public

@@ -516,7 +516,7 @@ PostgreSQL 18. Both versions pass locally from source (13 files, 91 tests) and
 from the packed tarball (31 Store and seven protocol cases). Task 9 is the next
 bounded adapter slice.
 
-## Task 9: Documentation, full validation, and independent review
+## Task 9: Documentation, full validation, and independent review (complete 2026-08-08)
 
 - document public construction, explicit migration/bootstrap, caller-owned pool
   shutdown, supported PostgreSQL versions, transaction retry behavior,
@@ -542,6 +542,23 @@ bounded adapter slice.
 An independent review is a separate checkpoint. Correct every adapter or plan
 defect it finds, rerun PostgreSQL 16 and 18 gates, and stop before MCP work,
 npm publication, deployment, commit, tag, or push unless explicitly requested.
+
+Completion note: the package now documents construction, explicit
+migration/bootstrap, caller-owned shutdown, supported database versions,
+bounded retry and timeout behavior, separated deployment/runtime roles, backup
+ownership, schema qualification, and forward-only rollout/recovery. The
+independent review traced all 64 Store methods and found no frozen-contract
+gap. It corrected two adapter-local defects: checksummed migration
+`0002_invalidation_scope_indexes.sql` adds executable index ownership for the
+JSON-backed class-cycle and pending-action invalidation predicates, and reserve,
+adjudication, effect-intent, and reserve-initialization replay decoding now
+fails loudly on malformed or future stored records. PostgreSQL 16 and 18 each
+pass 94 source tests plus packed-package conformance with 31 Store and seven
+protocol cases. The full workspace gate passes 55 files and 398 tests together
+with frozen install, invariants, package typechecks, fixtures, builds, package
+inspection, Markdown fence/local-link validation, and `git diff --check`. The
+revision-26 Store and worker wire `1.1.0` are unchanged. MCP work, npm
+publication, deployment, commit, tag, and push remain unauthorized.
 
 ## Delivery checkpoints
 
