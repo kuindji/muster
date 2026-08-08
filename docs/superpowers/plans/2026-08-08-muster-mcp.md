@@ -454,7 +454,7 @@ normative hand-install path or six base tools.
 Checkpoint: stable wire is unchanged; experimental support is either evidenced
 behind its version flag or explicitly recorded as pending.
 
-## Task 8: Cross-adapter conformance and side-channel review
+## Task 8: Cross-adapter conformance and side-channel review (complete 2026-08-08)
 
 Export `runMusterMcpConformance` and execute it against both
 `InMemoryStore` and `PostgresStore` with the same MCP-state conformance adapter:
@@ -480,6 +480,26 @@ not imported or treated as runtime conformance evidence.
 
 Checkpoint: one exported suite passes over both Store adapters and after
 adapter/process restart.
+
+Implementation checkpoint: `runMusterMcpConformance` now accepts an isolated
+adapter-neutral authenticated harness plus the published lifecycle and
+prompt-injection fixture packs. It structurally compares the exact six-tool
+catalog, requires every revision-27/28 MCP fixture ID including all section-5.7
+rows, reuses the exported MCP-state race suite, proves singular selection and
+payload invariance across availability buckets, checks content-free no-work,
+drives all six successful tool paths, and replays an accepted submission after
+handler restart. The prompt-injection corpus passes through the remote MCP
+layer as unchanged payload and result data without changing tool registration.
+One test runs the suite unchanged over `InMemoryStore` and a PostgreSQL Store
+proxy that reconstructs the adapter on every Store call; canonical successful
+result bytes match across adapters. Its audited core-call and event trace
+contains neither the raw subject nor bearer. The package gate also packs the
+built artifact, loads both ESM and CommonJS entry points, and compares six
+successful tool results byte-for-byte with the source ESM build. Existing
+focused authentication, state, handler, and tool suites remain the executable
+owners for scope/revocation ordering, uniform refusal classes, response
+padding, last-unit races, bucket edges, and sensitive-error scrubbing. Task 9
+is the next bounded unit.
 
 ## Task 9: Operations guide, real-client gate, and final review
 

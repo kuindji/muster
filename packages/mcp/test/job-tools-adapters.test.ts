@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   computeSkillSha256,
   renderSkill,
@@ -43,7 +44,11 @@ import {
   createMusterMcpConfig,
   createMusterMcpHandler,
   InMemoryMcpStateStore,
+  MUSTER_MCP_CONFORMANCE_FIXTURE_IDS,
+  runMusterMcpConformance,
   SkillReleaseRegistry,
+  type MusterMcpConformanceFixturePack,
+  type MusterMcpConformanceHarness,
 } from "../src/index.js";
 import {
   TEST_NOW,
@@ -143,6 +148,25 @@ interface StoreFixture {
   cleanup(): Promise<void>;
 }
 
+const lifecycleFixtures = JSON.parse(
+  readFileSync(
+    new URL("../../contract/fixtures/lifecycle-fixtures.json", import.meta.url),
+    "utf8",
+  ),
+) as readonly { readonly id: string }[];
+
+const promptInjections = JSON.parse(
+  readFileSync(
+    new URL("../../contract/fixtures/prompt-injection.json", import.meta.url),
+    "utf8",
+  ),
+) as MusterMcpConformanceFixturePack["promptInjections"];
+
+const conformanceFixtures: MusterMcpConformanceFixturePack = {
+  lifecycleFixtureIds: lifecycleFixtures.map(({ id }) => id),
+  promptInjections,
+};
+
 let postgresContainer: StartedPostgreSqlContainer | undefined;
 let postgresPool: Pool;
 
@@ -177,7 +201,21 @@ async function postgresFixture(): Promise<StoreFixture> {
     initialQueue: { mode: "normal", updatedAt: TEST_NOW },
   });
   return {
-    store: new PostgresStore({ pool: postgresPool, schema }),
+    store: new Proxy({} as Store, {
+      get: (_target, property) => {
+        if (property === "then") return undefined;
+        return (...arguments_: unknown[]) => {
+          const restarted = new PostgresStore({ pool: postgresPool, schema });
+          const method = Reflect.get(restarted, property) as unknown;
+          if (typeof method !== "function") {
+            throw new TypeError(
+              `PostgresStore.${String(property)} is not callable`,
+            );
+          }
+          return Reflect.apply(method, restarted, arguments_);
+        };
+      },
+    }),
     cleanup: async () => {
       await postgresPool.query(`DROP SCHEMA ${quoteSchemaName(schema)} CASCADE`);
     },
@@ -290,28 +328,56 @@ async function runtime(store: Store) {
   return {
     clock,
     controlPlaneService,
+    events,
     leaseService,
     submissionService,
     workerStatus,
   };
 }
 
-async function enqueue(leaseService: LeaseService, jobId: string) {
+async function enqueue(
+  leaseService: LeaseService,
+  jobId: string,
+  payloadText = `answer ${jobId}`,
+) {
   const result = await leaseService.enqueue({
     jobId,
     classId: "class-test-1",
     contractVersion: "1.0.0",
-    rawPayload: { instruction: ` answer ${jobId} ` },
+    rawPayload: { instruction: ` ${payloadText} ` },
     policyVersion: "policy-test-1",
     priority: { lane: "normal", value: 1, sequence: `sequence-${jobId}` },
   });
   expect(result).toMatchObject({ ok: true, kind: "enqueued" });
 }
 
-async function authenticatedClient(store: Store) {
-  const services = await runtime(store);
+async function authenticatedHarness(
+  store: Store,
+): Promise<MusterMcpConformanceHarness> {
+  const coreBoundaryArtifacts: unknown[] = [];
+  const auditedStore = new Proxy({} as Store, {
+    get: (_target, property) => {
+      if (property === "then") return undefined;
+      const method = Reflect.get(store, property) as unknown;
+      if (typeof method !== "function") return method;
+      return async (...arguments_: unknown[]) => {
+        coreBoundaryArtifacts.push({ method: String(property), arguments_ });
+        try {
+          const result = await Reflect.apply(method, store, arguments_);
+          coreBoundaryArtifacts.push({ method: String(property), result });
+          return result;
+        } catch (error) {
+          coreBoundaryArtifacts.push({
+            method: String(property),
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      };
+    },
+  });
+  const services = await runtime(auditedStore);
   const config = createMusterMcpConfig(validConfigInput());
-  const auth = await createTestAuthentication(config);
   const stateStore = new InMemoryMcpStateStore();
   await stateStore.bindSubject({
     bindingId: "binding-adapter-test-1",
@@ -332,135 +398,123 @@ async function authenticatedClient(store: Store) {
     source: skillSource,
     skillSha256: await computeSkillSha256(renderedSkill),
   }]);
-  const handler = createMusterMcpHandler(config, {
-    authentication: {
-      ...auth.authentication,
-      stateStore,
-      workerStatus: services.workerStatus,
+  let handler: ReturnType<typeof createMusterMcpHandler>;
+  let client: Client;
+  let bearer = "";
+
+  const connect = async (): Promise<void> => {
+    const auth = await createTestAuthentication(config);
+    bearer = auth.token;
+    handler = createMusterMcpHandler(config, {
+      authentication: {
+        ...auth.authentication,
+        stateStore,
+        workerStatus: services.workerStatus,
+      },
+      jobTools: createTestJobTools({
+        stateStore,
+        rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
+        leaseService: services.leaseService,
+        submissionService: services.submissionService,
+      }),
+      workerTools: {
+        stateStore,
+        rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
+        controlPlaneService: services.controlPlaneService,
+        skillReleaseRegistry,
+      },
+    });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(config.resourceUrl),
+      {
+        fetch: createHandlerFetch(handler),
+        requestInit: { headers: { authorization: auth.authorizationHeader } },
+      },
+    );
+    client = new Client(
+      { name: "muster-adapter-conformance", version: "1" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+    await client.connect(transport);
+  };
+
+  await connect();
+  return {
+    listTools: () => client.listTools(),
+    callTool: (input) => client.callTool(input),
+    enqueue: (jobId, payloadText) => enqueue(
+      services.leaseService,
+      jobId,
+      payloadText,
+    ),
+    async enterDegradedMode(): Promise<void> {
+      const expected = await auditedStore.getQueueMode();
+      const outcome = await auditedStore.transitionQueueMode({
+        expected,
+        next: {
+          mode: "degraded",
+          cause: "capacity",
+          updatedAt: TEST_NOW,
+        },
+      });
+      expect(outcome.kind).toBe("applied");
     },
-    jobTools: createTestJobTools({
-      stateStore,
-      rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
-      leaseService: services.leaseService,
-      submissionService: services.submissionService,
-    }),
-    workerTools: {
-      stateStore,
-      rateLimitPolicy: TEST_RATE_LIMIT_POLICY,
-      controlPlaneService: services.controlPlaneService,
-      skillReleaseRegistry,
+    async restart(): Promise<void> {
+      await client.close();
+      await handler.close();
+      await connect();
     },
-  });
-  const transport = new StreamableHTTPClientTransport(
-    new URL(config.resourceUrl),
-    {
-      fetch: createHandlerFetch(handler),
-      requestInit: { headers: { authorization: auth.authorizationHeader } },
+    auditArtifacts: async () => [
+      ...services.events.all(),
+      ...coreBoundaryArtifacts,
+    ],
+    get sensitiveValues() {
+      return [TEST_SUBJECT, bearer];
     },
-  );
-  const client = new Client(
-    { name: "muster-adapter-conformance", version: "1" },
-    { versionNegotiation: { mode: { pin: "2026-07-28" } } },
-  );
-  await client.connect(transport);
-  return { client, handler, services };
+    async close(): Promise<void> {
+      await client.close();
+      await handler.close();
+    },
+  };
 }
 
-describe("all authenticated tools over real core adapters", () => {
-  it.each([
-    ["InMemoryStore", inMemoryFixture],
-    ["PostgresStore", postgresFixture],
-  ] as const)(
-    "runs all six tools, including replay and availability, through %s",
-    async (_name, createFixture) => {
-      const fixture = await createFixture();
-      const test = await authenticatedClient(fixture.store);
+describe("exported MCP cross-adapter conformance", () => {
+  it("passes unchanged over in-memory and restart-per-call PostgreSQL Stores", async () => {
+    const reports = [];
+    for (const createFixture of [inMemoryFixture, postgresFixture]) {
+      const allocated: StoreFixture[] = [];
       try {
-        await enqueue(test.services.leaseService, "job-adapter-1");
-        const leased = await test.client.callTool({
-          name: "lease_job",
-          arguments: { availability: { budget_bucket: 3 } },
-        });
-        expect(leased.structuredContent).toMatchObject({
-          job_class_id: "class-test-1",
-          contract_version: "1.0.0",
-          ttl_bucket_seconds: 300,
-          payload: { instruction: "answer job-adapter-1" },
-        });
-        const lease = leased.structuredContent as {
-          lease_id: string;
-          input_hash: string;
-        };
-
-        const extended = await test.client.callTool({
-          name: "extend_lease",
-          arguments: { lease_id: lease.lease_id },
-        });
-        expect(extended.structuredContent).toEqual({
-          new_expiry_bucket_seconds: 900,
-        });
-
-        const submissionArguments = {
-          lease_id: lease.lease_id,
-          input_hash: lease.input_hash,
-          result: { answer: "accepted adapter result" },
-        };
-        const accepted = await test.client.callTool({
-          name: "submit_result",
-          arguments: submissionArguments,
-        });
-        const replayed = await test.client.callTool({
-          name: "submit_result",
-          arguments: submissionArguments,
-        });
-        expect(accepted).toEqual(replayed);
-        expect(accepted.structuredContent).toMatchObject({
-          lease_id: lease.lease_id,
-          input_hash: lease.input_hash,
-          outcome: "accepted",
-        });
-
-        await enqueue(test.services.leaseService, "job-adapter-2");
-        const second = await test.client.callTool({
-          name: "lease_job",
-          arguments: { availability: { budget_bucket: 3 } },
-        });
-        const secondLease = second.structuredContent as { lease_id: string };
-        const abandoned = await test.client.callTool({
-          name: "abandon_job",
-          arguments: {
-            lease_id: secondLease.lease_id,
-            reason: "platform_failure",
+        const report = await runMusterMcpConformance({
+          createHarness: async () => {
+            const fixture = await createFixture();
+            allocated.push(fixture);
+            const harness = await authenticatedHarness(fixture.store);
+            return {
+              ...harness,
+              close: async () => {
+                await harness.close();
+                await fixture.cleanup();
+                allocated.splice(allocated.indexOf(fixture), 1);
+              },
+            };
           },
-        });
-        expect(abandoned.structuredContent).toEqual({ outcome: "recorded" });
-
-        const active = await test.client.callTool({
-          name: "get_worker_status",
-          arguments: {},
-        });
-        expect(active.structuredContent).toMatchObject({
-          status: "active",
-          contract_version: "1.1.0",
-          cap_usage_bucket: 1,
-          next_slot_bucket: 0,
-        });
-        const maintenance = await test.client.callTool({
-          name: "set_availability",
-          arguments: { state: "maintenance" },
-        });
-        expect(maintenance.structuredContent).toEqual({ outcome: "recorded" });
-        const changed = await test.client.callTool({
-          name: "get_worker_status",
-          arguments: {},
-        });
-        expect(changed.structuredContent).toMatchObject({ status: "maintenance" });
+          stateStoreFactory: () => new InMemoryMcpStateStore(),
+        }, conformanceFixtures);
+        expect(report.fixtureIds).toEqual(MUSTER_MCP_CONFORMANCE_FIXTURE_IDS);
+        expect(report.promptInjectionIds).toEqual(
+          promptInjections.map(({ id }) => id),
+        );
+        reports.push(report);
       } finally {
-        await test.client.close();
-        await test.handler.close();
-        await fixture.cleanup();
+        for (const fixture of allocated) await fixture.cleanup();
       }
-    },
-    120_000,
-  );
+    }
+
+    expect(reports[0]!.successfulResultBytes).toEqual(
+      reports[1]!.successfulResultBytes,
+    );
+    expect(reports[0]!.stateStoreCaseIds).toEqual(
+      reports[1]!.stateStoreCaseIds,
+    );
+  }, 120_000);
 });

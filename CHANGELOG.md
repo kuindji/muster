@@ -1,5 +1,21 @@
 # Changelog
 
+## MCP Task 8 — 2026-08-08
+
+Exported `runMusterMcpConformance` and ran the same authenticated remote-tool
+suite over the reference in-memory Store and a restart-per-call PostgreSQL
+Store. The suite structurally checks the frozen six-tool schemas, requires all
+revision-27/28 MCP lifecycle fixtures and every section-5.7 side-channel row,
+reuses MCP-state mapping/rate/slot/availability race conformance, proves
+availability-invariant singular selection, exact accepted replay across handler
+restart, canonical six-tool results, and prompt-injection data treatment, and
+audits core calls/events for raw subject or bearer leakage. Successful results
+match byte-for-byte across both Store adapters. A packed-package gate now loads
+source ESM plus packed ESM/CJS entry points and compares all six successful
+tool projections; CI runs that gate. Operations documentation, real-client
+acceptance, final independent review, publication, deployment, and push remain
+separate.
+
 ## MCP Task 6 — 2026-08-08
 
 Implemented the authenticated `get_worker_status` and `set_availability`

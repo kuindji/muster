@@ -127,8 +127,16 @@ optional experimental skill Resource adapter is explicitly pending its external
 gate: SEP-2640 remains open and the pinned official TypeScript SDK has no
 accepted Skills Extension implementation. No draft capability or resource URI
 was added, hand installation remains normative, and the stable six-tool wire is
-unchanged. Task 8 cross-adapter conformance and side-channel review is the next
-bounded unit.
+unchanged. Task 8 now exports `runMusterMcpConformance`, structurally binds the
+frozen tool catalog and every revision-27/28 MCP fixture, and drives the real
+authenticated remote layer unchanged over the in-memory and restart-per-call
+PostgreSQL Stores. The suite proves singular availability-invariant selection,
+coarse no-work output, exact accepted replay across handler restart, canonical
+six-tool results, prompt-injection data treatment, and raw-identity exclusion
+from core calls and events while reusing the MCP-state race suite. Successful
+result bytes match across both Store adapters and the packed ESM/CJS exports.
+Task 9 operations documentation, real-client acceptance, and final independent
+review is the next bounded unit.
 
 ## PostgreSQL adapter verification
 

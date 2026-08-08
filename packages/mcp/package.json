@@ -21,6 +21,7 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
+    "test:packed": "pnpm build && node scripts/verify-packed.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
