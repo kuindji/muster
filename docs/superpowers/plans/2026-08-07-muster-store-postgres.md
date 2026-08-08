@@ -338,7 +338,7 @@ focused tests additionally prove adapter-restart replay, multi-table rollback,
 and use of the candidate and open-lease indexes. Task 5 is the next bounded
 adapter slice.
 
-## Task 5: Submission, replicas, result state, and decisions
+## Task 5: Submission, replicas, result state, and decisions (complete 2026-08-08)
 
 Implement the cycle-scoped result slice:
 
@@ -367,6 +367,21 @@ implements emergency invalidation.
 
 Checkpoint: every submission/result case selected for Task 5 passes against
 PostgreSQL 16.
+
+Completion note: accepted submission lookup now preserves holder-first
+disclosure and exact historical receipt replay before mutable lease checks.
+First acceptance atomically closes the lease, persists the body and receipt,
+updates ordinary replica/diversity state, and records optional reputation
+evidence; expiry and contract cutoff settle their complete fair-attempt effects
+in the same transaction. Invalid settlement has durable create/replay/conflict
+history. Replica reads exclude canaries and old cycles, while split markers and
+automatic decisions compare the complete same-cycle evidence/open-lease
+snapshot. Result transitions terminalize the old cycle, close its leases, and
+publish the supplied next hash, epoch, attempt state, and current-job projection
+atomically. All seven selected Task-5 cases plus the result-requeue case pass
+unchanged against PostgreSQL 16; direct multi-client tests cover adapter-restart
+replay, split-versus-decision serialization, cross-cycle isolation, and live
+authorization-context reconstruction. Task 6 is the next bounded adapter slice.
 
 ## Task 6: Reserves, adjudication, authorization, and invalidation
 

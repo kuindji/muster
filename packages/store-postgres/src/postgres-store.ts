@@ -13,6 +13,7 @@ import type {
   OperationalTransitionOutcome,
   PermitEpochTransitionOutcome,
   QueueModeSnapshot,
+  ReputationEvidenceRecord,
   RegisterClassVersionOutcome,
   RegisterWorkerOutcome,
   Store,
@@ -73,6 +74,32 @@ interface CandidateRow {
   readonly health_revision: string;
 }
 
+interface AcceptedSubmissionRow {
+  readonly receipt: unknown;
+  readonly body: unknown;
+  readonly lease_record?: unknown;
+}
+
+interface ResultCycleRow {
+  readonly result_state: unknown;
+  readonly cycle_record: unknown;
+  readonly candidate_revision: string;
+  readonly attempt_record: unknown;
+}
+
+type AcceptedSubmission = NonNullable<
+  Awaited<ReturnType<Store["getAcceptedSubmission"]>>
+>;
+type AcceptedReplica = Awaited<
+  ReturnType<Store["listAcceptedReplicas"]>
+>[number];
+type DecisionResultRecord = NonNullable<
+  Awaited<ReturnType<Store["getDecisionResult"]>>
+>;
+type ResultState = NonNullable<
+  Awaited<ReturnType<Store["getResultState"]>>
+>;
+
 const workerStates = new Set([
   "enrolled", "active", "maintenance", "paused", "suspended", "revoked",
 ]);
@@ -88,6 +115,19 @@ const operatingStates = new Set([
 ]);
 const reserveStates = new Set(["available", "saturated"]);
 const healthSources = new Set(["automatic", "operator"]);
+const resultStates = new Set([
+  "collecting", "pending_result_adjudication", "verified", "rejected",
+  "expired", "superseded", "cancelled",
+]);
+const verificationStrengths = new Set([
+  "structural_only", "deterministic_oracle",
+]);
+const evidenceSources = new Set([
+  "checked_success", "adjudicated_falsehood", "deterministic_oracle",
+  "completeness_oracle", "held_out_canary", "human_audit",
+  "published_correction", "structural_failure", "validator_failure",
+  "post_payload_abandonment", "escalation_quota_abuse",
+]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -186,6 +226,109 @@ function validJobRecord(record: JsonRecord): boolean {
     Number.isSafeInteger(record.queuePriority.value) &&
     isString(record.queuePriority.enqueuedAt) &&
     isString(record.queuePriority.sequence);
+}
+
+function validSubmissionReceipt(record: JsonRecord): boolean {
+  return isString(record.leaseId) && isString(record.jobId) &&
+    Number.isSafeInteger(record.collectionCycle) &&
+    Number(record.collectionCycle) > 0 && isString(record.inputHash) &&
+    isString(record.resultHash) && isString(record.contractVersion) &&
+    isString(record.permitEpoch) && record.outcome === "accepted" &&
+    isString(record.acceptedAt);
+}
+
+function validSubmissionEvidence(value: unknown): boolean {
+  return isObject(value) && isString(value.leaseId) &&
+    Number.isSafeInteger(value.collectionCycle) &&
+    Number(value.collectionCycle) > 0 && isString(value.resultHash) &&
+    isString(value.workerId);
+}
+
+function validDecisionResult(record: JsonRecord): boolean {
+  return isString(record.decisionResultHash) && isString(record.jobId) &&
+    Number.isSafeInteger(record.collectionCycle) &&
+    Number(record.collectionCycle) > 0 && isString(record.inputHash) &&
+    record.result !== undefined && Array.isArray(record.evidence) &&
+    record.evidence.every(validSubmissionEvidence) &&
+    isString(record.achievedStrength) &&
+    verificationStrengths.has(record.achievedStrength) &&
+    (record.resultAdjudicationVerdictHash === undefined ||
+      isString(record.resultAdjudicationVerdictHash)) &&
+    isString(record.contractVersion) && isString(record.permitEpoch) &&
+    isString(record.verifiedAt);
+}
+
+function validReputationEvidence(record: JsonRecord): boolean {
+  if (!isString(record.evidenceId) || !isString(record.workerId) ||
+      !isString(record.at) || !isString(record.source) ||
+      !evidenceSources.has(record.source) ||
+      (record.detailHash !== undefined && !isString(record.detailHash)) ||
+      (record.impact !== "positive" && record.impact !== "negative")) {
+    return false;
+  }
+  if (record.source === "checked_success" && record.impact !== "positive") {
+    return false;
+  }
+  if (record.source !== "checked_success" && record.impact !== "negative") {
+    return false;
+  }
+  return record.job === undefined ||
+    (isObject(record.job) && isString(record.job.jobId) &&
+      Number.isSafeInteger(record.job.collectionCycle) &&
+      Number(record.job.collectionCycle) > 0);
+}
+
+function decodeSubmissionReceipt(
+  value: unknown,
+  description = "accepted_submissions.receipt",
+): AcceptedSubmission["receipt"] {
+  const record = decodeStoredRecord<AcceptedSubmission["receipt"]>(
+    value,
+    validSubmissionReceipt,
+    description,
+  );
+  return {
+    leaseId: record.leaseId,
+    jobId: record.jobId,
+    collectionCycle: record.collectionCycle,
+    inputHash: record.inputHash,
+    resultHash: record.resultHash,
+    contractVersion: record.contractVersion,
+    permitEpoch: record.permitEpoch,
+    outcome: record.outcome,
+    acceptedAt: record.acceptedAt,
+  };
+}
+
+function decodeDecisionResult(
+  value: unknown,
+  description = "decisions.record",
+): DecisionResultRecord {
+  const record = decodeStoredRecord<DecisionResultRecord>(
+    value,
+    validDecisionResult,
+    description,
+  );
+  return {
+    decisionResultHash: record.decisionResultHash,
+    jobId: record.jobId,
+    collectionCycle: record.collectionCycle,
+    inputHash: record.inputHash,
+    result: record.result,
+    evidence: record.evidence.map((entry) => ({
+      leaseId: entry.leaseId,
+      collectionCycle: entry.collectionCycle,
+      resultHash: entry.resultHash,
+      workerId: entry.workerId,
+    })),
+    achievedStrength: record.achievedStrength,
+    ...(record.resultAdjudicationVerdictHash === undefined
+      ? {}
+      : { resultAdjudicationVerdictHash: record.resultAdjudicationVerdictHash }),
+    contractVersion: record.contractVersion,
+    permitEpoch: record.permitEpoch,
+    verifiedAt: record.verifiedAt,
+  };
 }
 
 function validClaimOutcome(record: JsonRecord): boolean {
@@ -334,7 +477,7 @@ function notImplemented<Method extends AsyncStoreMethod>(method: string): Method
  * PostgreSQL implementation of the frozen Store boundary.
  *
  * The adapter borrows a client per operation and never owns caller pool
- * shutdown. Tasks 3 and 4 implement control-plane plus lease-lifecycle state;
+ * shutdown. Tasks 3 through 5 implement control, lease, and result state;
  * later plan slices remain explicit infrastructure stubs so the class is
  * already Store-assignable.
  */
@@ -541,6 +684,109 @@ export class PostgresStore implements Store {
       ],
     );
     if (routed.rowCount !== 1) restartSerializableTransaction();
+  }
+
+  private async loadAcceptedReplicas(
+    client: QueryableClient,
+    jobId: string,
+    collectionCycle: number,
+  ): Promise<AcceptedReplica[]> {
+    const result = await client.query<AcceptedSubmissionRow>(
+      `SELECT s.receipt, s.body, l.record AS lease_record
+         FROM ${this.quotedSchema}.accepted_submissions s
+         JOIN ${this.quotedSchema}.leases l ON l.lease_id = s.lease_id
+        WHERE s.job_id = $1 AND s.collection_cycle = $2
+        ORDER BY s.lease_id COLLATE "C"`,
+      [jobId, collectionCycle],
+    );
+    const replicas: AcceptedReplica[] = [];
+    for (const row of result.rows) {
+      const receipt = decodeSubmissionReceipt(row.receipt);
+      const lease = decodeStoredRecord<LeaseRecord>(
+        row.lease_record,
+        validLeaseRecord,
+        "leases.record",
+      );
+      if (lease.assignment.kind !== "ordinary") continue;
+      if (receipt.leaseId !== lease.leaseId || receipt.jobId !== jobId ||
+          receipt.collectionCycle !== collectionCycle ||
+          receipt.inputHash !== lease.inputHash) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `accepted submission ${receipt.leaseId} disagrees with its lease`,
+        );
+      }
+      replicas.push({
+        evidence: {
+          leaseId: lease.leaseId,
+          collectionCycle,
+          resultHash: receipt.resultHash,
+          workerId: lease.holder,
+        },
+        body: decodeStoredJson(row.body),
+        acceptedAt: receipt.acceptedAt,
+      });
+    }
+    return replicas;
+  }
+
+  private async reputationEvidenceConflicts(
+    client: QueryableClient,
+    record?: Readonly<ReputationEvidenceRecord>,
+  ): Promise<boolean> {
+    if (record === undefined) return false;
+    const result = await client.query<RecordRow>(
+      `SELECT record FROM ${this.quotedSchema}.reputation_evidence
+        WHERE evidence_id = $1 FOR UPDATE`,
+      [record.evidenceId],
+    );
+    const row = result.rows[0];
+    if (row !== undefined) {
+      const existing = decodeStoredRecord<ReputationEvidenceRecord>(
+        row.record,
+        validReputationEvidence,
+        "reputation_evidence.record",
+      );
+      return !equal(existing, record);
+    }
+    const identity = await client.query(
+      `SELECT identity_kind FROM ${this.quotedSchema}.core_identities
+        WHERE identity_id = $1 FOR UPDATE`,
+      [record.evidenceId],
+    );
+    return identity.rows[0] !== undefined;
+  }
+
+  private async persistReputationEvidence(
+    client: QueryableClient,
+    record?: Readonly<ReputationEvidenceRecord>,
+  ): Promise<void> {
+    if (record === undefined) return;
+    const existing = await client.query<RecordRow>(
+      `SELECT record FROM ${this.quotedSchema}.reputation_evidence
+        WHERE evidence_id = $1 FOR UPDATE`,
+      [record.evidenceId],
+    );
+    if (existing.rows[0] !== undefined) return;
+    const identity = await client.query(
+      `INSERT INTO ${this.quotedSchema}.core_identities
+         (identity_id, identity_kind) VALUES ($1, 'reputation_evidence')
+       ON CONFLICT (identity_id) DO NOTHING`,
+      [record.evidenceId],
+    );
+    if (identity.rowCount !== 1) restartSerializableTransaction();
+    await client.query(
+      `INSERT INTO ${this.quotedSchema}.reputation_evidence
+         (evidence_id, worker_id, source, observed_at, record)
+       VALUES ($1, $2, $3, $4::timestamptz, $5::jsonb)`,
+      [
+        record.evidenceId,
+        record.workerId,
+        record.source,
+        record.at,
+        JSON.stringify(record),
+      ],
+    );
   }
 
   async getWorker(
@@ -2110,16 +2356,640 @@ export class PostgresStore implements Store {
       await this.closeLeaseAttempt(client, lease, true);
     });
   }
-  readonly acceptOrReplaySubmission = notImplemented<Store["acceptOrReplaySubmission"]>("acceptOrReplaySubmission");
-  readonly rejectSubmission = notImplemented<Store["rejectSubmission"]>("rejectSubmission");
-  readonly getAcceptedSubmission = notImplemented<Store["getAcceptedSubmission"]>("getAcceptedSubmission");
-  readonly listAcceptedReplicas = notImplemented<Store["listAcceptedReplicas"]>("listAcceptedReplicas");
-  readonly getResultState = notImplemented<Store["getResultState"]>("getResultState");
-  readonly markResultSplit = notImplemented<Store["markResultSplit"]>("markResultSplit");
-  readonly transitionResult = notImplemented<Store["transitionResult"]>("transitionResult");
-  readonly recordDecisionResult = notImplemented<Store["recordDecisionResult"]>("recordDecisionResult");
-  readonly getDecisionResult = notImplemented<Store["getDecisionResult"]>("getDecisionResult");
-  readonly inspectAuthorizationContext = notImplemented<Store["inspectAuthorizationContext"]>("inspectAuthorizationContext");
+  async acceptOrReplaySubmission(
+    input: Parameters<Store["acceptOrReplaySubmission"]>[0],
+  ): ReturnType<Store["acceptOrReplaySubmission"]> {
+    return this.transact(input, async (client, captured) => {
+      const leaseResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      const leaseRow = leaseResult.rows[0];
+      if (leaseRow === undefined) {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+      const lease = decodeLease(leaseRow);
+      if (lease.holder !== captured.workerId) {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+
+      const acceptedResult = await client.query<AcceptedSubmissionRow>(
+        `SELECT receipt, body FROM ${this.quotedSchema}.accepted_submissions
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      const acceptedRow = acceptedResult.rows[0];
+      if (acceptedRow !== undefined) {
+        const receipt = decodeSubmissionReceipt(acceptedRow.receipt);
+        return receipt.inputHash === captured.inputHash &&
+            receipt.resultHash === captured.resultHash
+          ? { kind: "replayed", receipt } as const
+          : { kind: "conflict" } as const;
+      }
+      if (!lease.open) {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+
+      const receipt = captured.receipt;
+      const receiptMatches = receipt.leaseId === lease.leaseId &&
+        receipt.jobId === lease.jobId &&
+        receipt.collectionCycle === lease.collectionCycle &&
+        receipt.inputHash === captured.inputHash &&
+        receipt.resultHash === captured.resultHash &&
+        receipt.contractVersion === lease.contractVersion &&
+        receipt.permitEpoch === lease.permitEpoch &&
+        receipt.outcome === "accepted";
+      if (!receiptMatches || captured.inputHash !== lease.inputHash) {
+        return { kind: "conflict" } as const;
+      }
+      const acceptedAt = Date.parse(receipt.acceptedAt);
+      if (!Number.isFinite(acceptedAt) || acceptedAt < Date.parse(lease.issuedAt)) {
+        return { kind: "conflict" } as const;
+      }
+      if (acceptedAt >= Date.parse(lease.expiresAt) ||
+          acceptedAt >= Date.parse(lease.absoluteInFlightDeadline)) {
+        await this.closeLeaseAttempt(client, lease, true);
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+
+      const classResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.class_versions
+          WHERE class_id = $1 AND contract_version = $2 FOR UPDATE`,
+        [lease.classId, lease.contractVersion],
+      );
+      const classRow = classResult.rows[0];
+      const contract = classRow === undefined ? null : decodeClassVersion(classRow);
+      const contractAccepts = contract?.state === "active" ||
+        (contract?.state === "draining" && contract.acceptedUntil !== undefined &&
+          acceptedAt <= Date.parse(contract.acceptedUntil));
+      if (!contractAccepts) {
+        await this.closeLeaseAttempt(client, lease, false);
+        return { kind: "refused", error: "contract_expired" } as const;
+      }
+
+      const cycleResult = await client.query<{ readonly result_state: unknown }>(
+        `SELECT result_state FROM ${this.quotedSchema}.job_cycles
+          WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+        [lease.jobId, lease.collectionCycle],
+      );
+      if (cycleResult.rows[0]?.result_state !== "collecting") {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+      const evidence = captured.reputationEvidence;
+      if (evidence !== undefined &&
+          (evidence.workerId !== lease.holder || evidence.job === undefined ||
+            evidence.job.jobId !== lease.jobId ||
+            evidence.job.collectionCycle !== lease.collectionCycle)) {
+        return { kind: "evidence_conflict" } as const;
+      }
+      if (await this.reputationEvidenceConflicts(client, evidence)) {
+        return { kind: "evidence_conflict" } as const;
+      }
+
+      await this.closeLeaseAttempt(client, lease, false);
+      const inserted = await client.query(
+        `INSERT INTO ${this.quotedSchema}.accepted_submissions
+           (lease_id, job_id, collection_cycle, worker_id, result_hash,
+            accepted_at, receipt, body)
+         VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::jsonb, $8::jsonb)
+         ON CONFLICT (lease_id) DO NOTHING`,
+        [
+          lease.leaseId,
+          lease.jobId,
+          lease.collectionCycle,
+          lease.holder,
+          captured.resultHash,
+          receipt.acceptedAt,
+          JSON.stringify(receipt),
+          JSON.stringify(captured.body),
+        ],
+      );
+      if (inserted.rowCount !== 1) restartSerializableTransaction();
+
+      if (lease.assignment.kind === "ordinary") {
+        const attemptResult = await client.query<{
+          readonly candidate_revision: string;
+          readonly attempt_record: unknown;
+        }>(
+          `SELECT candidate_revision, record AS attempt_record
+             FROM ${this.quotedSchema}.attempts
+            WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+          [lease.jobId, lease.collectionCycle],
+        );
+        const attemptRow = attemptResult.rows[0];
+        if (attemptRow === undefined) {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            `accepted lease ${lease.leaseId} has no attempt snapshot`,
+          );
+        }
+        const { revision, attempts } = decodeAttempt(attemptRow);
+        const workerResult = await client.query<RecordRow>(
+          `SELECT record FROM ${this.quotedSchema}.workers
+            WHERE worker_id = $1 FOR SHARE`,
+          [lease.holder],
+        );
+        const workerRow = workerResult.rows[0];
+        if (workerRow === undefined) {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            `accepted lease ${lease.leaseId} has no worker`,
+          );
+        }
+        const worker = decodeWorker(workerRow);
+        const nextAttempts: JobCycleAttemptSnapshot = {
+          ...attempts,
+          acceptedWorkerIds: [...attempts.acceptedWorkerIds, lease.holder],
+          acceptedDiversity: [
+            ...attempts.acceptedDiversity,
+            {
+              workerId: lease.holder,
+              axes: {
+                slot: String(worker.slot),
+                provider: worker.capabilities.providerSurface,
+                accountCluster: worker.accountCluster,
+                language: [...worker.capabilities.languages].sort().join(","),
+              },
+            },
+          ],
+        };
+        const updated = await client.query(
+          `UPDATE ${this.quotedSchema}.attempts
+              SET record = $4::jsonb
+            WHERE job_id = $1 AND collection_cycle = $2
+              AND candidate_revision = $3`,
+          [lease.jobId, lease.collectionCycle, revision, JSON.stringify(nextAttempts)],
+        );
+        if (updated.rowCount !== 1) restartSerializableTransaction();
+      }
+      await this.persistReputationEvidence(client, evidence);
+      return { kind: "accepted", receipt: structuredClone(receipt) } as const;
+    });
+  }
+
+  async rejectSubmission(
+    input: Parameters<Store["rejectSubmission"]>[0],
+  ): ReturnType<Store["rejectSubmission"]> {
+    return this.transact(input, async (client, captured) => {
+      const leaseResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      const leaseRow = leaseResult.rows[0];
+      if (leaseRow === undefined) {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+      const lease = decodeLease(leaseRow);
+      if (lease.holder !== captured.workerId) {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+      const accepted = await client.query(
+        `SELECT 1 FROM ${this.quotedSchema}.accepted_submissions
+          WHERE lease_id = $1 FOR UPDATE`,
+        [captured.leaseId],
+      );
+      if (accepted.rows[0] !== undefined) return { kind: "conflict" } as const;
+
+      const fingerprint = commandFingerprint(captured);
+      const replayResult = await client.query<ReplayRow>(
+        `SELECT fingerprint, outcome FROM ${this.quotedSchema}.command_replays
+          WHERE command_kind = 'reject_submission' AND command_key = $1`,
+        [captured.leaseId],
+      );
+      const replay = replayResult.rows[0];
+      if (replay !== undefined) {
+        return replay.fingerprint === fingerprint
+          ? { kind: "replayed" } as const
+          : { kind: "conflict" } as const;
+      }
+      if (!lease.open) {
+        return { kind: "refused", error: "lease_not_held" } as const;
+      }
+      const evidence = captured.reputationEvidence;
+      if (evidence !== undefined &&
+          (evidence.workerId !== lease.holder || evidence.job === undefined ||
+            evidence.job.jobId !== lease.jobId ||
+            evidence.job.collectionCycle !== lease.collectionCycle)) {
+        return { kind: "evidence_conflict" } as const;
+      }
+      if (await this.reputationEvidenceConflicts(client, evidence)) {
+        return { kind: "evidence_conflict" } as const;
+      }
+      await this.closeLeaseAttempt(
+        client,
+        lease,
+        captured.classification !== "coordinator_fault",
+      );
+      await this.persistReputationEvidence(client, evidence);
+      await this.writeReplay(
+        client,
+        "reject_submission",
+        captured.leaseId,
+        fingerprint,
+        { kind: "recorded" },
+      );
+      return { kind: "recorded" } as const;
+    });
+  }
+
+  async getAcceptedSubmission(
+    leaseId: Parameters<Store["getAcceptedSubmission"]>[0],
+  ): ReturnType<Store["getAcceptedSubmission"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<AcceptedSubmissionRow>(
+        `SELECT receipt, body FROM ${this.quotedSchema}.accepted_submissions
+          WHERE lease_id = $1`,
+        [leaseId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return null;
+      return {
+        receipt: decodeSubmissionReceipt(row.receipt),
+        body: decodeStoredJson(row.body),
+      };
+    });
+  }
+
+  async listAcceptedReplicas(
+    jobId: Parameters<Store["listAcceptedReplicas"]>[0],
+    collectionCycle: Parameters<Store["listAcceptedReplicas"]>[1],
+  ): ReturnType<Store["listAcceptedReplicas"]> {
+    return withPoolClient(this.#pool, (client) =>
+      this.loadAcceptedReplicas(client, jobId, collectionCycle));
+  }
+
+  async getResultState(
+    jobId: Parameters<Store["getResultState"]>[0],
+    collectionCycle: Parameters<Store["getResultState"]>[1],
+  ): ReturnType<Store["getResultState"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<{ readonly result_state: unknown }>(
+        `SELECT result_state FROM ${this.quotedSchema}.job_cycles
+          WHERE job_id = $1 AND collection_cycle = $2`,
+        [jobId, collectionCycle],
+      );
+      const value = result.rows[0]?.result_state;
+      if (value === undefined) return null;
+      if (!isString(value) || !resultStates.has(value)) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      return value as ResultState;
+    });
+  }
+
+  async markResultSplit(
+    input: Parameters<Store["markResultSplit"]>[0],
+  ): ReturnType<Store["markResultSplit"]> {
+    const canonicalInput = {
+      ...input,
+      evidence: [...input.evidence].sort((left, right) =>
+        compareWireIds(left.leaseId, right.leaseId)),
+    };
+    return this.transact(canonicalInput, async (client, captured) => {
+      const cycleResult = await client.query<ResultCycleRow>(
+        `SELECT jc.result_state, jc.record AS cycle_record,
+                a.candidate_revision, a.record AS attempt_record
+           FROM ${this.quotedSchema}.job_cycles jc
+           JOIN ${this.quotedSchema}.attempts a
+             ON a.job_id = jc.job_id AND a.collection_cycle = jc.collection_cycle
+          WHERE jc.job_id = $1 AND jc.collection_cycle = $2
+          FOR UPDATE OF jc, a`,
+        [captured.jobId, captured.collectionCycle],
+      );
+      const row = cycleResult.rows[0];
+      const actual = row?.result_state;
+      if (actual !== undefined && (!isString(actual) || !resultStates.has(actual))) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      if (row === undefined) {
+        return { kind: "conflict", actual: null } as const;
+      }
+      const job = decodeJob({ record: row.cycle_record }, "job_cycles.record");
+      const { revision, attempts } = decodeAttempt(row);
+      const typedActual = actual as ResultState;
+      if (typedActual !== "collecting" || job.inputHash !== captured.inputHash) {
+        return { kind: "conflict", actual: typedActual } as const;
+      }
+      const fingerprint = commandFingerprint(captured);
+      if (attempts.splitObserved) {
+        const replay = await client.query<ReplayRow>(
+          `SELECT fingerprint, outcome FROM ${this.quotedSchema}.command_replays
+            WHERE command_kind = 'mark_result_split' AND command_key = $1`,
+          [`${captured.jobId}:${captured.collectionCycle}`],
+        );
+        return replay.rows[0]?.fingerprint === fingerprint
+          ? { kind: "replayed" } as const
+          : { kind: "conflict", actual: typedActual } as const;
+      }
+      const evidence = (await this.loadAcceptedReplicas(
+        client,
+        captured.jobId,
+        captured.collectionCycle,
+      )).map((replica) => replica.evidence);
+      if (captured.evidence.length < 2 || !equal(evidence, captured.evidence)) {
+        return { kind: "conflict", actual: typedActual } as const;
+      }
+      const nextAttempts: JobCycleAttemptSnapshot = {
+        ...attempts,
+        splitObserved: true,
+      };
+      const updated = await client.query(
+        `UPDATE ${this.quotedSchema}.attempts
+            SET candidate_revision = $3, split_observed = true, record = $4::jsonb
+          WHERE job_id = $1 AND collection_cycle = $2
+            AND candidate_revision = $5`,
+        [
+          captured.jobId,
+          captured.collectionCycle,
+          revision + 1,
+          JSON.stringify(nextAttempts),
+          revision,
+        ],
+      );
+      if (updated.rowCount !== 1) restartSerializableTransaction();
+      await this.writeReplay(
+        client,
+        "mark_result_split",
+        `${captured.jobId}:${captured.collectionCycle}`,
+        fingerprint,
+        { kind: "recorded" },
+      );
+      return { kind: "recorded" } as const;
+    });
+  }
+
+  async transitionResult(
+    input: Parameters<Store["transitionResult"]>[0],
+  ): ReturnType<Store["transitionResult"]> {
+    return this.transact(input, async (client, captured) => {
+      const cycleResult = await client.query<ResultCycleRow>(
+        `SELECT jc.result_state, jc.record AS cycle_record,
+                a.candidate_revision, a.record AS attempt_record
+           FROM ${this.quotedSchema}.job_cycles jc
+           JOIN ${this.quotedSchema}.attempts a
+             ON a.job_id = jc.job_id AND a.collection_cycle = jc.collection_cycle
+          WHERE jc.job_id = $1 AND jc.collection_cycle = $2
+          FOR UPDATE OF jc, a`,
+        [captured.jobId, captured.collectionCycle],
+      );
+      const row = cycleResult.rows[0];
+      if (row === undefined) return { ok: false, actual: captured.from } as const;
+      if (!isString(row.result_state) || !resultStates.has(row.result_state)) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      const actual = row.result_state as ResultState;
+      if (actual !== captured.from) return { ok: false, actual } as const;
+      const jobCycle = decodeJob({ record: row.cycle_record }, "job_cycles.record");
+      let next: JobRecord | undefined;
+      if (captured.startNewCycle !== undefined) {
+        if (captured.startNewCycle.permitEpoch.length === 0 ||
+            captured.startNewCycle.inputHash.length === 0) {
+          return { ok: false, actual } as const;
+        }
+        const nextCycle = captured.collectionCycle + 1;
+        const collision = await client.query(
+          `SELECT 1 FROM ${this.quotedSchema}.job_cycles
+            WHERE job_id = $1 AND collection_cycle = $2 FOR UPDATE`,
+          [captured.jobId, nextCycle],
+        );
+        if (collision.rows[0] !== undefined) return { ok: false, actual } as const;
+        next = {
+          ...jobCycle,
+          collectionCycle: nextCycle,
+          permitEpoch: captured.startNewCycle.permitEpoch,
+          inputHash: captured.startNewCycle.inputHash,
+          cycleStartedAt: captured.startNewCycle.cycleStartedAt,
+        };
+      }
+      const leasesResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.leases
+          WHERE job_id = $1 AND collection_cycle = $2 AND open = true
+          ORDER BY lease_id COLLATE "C" FOR UPDATE`,
+        [captured.jobId, captured.collectionCycle],
+      );
+      for (const leaseRow of leasesResult.rows) {
+        await this.closeLeaseAttempt(client, decodeLease(leaseRow), true);
+      }
+      await client.query(
+        `UPDATE ${this.quotedSchema}.job_cycles
+            SET result_state = $3
+          WHERE job_id = $1 AND collection_cycle = $2`,
+        [captured.jobId, captured.collectionCycle, captured.to],
+      );
+      if (next !== undefined) {
+        const currentJob = await client.query<RecordRow>(
+          `SELECT record FROM ${this.quotedSchema}.jobs
+            WHERE job_id = $1 FOR UPDATE`,
+          [captured.jobId],
+        );
+        if (currentJob.rows[0] === undefined) {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            `job ${captured.jobId} has no current projection`,
+          );
+        }
+        await client.query(
+          `UPDATE ${this.quotedSchema}.jobs
+              SET input_hash = $2, collection_cycle = $3, record = $4::jsonb
+            WHERE job_id = $1`,
+          [next.jobId, next.inputHash, next.collectionCycle, JSON.stringify(next)],
+        );
+        await client.query(
+          `INSERT INTO ${this.quotedSchema}.job_cycles
+             (job_id, collection_cycle, permit_epoch, input_hash,
+              cycle_started_at, result_state, record)
+           VALUES ($1, $2, $3, $4, $5::timestamptz, 'collecting', $6::jsonb)`,
+          [
+            next.jobId,
+            next.collectionCycle,
+            next.permitEpoch,
+            next.inputHash,
+            next.cycleStartedAt,
+            JSON.stringify(next),
+          ],
+        );
+        const attempts: JobCycleAttemptSnapshot = {
+          attemptCount: 0,
+          openLeaseIds: [],
+          acceptedWorkerIds: [],
+          acceptedDiversity: [],
+          splitObserved: false,
+        };
+        await client.query(
+          `INSERT INTO ${this.quotedSchema}.attempts
+             (job_id, collection_cycle, candidate_revision,
+              attempt_count, split_observed, record)
+           VALUES ($1, $2, 1, 0, false, $3::jsonb)`,
+          [next.jobId, next.collectionCycle, JSON.stringify(attempts)],
+        );
+      }
+      return { ok: true } as const;
+    });
+  }
+
+  async recordDecisionResult(
+    input: Parameters<Store["recordDecisionResult"]>[0],
+  ): ReturnType<Store["recordDecisionResult"]> {
+    return this.transact(input, async (client, captured) => {
+      const existingResult = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.decisions
+          WHERE decision_result_hash = $1 FOR UPDATE`,
+        [captured.decision.decisionResultHash],
+      );
+      const existingRow = existingResult.rows[0];
+      if (existingRow !== undefined) {
+        const existing = decodeDecisionResult(existingRow.record);
+        if (equal(existing, captured.decision)) return { ok: true } as const;
+        const stateResult = await client.query<{ readonly result_state: unknown }>(
+          `SELECT result_state FROM ${this.quotedSchema}.job_cycles
+            WHERE job_id = $1 AND collection_cycle = $2`,
+          [captured.decision.jobId, captured.decision.collectionCycle],
+        );
+        const state = stateResult.rows[0]?.result_state;
+        if (state !== undefined && (!isString(state) || !resultStates.has(state))) {
+          throw new PostgresInfrastructureError(
+            "invalid_stored_value",
+            "job_cycles.result_state has an unknown value",
+          );
+        }
+        return {
+          ok: false,
+          actual: (state as ResultState | undefined) ?? "collecting",
+        } as const;
+      }
+      const cycleResult = await client.query<ResultCycleRow>(
+        `SELECT jc.result_state, jc.record AS cycle_record,
+                a.candidate_revision, a.record AS attempt_record
+           FROM ${this.quotedSchema}.job_cycles jc
+           JOIN ${this.quotedSchema}.attempts a
+             ON a.job_id = jc.job_id AND a.collection_cycle = jc.collection_cycle
+          WHERE jc.job_id = $1 AND jc.collection_cycle = $2
+          FOR UPDATE OF jc, a`,
+        [captured.decision.jobId, captured.decision.collectionCycle],
+      );
+      const row = cycleResult.rows[0];
+      const actualValue = row?.result_state;
+      if (actualValue !== undefined &&
+          (!isString(actualValue) || !resultStates.has(actualValue))) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      const actual = (actualValue as ResultState | undefined) ?? null;
+      if (row === undefined) {
+        return { ok: false, actual: captured.transition.from } as const;
+      }
+      const job = decodeJob({ record: row.cycle_record }, "job_cycles.record");
+      const { attempts } = decodeAttempt(row);
+      const evidence = (await this.loadAcceptedReplicas(
+        client,
+        captured.decision.jobId,
+        captured.decision.collectionCycle,
+      )).map((replica) => replica.evidence);
+      const expectedEvidence = [...captured.decision.evidence].sort((left, right) =>
+        compareWireIds(left.leaseId, right.leaseId));
+      if (actual !== captured.transition.from || attempts.splitObserved ||
+          attempts.openLeaseIds.length > 0 ||
+          captured.decision.inputHash !== job.inputHash ||
+          captured.decision.contractVersion !== job.contractVersion ||
+          captured.decision.permitEpoch !== job.permitEpoch ||
+          !equal(evidence, expectedEvidence)) {
+        return {
+          ok: false,
+          actual: actual ?? captured.transition.from,
+        } as const;
+      }
+      const inserted = await client.query(
+        `INSERT INTO ${this.quotedSchema}.decisions
+           (decision_result_hash, job_id, collection_cycle, verified_at, record)
+         VALUES ($1, $2, $3, $4::timestamptz, $5::jsonb)
+         ON CONFLICT (decision_result_hash) DO NOTHING`,
+        [
+          captured.decision.decisionResultHash,
+          captured.decision.jobId,
+          captured.decision.collectionCycle,
+          captured.decision.verifiedAt,
+          JSON.stringify(captured.decision),
+        ],
+      );
+      if (inserted.rowCount !== 1) restartSerializableTransaction();
+      await client.query(
+        `UPDATE ${this.quotedSchema}.job_cycles
+            SET result_state = 'verified'
+          WHERE job_id = $1 AND collection_cycle = $2`,
+        [captured.decision.jobId, captured.decision.collectionCycle],
+      );
+      return { ok: true } as const;
+    });
+  }
+
+  async getDecisionResult(
+    decisionResultHash: Parameters<Store["getDecisionResult"]>[0],
+  ): ReturnType<Store["getDecisionResult"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.decisions
+          WHERE decision_result_hash = $1`,
+        [decisionResultHash],
+      );
+      const row = result.rows[0];
+      return row === undefined ? null : decodeDecisionResult(row.record);
+    });
+  }
+
+  async inspectAuthorizationContext(
+    decisionResultHash: Parameters<Store["inspectAuthorizationContext"]>[0],
+  ): ReturnType<Store["inspectAuthorizationContext"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<{
+        readonly decision_record: unknown;
+        readonly cycle_record: unknown;
+        readonly current_job_record: unknown;
+        readonly result_state: unknown;
+        readonly class_record: unknown;
+      }>(
+        `SELECT d.record AS decision_record, jc.record AS cycle_record,
+                j.record AS current_job_record, jc.result_state,
+                cv.record AS class_record
+           FROM ${this.quotedSchema}.decisions d
+           JOIN ${this.quotedSchema}.job_cycles jc
+             ON jc.job_id = d.job_id AND jc.collection_cycle = d.collection_cycle
+           JOIN ${this.quotedSchema}.jobs j ON j.job_id = d.job_id
+           JOIN ${this.quotedSchema}.class_versions cv
+             ON cv.class_id = (jc.record->>'classId')
+            AND cv.contract_version = (d.record->>'contractVersion')
+          WHERE d.decision_result_hash = $1`,
+        [decisionResultHash],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return null;
+      if (!isString(row.result_state) || !resultStates.has(row.result_state)) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "job_cycles.result_state has an unknown value",
+        );
+      }
+      return {
+        decision: decodeDecisionResult(row.decision_record),
+        jobCycle: decodeJob({ record: row.cycle_record }, "job_cycles.record"),
+        currentJob: decodeJob({ record: row.current_job_record }),
+        resultState: row.result_state as ResultState,
+        classVersion: decodeClassVersion({ record: row.class_record }),
+      };
+    });
+  }
   readonly authorizeOrReplayIntent = notImplemented<Store["authorizeOrReplayIntent"]>("authorizeOrReplayIntent");
   readonly getAuthorizationStatus = notImplemented<Store["getAuthorizationStatus"]>("getAuthorizationStatus");
   readonly getInitialReceipt = notImplemented<Store["getInitialReceipt"]>("getInitialReceipt");
@@ -2146,5 +3016,21 @@ export class PostgresStore implements Store {
   readonly appendLedger = notImplemented<Store["appendLedger"]>("appendLedger");
   readonly listLedger = notImplemented<Store["listLedger"]>("listLedger");
   readonly recordReputationEvidence = notImplemented<Store["recordReputationEvidence"]>("recordReputationEvidence");
-  readonly listReputationEvidence = notImplemented<Store["listReputationEvidence"]>("listReputationEvidence");
+  async listReputationEvidence(
+    workerId: Parameters<Store["listReputationEvidence"]>[0],
+  ): ReturnType<Store["listReputationEvidence"]> {
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<RecordRow>(
+        `SELECT record FROM ${this.quotedSchema}.reputation_evidence
+          WHERE worker_id = $1
+          ORDER BY observed_at, evidence_id COLLATE "C"`,
+        [workerId],
+      );
+      return result.rows.map((row) => decodeStoredRecord<ReputationEvidenceRecord>(
+        row.record,
+        validReputationEvidence,
+        "reputation_evidence.record",
+      ));
+    });
+  }
 }

@@ -55,9 +55,13 @@ permit-epoch, worker, routing, queue, and class-health control state with durabl
 exact replay and real-database concurrency coverage. Task 4 now persists jobs,
 payloads, current-cycle attempts, candidate snapshots, leases, no-work
 contributions, extension deadlines, and sticky-epoch same-cycle requeues with
-atomic claim/suspension/abandonment/expiry behavior. Submission, replica,
-result-state, and decision persistence are the next bounded unit. MCP planning
-remains separate.
+atomic claim/suspension/abandonment/expiry behavior. Task 5 now persists
+holder-bound accepted submissions and invalid settlements with durable replay,
+optional reputation evidence, canary-excluding same-cycle replica projection,
+absorbing split markers, automatic decisions, result requeues, old-cycle
+isolation, and live authorization-context reads. Reserves, adjudication,
+authorization, and invalidation are the next bounded unit. MCP planning remains
+separate.
 
 ## Specs
 
