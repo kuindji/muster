@@ -434,7 +434,7 @@ last-unit reserve exclusion, composite no-partial-debit behavior, authorization
 identity and action-verdict single winners, health/load/version fencing, and
 new-class emergency exclusion. Task 7 is the next bounded adapter slice.
 
-## Task 7: Ledger, privacy boundary, and reputation evidence
+## Task 7: Ledger, privacy boundary, and reputation evidence (complete 2026-08-08)
 
 Finish the Store surface:
 
@@ -454,6 +454,20 @@ or raw OAuth subject fields.
 
 Checkpoint: the complete exported Store conformance suite passes against
 PostgreSQL 16 with real concurrent connections.
+
+Completion note: the PostgreSQL adapter now implements every frozen `Store`
+method. Ledger appends apply the reference adapter's closed-key and canonical
+JSON checks before SQL, reject sensitive bodies/descriptors before consuming a
+database ordinal, and return detached records in stable append order with exact
+class/kind filters. Reputation evidence persists under its global identity with
+exact replay and changed-record conflict, survives adapter restart, rejects raw
+or unknown fields, fails closed on malformed relational/JSONB projections, and
+is returned in frozen bytewise `(at, evidenceId)` order. The complete cumulative
+`runTask8StoreConformance` runner passes unchanged against PostgreSQL 16;
+focused tests additionally cover multi-client evidence races, restart
+persistence, malformed rows, sensitive-ledger ordinal preservation, and the
+absence of staged Store stubs, core policy evaluators, and OAuth subject fields.
+Task 8 is the next bounded adapter slice.
 
 ## Task 8: Protocol conformance, migration compatibility, and CI
 

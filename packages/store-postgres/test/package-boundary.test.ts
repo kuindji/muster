@@ -24,4 +24,18 @@ describe("package boundary", () => {
     expect(packageExports.migrateMusterPostgres).toBeTypeOf("function");
     expect(packageExports.bootstrapMusterPostgres).toBeTypeOf("function");
   });
+
+  it("contains no staged Store stubs, core policy evaluators, or OAuth subjects", async () => {
+    const source = await readFile(
+      new URL("../src/postgres-store.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toMatch(/notImplemented|not_implemented/);
+    expect(source).not.toMatch(
+      /ReputationPolicy|privacyLedgerEntry|privacyNotificationContent|\.assess\(/,
+    );
+    expect(source).not.toMatch(
+      /oauthSubject|oauth_subject|rawOAuth|raw_oauth|subjectId|subject_id/i,
+    );
+  });
 });

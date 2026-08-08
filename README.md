@@ -64,8 +64,13 @@ policy windows and atomic charges, composite authorization settlements,
 result/action adjudications and canonical verdict history, immutable initial
 authorization receipts plus mutable live validity, complete class-qualified
 invalidation and requeue batches, adjudication load/health refresh, and
-queue-wide emergency halt. Ledger, privacy, and reputation evidence are the
-next bounded adapter unit. MCP planning remains separate.
+queue-wide emergency halt. Task 7 completes the Store surface with closed-key,
+privacy-safe ledger persistence, stable filtered ledger reads, globally unique
+and replay-safe reputation evidence, and frozen bytewise evidence ordering.
+The complete exported Store conformance suite passes unchanged against
+PostgreSQL 16 with real concurrent connections. Protocol conformance,
+migration compatibility, and CI are the next bounded adapter unit. MCP planning
+remains separate.
 
 ## Specs
 

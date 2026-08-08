@@ -44,10 +44,23 @@ import {
 } from "./transactions.js";
 
 type JsonRecord = Readonly<Record<string, JsonValue>>;
-type AsyncStoreMethod = (...args: never[]) => Promise<unknown>;
 
 interface RecordRow {
   readonly record: unknown;
+}
+
+interface LedgerRow extends RecordRow {
+  readonly recorded_at: unknown;
+  readonly class_id: unknown;
+  readonly kind: unknown;
+  readonly privacy: unknown;
+}
+
+interface ReputationEvidenceRow extends RecordRow {
+  readonly evidence_id: unknown;
+  readonly worker_id: unknown;
+  readonly source: unknown;
+  readonly observed_at: unknown;
 }
 
 interface RevisionedRecordRow extends RecordRow {
@@ -171,6 +184,14 @@ const evidenceSources = new Set([
   "published_correction", "structural_failure", "validator_failure",
   "post_payload_abandonment", "escalation_quota_abuse",
 ]);
+const ledgerEntryKeys = new Set([
+  "at", "kind", "outcome", "privacy", "classId", "job", "workerId",
+  "providerSurface", "contractVersion", "correlationId", "hashes", "body",
+  "descriptors",
+]);
+const reputationEvidenceKeys = new Set([
+  "evidenceId", "workerId", "at", "job", "detailHash", "source", "impact",
+]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -181,6 +202,82 @@ const compareWireIds = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 const equal = (left: unknown, right: unknown): boolean =>
   commandFingerprint(left) === commandFingerprint(right);
+
+function hasWellFormedUtf16(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isCanonicalJsonValue(value: unknown, seen = new Set<object>()): boolean {
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "string") return hasWellFormedUtf16(value);
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index) ||
+            !isCanonicalJsonValue(value[index], seen)) return false;
+      }
+      return true;
+    }
+    const prototype = Object.getPrototypeOf(value) as unknown;
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    return Object.entries(value).every(([key, entry]) =>
+      hasWellFormedUtf16(key) && entry !== undefined &&
+      isCanonicalJsonValue(entry, seen)
+    );
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function validLedgerEntry(record: unknown): boolean {
+  if (!isObject(record) ||
+      !Object.keys(record).every((key) => ledgerEntryKeys.has(key)) ||
+      !isString(record.at) || !Number.isFinite(Date.parse(record.at)) ||
+      !isString(record.kind) || record.kind.length === 0 ||
+      !isString(record.outcome) || record.outcome.length === 0 ||
+      !isString(record.privacy) ||
+      !["public", "internal", "sensitive"].includes(record.privacy) ||
+      !isObject(record.hashes) ||
+      !Object.values(record.hashes).every((hash) =>
+        isString(hash) && hash.length > 0
+      )) {
+    return false;
+  }
+  for (const key of [
+    "classId", "workerId", "providerSurface", "contractVersion", "correlationId",
+  ]) {
+    const value = record[key];
+    if (value !== undefined && (!isString(value) || value.length === 0)) return false;
+  }
+  if (record.job !== undefined &&
+      (!isObject(record.job) ||
+        Object.keys(record.job).some((key) =>
+          key !== "jobId" && key !== "collectionCycle"
+        ) ||
+        !isString(record.job.jobId) || record.job.jobId.length === 0 ||
+        !Number.isSafeInteger(record.job.collectionCycle) ||
+        Number(record.job.collectionCycle) <= 0)) {
+    return false;
+  }
+  return (record.body === undefined || isCanonicalJsonValue(record.body)) &&
+    (record.descriptors === undefined ||
+      isCanonicalJsonValue(record.descriptors));
+}
 
 function validWorkerRecord(record: JsonRecord): boolean {
   return isString(record.workerId) && isString(record.state) &&
@@ -302,10 +399,13 @@ function validDecisionResult(record: JsonRecord): boolean {
 }
 
 function validReputationEvidence(record: JsonRecord): boolean {
-  if (!isString(record.evidenceId) || !isString(record.workerId) ||
+  if (!Object.keys(record).every((key) => reputationEvidenceKeys.has(key)) ||
+      !isString(record.evidenceId) || record.evidenceId.length === 0 ||
+      !isString(record.workerId) || record.workerId.length === 0 ||
       !isString(record.at) || !isString(record.source) ||
       !evidenceSources.has(record.source) ||
-      (record.detailHash !== undefined && !isString(record.detailHash)) ||
+      (record.detailHash !== undefined &&
+        (!isString(record.detailHash) || record.detailHash.length === 0)) ||
       (record.impact !== "positive" && record.impact !== "negative")) {
     return false;
   }
@@ -317,8 +417,60 @@ function validReputationEvidence(record: JsonRecord): boolean {
   }
   return record.job === undefined ||
     (isObject(record.job) && isString(record.job.jobId) &&
+      Object.keys(record.job).every((key) =>
+        key === "jobId" || key === "collectionCycle"
+      ) &&
       Number.isSafeInteger(record.job.collectionCycle) &&
       Number(record.job.collectionCycle) > 0);
+}
+
+function projectedTimestamp(value: unknown, description: string): number {
+  if (!isString(value) || !Number.isFinite(Date.parse(value))) {
+    throw new PostgresInfrastructureError(
+      "invalid_stored_value",
+      `${description} must be a valid timestamp`,
+    );
+  }
+  return Date.parse(value);
+}
+
+function decodeLedgerRow(row: LedgerRow): Parameters<Store["appendLedger"]>[0] {
+  const record = decodeStoredRecord<Parameters<Store["appendLedger"]>[0]>(
+    row.record,
+    validLedgerEntry,
+    "ledger_entries.record",
+  );
+  const projectedClassId = row.class_id === null ? undefined : row.class_id;
+  if (projectedTimestamp(row.recorded_at, "ledger_entries.recorded_at") !==
+        Date.parse(record.at) ||
+      projectedClassId !== record.classId || row.kind !== record.kind ||
+      row.privacy !== record.privacy) {
+    throw new PostgresInfrastructureError(
+      "invalid_stored_value",
+      "ledger entry projections do not match their record",
+    );
+  }
+  return record;
+}
+
+function decodeReputationEvidenceRow(
+  row: ReputationEvidenceRow,
+): ReputationEvidenceRecord {
+  const record = decodeStoredRecord<ReputationEvidenceRecord>(
+    row.record,
+    validReputationEvidence,
+    "reputation_evidence.record",
+  );
+  if (row.evidence_id !== record.evidenceId || row.worker_id !== record.workerId ||
+      row.source !== record.source ||
+      projectedTimestamp(row.observed_at, "reputation_evidence.observed_at") !==
+        Date.parse(record.at)) {
+    throw new PostgresInfrastructureError(
+      "invalid_stored_value",
+      "reputation evidence projections do not match their record",
+    );
+  }
+  return record;
 }
 
 function decodeSubmissionReceipt(
@@ -636,22 +788,12 @@ function restartSerializableTransaction(): never {
   });
 }
 
-function notImplemented<Method extends AsyncStoreMethod>(method: string): Method {
-  return (async (..._arguments: never[]) => {
-    throw new PostgresInfrastructureError(
-      "not_implemented",
-      `PostgreSQL Store method ${method} is not implemented in this staged adapter`,
-    );
-  }) as unknown as Method;
-}
-
 /**
  * PostgreSQL implementation of the frozen Store boundary.
  *
  * The adapter borrows a client per operation and never owns caller pool
- * shutdown. Tasks 3 through 6 implement control, lease, result, and safety
- * state; later plan slices remain explicit infrastructure stubs so the class is
- * already Store-assignable.
+ * shutdown. The complete Store surface persists control, lease, result, safety,
+ * ledger, and reputation state without evaluating core policy.
  */
 export class PostgresStore implements Store {
   readonly schema: string;
@@ -5557,24 +5699,135 @@ export class PostgresStore implements Store {
     return this.transact(charge, (client, captured) =>
       this.settleReserve(client, captured));
   }
-  readonly appendLedger = notImplemented<Store["appendLedger"]>("appendLedger");
-  readonly listLedger = notImplemented<Store["listLedger"]>("listLedger");
-  readonly recordReputationEvidence = notImplemented<Store["recordReputationEvidence"]>("recordReputationEvidence");
+
+  async appendLedger(
+    entry: Parameters<Store["appendLedger"]>[0],
+  ): ReturnType<Store["appendLedger"]> {
+    if (!validLedgerEntry(entry)) {
+      return { kind: "refused", reason: "invalid_entry" };
+    }
+    if (entry.privacy === "sensitive" &&
+        (entry.body !== undefined || entry.descriptors !== undefined)) {
+      return { kind: "refused", reason: "privacy_violation" };
+    }
+    return this.transact(entry, async (client, captured) => {
+      const inserted = await client.query(
+        `INSERT INTO ${this.quotedSchema}.ledger_entries
+           (recorded_at, class_id, kind, privacy, record)
+         VALUES ($1::timestamptz, $2, $3, $4, $5::jsonb)`,
+        [
+          captured.at,
+          captured.classId ?? null,
+          captured.kind,
+          captured.privacy,
+          JSON.stringify(captured),
+        ],
+      );
+      if (inserted.rowCount !== 1) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          "ledger append did not persist exactly one row",
+        );
+      }
+      return { kind: "recorded" as const };
+    });
+  }
+
+  listLedger(
+    input: Parameters<Store["listLedger"]>[0] = {},
+  ): ReturnType<Store["listLedger"]> {
+    const captured = snapshotCommandInput(input);
+    return withPoolClient(this.#pool, async (client) => {
+      const result = await client.query<LedgerRow>(
+        `SELECT recorded_at::text, class_id, kind, privacy, record
+           FROM ${this.quotedSchema}.ledger_entries
+          WHERE ($1::text IS NULL OR class_id = $1)
+            AND ($2::text IS NULL OR kind = $2)
+          ORDER BY ledger_sequence`,
+        [captured.classId ?? null, captured.kind ?? null],
+      );
+      return result.rows.map(decodeLedgerRow);
+    });
+  }
+
+  async recordReputationEvidence(
+    record: Parameters<Store["recordReputationEvidence"]>[0],
+  ): ReturnType<Store["recordReputationEvidence"]> {
+    if (!isObject(record) ||
+        !validReputationEvidence(record as unknown as JsonRecord)) {
+      throw new PostgresInfrastructureError(
+        "invalid_stored_value",
+        "reputation evidence has an unknown or invalid shape",
+      );
+    }
+    return this.transact(record, async (client, captured) => {
+      const existingResult = await client.query<ReputationEvidenceRow>(
+        `SELECT evidence_id, worker_id, source, observed_at::text, record
+           FROM ${this.quotedSchema}.reputation_evidence
+          WHERE evidence_id = $1 FOR UPDATE`,
+        [captured.evidenceId],
+      );
+      const existingRow = existingResult.rows[0];
+      if (existingRow !== undefined) {
+        const existing = decodeReputationEvidenceRow(existingRow);
+        return equal(existing, captured)
+          ? { kind: "replayed" as const, record: existing }
+          : { kind: "conflict" as const, existing };
+      }
+
+      const identityResult = await client.query<{ readonly identity_kind: unknown }>(
+        `SELECT identity_kind FROM ${this.quotedSchema}.core_identities
+          WHERE identity_id = $1 FOR UPDATE`,
+        [captured.evidenceId],
+      );
+      if (identityResult.rows[0] !== undefined) {
+        throw new PostgresInfrastructureError(
+          "invalid_stored_value",
+          `reputation evidence identity ${captured.evidenceId} is already owned`,
+        );
+      }
+      const identity = await client.query(
+        `INSERT INTO ${this.quotedSchema}.core_identities
+           (identity_id, identity_kind)
+         VALUES ($1, 'reputation_evidence')
+         ON CONFLICT (identity_id) DO NOTHING`,
+        [captured.evidenceId],
+      );
+      if (identity.rowCount !== 1) restartSerializableTransaction();
+      const inserted = await client.query(
+        `INSERT INTO ${this.quotedSchema}.reputation_evidence
+           (evidence_id, worker_id, source, observed_at, record)
+         VALUES ($1, $2, $3, $4::timestamptz, $5::jsonb)`,
+        [
+          captured.evidenceId,
+          captured.workerId,
+          captured.source,
+          captured.at,
+          JSON.stringify(captured),
+        ],
+      );
+      if (inserted.rowCount !== 1) restartSerializableTransaction();
+      const persisted = structuredClone(captured) as ReputationEvidenceRecord;
+      return { kind: "recorded" as const, record: persisted };
+    });
+  }
+
   async listReputationEvidence(
     workerId: Parameters<Store["listReputationEvidence"]>[0],
   ): ReturnType<Store["listReputationEvidence"]> {
+    const captured = snapshotCommandInput(workerId);
     return withPoolClient(this.#pool, async (client) => {
-      const result = await client.query<RecordRow>(
-        `SELECT record FROM ${this.quotedSchema}.reputation_evidence
+      const result = await client.query<ReputationEvidenceRow>(
+        `SELECT evidence_id, worker_id, source, observed_at::text, record
+           FROM ${this.quotedSchema}.reputation_evidence
           WHERE worker_id = $1
           ORDER BY observed_at, evidence_id COLLATE "C"`,
-        [workerId],
+        [captured],
       );
-      return result.rows.map((row) => decodeStoredRecord<ReputationEvidenceRecord>(
-        row.record,
-        validReputationEvidence,
-        "reputation_evidence.record",
-      ));
+      return result.rows.map(decodeReputationEvidenceRow).sort((left, right) =>
+        compareWireIds(left.at, right.at) ||
+        compareWireIds(left.evidenceId, right.evidenceId)
+      );
     });
   }
 }
