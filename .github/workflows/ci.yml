@@ -36,6 +36,7 @@ jobs:
       - run: pnpm -r --if-present typecheck
       - run: pnpm test
       - run: pnpm --filter @kuindji/muster-store-postgres test:packed
+      - run: pnpm --filter @kuindji/muster-mcp test:gate-verifier
       - run: pnpm --filter @kuindji/muster-mcp test:packed
 
   postgres-18:

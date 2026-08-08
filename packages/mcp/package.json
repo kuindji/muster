@@ -20,7 +20,9 @@
   },
   "scripts": {
     "build": "tsup",
+    "gate:verify": "node scripts/verify-real-client-gate.mjs",
     "test": "vitest run",
+    "test:gate-verifier": "node scripts/test-real-client-gate.mjs",
     "test:packed": "pnpm build && node scripts/verify-packed.mjs",
     "typecheck": "tsc --noEmit"
   },

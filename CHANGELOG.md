@@ -1,5 +1,20 @@
 # Changelog
 
+## MCP Task 9 operations and gate preparation — 2026-08-08
+
+Added the public MCP operations guide for canonical handler mounting, RFC 9728
+discovery, OAuth/JWT/JWKS and mandatory revocation operations, exact scopes,
+operator-only severable subject mappings, durable MCP-state and rate-policy
+ownership, proxy/Origin and body-limit rules, personal-data retention, and
+graceful shutdown. Added a closed nonce-bound scheduled-client JSONL protocol
+and verifier that binds successful status, lease, and accepted-submit evidence
+to a separately retained schedule artifact while excluding raw OAuth identity
+and bearer material. Its checked-in fixture proves only the verifier. The final
+local semantic review found no runtime or frozen-contract defect after two
+documentation/verifier corrections, and the complete local validation matrix
+passes. A fresh unattended provider/account run and the package-complete verdict
+remain pending; publication, deployment, scheduling, and push remain separate.
+
 ## MCP Task 8 — 2026-08-08
 
 Exported `runMusterMcpConformance` and ran the same authenticated remote-tool

@@ -527,6 +527,28 @@ No checkpoint authorizes npm publication, production deployment, provider
 scheduling, a remote push, or consumer integration without an explicit
 follow-up.
 
+Implementation checkpoint: the package operations guide now documents the
+mounting, canonical URL, discovery, authorization-server, JWT/JWKS rotation,
+mandatory revocation, exact scopes, bind/sever, durable state, rate policy,
+proxy/Origin, body limit, privacy/retention, observability, and shutdown
+boundaries. A closed JSONL verifier and test fixture define a fresh nonce-bound
+`get_worker_status` → leased `lease_job` → accepted `submit_result` trace and
+bind it to a separately retained schedule artifact without admitting raw OAuth
+identity or bearer material. The remote protocol explicitly rejects the local
+fixture, test doubles, the old stub, manual calls, and in-memory MCP state as
+provider/account acceptance. No fresh unattended provider schedule has run at
+this checkpoint, so Task 9 and the package-complete verdict remain open. The
+final local semantic review traced OAuth discovery/configuration and token
+claims through JWKS refresh, mandatory revocation, exact scope selection,
+severable mapping, worker status, closed inputs, atomic MCP state, all six
+handlers, core calls, Store effects, schemas, fixture ownership, error
+projection, padding, and every side-channel row. It found no runtime or frozen
+contract defect after correcting unknown-`kid` operations wording and requiring
+an active worker in gate evidence. Frozen install, invariants, build, sequential
+typechecks, 66 files / 476 tests, fixtures, PostgreSQL 16 and 18 source and
+packed suites, packed MCP parity, package inspection, Markdown links/fences,
+privacy scans, and diff checks pass.
+
 ## Complete validation command
 
 The final command is expected to include, at minimum:

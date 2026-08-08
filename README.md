@@ -135,8 +135,32 @@ coarse no-work output, exact accepted replay across handler restart, canonical
 six-tool results, prompt-injection data treatment, and raw-identity exclusion
 from core calls and events while reusing the MCP-state race suite. Successful
 result bytes match across both Store adapters and the packed ESM/CJS exports.
-Task 9 operations documentation, real-client acceptance, and final independent
-review is the next bounded unit.
+Task 9 now has a public
+[MCP operations guide](packages/mcp/README.md) covering handler mounting,
+OAuth/JWKS and revocation, exact scopes, severable subject mappings, durable
+MCP-state ownership, proxy and body-limit rules, retention, and graceful
+shutdown. Its
+[nonce-bound real-client protocol](docs/gate/2026-08-08-mcp-real-client-gate.md)
+and closed evidence verifier keep schedule proof and raw server evidence outside
+worker-visible outputs. The checked-in verifier fixture is local test evidence,
+not remote provider/account acceptance. A fresh unattended scheduled-provider
+run remains open, so the MCP package is not yet declared complete. The final
+local semantic review found no runtime or frozen-contract defect after correcting
+the operations guide's unknown-key rotation wording and requiring an active
+worker in gate evidence. The complete local gate passes: 66 files / 476 tests,
+PostgreSQL 16 and 18 source plus packed conformance, packed MCP parity, package
+inspection, fixture ownership, Markdown, privacy scans, and diff checks.
+
+## MCP verification
+
+See the package's [operations guide](packages/mcp/README.md) for construction,
+deployment ownership, security operations, and the remote acceptance protocol.
+
+```sh
+pnpm --filter @kuindji/muster-mcp test
+pnpm --filter @kuindji/muster-mcp test:gate-verifier
+pnpm --filter @kuindji/muster-mcp test:packed
+```
 
 ## PostgreSQL adapter verification
 
