@@ -182,7 +182,7 @@ managed-PostgreSQL override, and creates and drops only unique validated test
 schemas. Migration and bootstrap exports fail explicitly as unimplemented until
 Task 2, so no schema or frozen Store behavior is fabricated at this checkpoint.
 
-## Task 2: Forward migrations, bootstrap, codecs, and transaction runner
+## Task 2: Forward migrations, bootstrap, codecs, and transaction runner (complete 2026-08-08)
 
 Add the persistence foundation:
 
@@ -232,6 +232,19 @@ violation, and pool-client cleanup.
 
 Checkpoint: schema/migration/transaction tests pass on PostgreSQL 16 and a
 freshly packed tarball contains every required migration asset.
+
+Completion note: the package now ships a compiled-and-packaged checksum
+manifest plus `0001_initial.sql`, verifies UTF-8 under a schema-qualified
+transaction advisory lock, refuses unknown or drifted history, and installs the
+complete revision-26 relational/JSONB foundation atomically. Explicit queue
+bootstrap has create/replay/conflict semantics with byte-preserved timestamps
+and no database-owned domain values. Stored-record codecs reject malformed or
+future data, and the internal serializable runner snapshots inputs before I/O,
+applies transaction-local timeouts, retries only `40001`/`40P01`, and always
+rolls back and releases its borrowed client. Focused tests cover real
+PostgreSQL 16 migration races and isolation, bootstrap replay, manifest/history
+drift, failure rollback, codec rejection, retry/exhaustion paths, and packaged
+asset presence.
 
 ## Task 3: Class, worker, routing, and operational control state
 

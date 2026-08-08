@@ -49,8 +49,10 @@ final independent review passed. The
 [PostgreSQL Store implementation plan](docs/superpowers/plans/2026-08-07-muster-store-postgres.md)
 is independently reviewed and corrected against that boundary. Its Task 1
 package, caller-owned connection boundary, and real-PostgreSQL 16 harness are
-complete. Forward migrations, bootstrap, codecs, and the serializable
-transaction runner are the next bounded unit. MCP planning remains separate.
+complete. Task 2 now adds the checksummed forward migration, explicit queue
+bootstrap, defensive stored-record codecs, and the bounded serializable
+transaction runner. Class, worker, routing, and operational control state are
+the next bounded unit. MCP planning remains separate.
 
 ## Specs
 

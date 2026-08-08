@@ -6,5 +6,6 @@ export default defineConfig({
   dts: true,
   platform: "node",
   target: "node20",
+  shims: true,
   clean: true,
 });
