@@ -1,6 +1,10 @@
 import { deepFreeze } from "./deep-freeze.js";
 import { WORKER_WIRE_ERROR_CODES } from "./errors.js";
-import { MUSTER_MCP_TOOL_SCOPES } from "./mcp-boundary.js";
+import {
+  MUSTER_MCP_ABANDON_REFUSAL_ERROR,
+  MUSTER_MCP_TOOL_SCOPES,
+} from "./mcp-boundary.js";
+import { TTL_BUCKETS_SECONDS } from "./tables/quantization.js";
 
 /** Spec 5.2/5.7. All schemas are closed and expose buckets, not precision. */
 export const AVAILABILITY_SCHEMA = deepFreeze({
@@ -50,7 +54,7 @@ const LEASE_BATCH_SHAPE = deepFreeze({
     input_hash: { type: "string" },
     job_class_id: { type: "string" },
     contract_version: { type: "string" },
-    ttl_bucket_seconds: { type: "integer" },
+    ttl_bucket_seconds: { enum: [...TTL_BUCKETS_SECONDS] },
     payload: {},
   },
 } as const);
@@ -125,7 +129,14 @@ export const TOOL_SCHEMAS = deepFreeze({
           required: ["outcome"],
           properties: { outcome: { const: "recorded" } },
         },
-        UNIFORM_ERROR_SHAPE,
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["error"],
+          properties: {
+            error: { const: MUSTER_MCP_ABANDON_REFUSAL_ERROR },
+          },
+        },
       ],
     },
   },
@@ -143,7 +154,9 @@ export const TOOL_SCHEMAS = deepFreeze({
           type: "object",
           additionalProperties: false,
           required: ["new_expiry_bucket_seconds"],
-          properties: { new_expiry_bucket_seconds: { type: "integer" } },
+          properties: {
+            new_expiry_bucket_seconds: { type: "integer", minimum: 1 },
+          },
         },
         {
           type: "object",

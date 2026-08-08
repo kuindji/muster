@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CAP_USAGE_BUCKET_MEANINGS,
+  MUSTER_MCP_ABANDON_REFUSAL_ERROR,
   MUSTER_MCP_ENDPOINT_SCOPE,
   MUSTER_MCP_JOB_SCOPE,
   MUSTER_MCP_TOOL_OUTCOME_RULES,
@@ -10,6 +11,7 @@ import {
   capUsageBucket,
   mcpLeasePaddingTargetBytes,
   mcpRateWindow,
+  mcpTtlBucketSeconds,
   nextSlotBucket,
   skillReleaseSelectionKey,
   type McpRateLimitPolicy,
@@ -29,7 +31,7 @@ const policy: McpRateLimitPolicy = {
   maxLeaseAttemptsPerSlot: 2,
 };
 
-describe("revision-27 MCP boundary tables", () => {
+describe("revision-28 MCP boundary tables", () => {
   it("uses exact endpoint, job, and worker scopes", () => {
     expect(MUSTER_MCP_ENDPOINT_SCOPE).toBe("muster:access");
     expect(MUSTER_MCP_JOB_SCOPE).toBe("muster:jobs");
@@ -101,6 +103,22 @@ describe("revision-27 MCP boundary tables", () => {
     expect(mcpLeasePaddingTargetBytes(4_097)).toBe(16_384);
     expect(mcpLeasePaddingTargetBytes(2_000_000)).toBe(4_194_304);
     expect(() => mcpLeasePaddingTargetBytes(-1)).toThrow(RangeError);
+  });
+
+  it("extends TTL buckets by doubling without exposing an exact long expiry", () => {
+    expect(mcpTtlBucketSeconds(0)).toBe(300);
+    expect(mcpTtlBucketSeconds(301)).toBe(900);
+    expect(mcpTtlBucketSeconds(7_200)).toBe(7_200);
+    expect(mcpTtlBucketSeconds(7_201)).toBe(14_400);
+    expect(mcpTtlBucketSeconds(14_401)).toBe(28_800);
+    expect(() => mcpTtlBucketSeconds(-1)).toThrow(RangeError);
+    expect(() => mcpTtlBucketSeconds(Number.MAX_SAFE_INTEGER)).toThrow(
+      RangeError,
+    );
+  });
+
+  it("assigns one exact abandon refusal code", () => {
+    expect(MUSTER_MCP_ABANDON_REFUSAL_ERROR).toBe("lease_not_held");
   });
 
   it("freezes one output-vs-tool-error rule for every tool", () => {

@@ -8,6 +8,7 @@ import type {
 } from "./primitives.js";
 import {
   PAYLOAD_PAD_BUCKETS_BYTES,
+  TTL_BUCKETS_SECONDS,
   bucketFor,
 } from "./tables/quantization.js";
 
@@ -150,6 +151,32 @@ export function mcpLeasePaddingTargetBytes(encodedResponseBytes: number): number
   }
   return bucket;
 }
+
+/**
+ * Worker-facing seconds-until-expiry bucket. The reviewed fixed table applies
+ * first; larger valid extension horizons continue by doubling so a successful
+ * core mutation can always be projected without exposing an exact deadline.
+ */
+export function mcpTtlBucketSeconds(secondsUntilExpiry: number): number {
+  if (!Number.isSafeInteger(secondsUntilExpiry) || secondsUntilExpiry < 0) {
+    throw new RangeError(
+      "seconds until expiry must be a non-negative safe integer",
+    );
+  }
+  const frozen = bucketFor(secondsUntilExpiry, TTL_BUCKETS_SECONDS);
+  if (frozen !== null) return frozen;
+  let bucket = TTL_BUCKETS_SECONDS.at(-1)!;
+  while (bucket < secondsUntilExpiry) {
+    bucket *= 2;
+    if (!Number.isSafeInteger(bucket)) {
+      throw new RangeError("TTL bucket overflow");
+    }
+  }
+  return bucket;
+}
+
+/** Every abandon holder/state refusal deliberately shares this coarse code. */
+export const MUSTER_MCP_ABANDON_REFUSAL_ERROR = "lease_not_held" as const;
 
 export interface McpRateLimitPolicy {
   readonly version: string;

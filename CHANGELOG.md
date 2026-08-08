@@ -1,5 +1,16 @@
 # Changelog
 
+## contract-freeze-17 — reviewed and tagged 2026-08-08
+
+Revision 28 corrects two MCP job projections discovered by the first Task-5
+runtime trace while preserving worker wire `1.1.0`. Long successful extensions
+now continue the fixed TTL table by doubling, so a durable post-mutation expiry
+always has a coarse upper-bound result instead of a stranded generic error.
+Every absent, closed, expired, or other-holder abandonment refusal now projects
+only `lease_not_held`. Exact schemas, two stable lifecycle fixtures, and focused
+edge tests accompany the correction. MCP handler completion, publication,
+deployment, and push remain separate.
+
 ## contract-freeze-16 — reviewed and tagged 2026-08-08
 
 Revision 27 closes the MCP planning gate while preserving worker wire `1.1.0`.

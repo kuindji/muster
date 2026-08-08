@@ -105,7 +105,12 @@ suite covers exact replay and conflict, same-key and cross-key races, slot and
 window rollover, complete policy comparison, refusal atomicity, detached
 records, stable snapshots, and authentication failure after severance while
 pseudonymous usage remains. Tool handlers still return the generic pending
-result and make no core mutation; Task 5 is the next bounded unit.
+result and make no core mutation. The first Task-5 trace found two unowned
+worker projections: a successful extension beyond the fixed TTL table and the
+exact abandon-refusal code. Revision 28 now continues long expiry buckets by
+doubling and maps every abandonment refusal to `lease_not_held`; the corrected
+boundary is reviewed and tagged locally as `contract-freeze-17`. Task 5 handler
+completion is the next bounded unit.
 
 ## PostgreSQL adapter verification
 
@@ -146,7 +151,7 @@ and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 27) | `oneshot` scope; tagged `contract-freeze-16` | What Muster does and does not guarantee, exact MCP scopes/status/skill/rate/revocation/side-channel ownership, honest pull-based reputation eligibility, truthful degraded-mode behavior, class-qualified invalidation including epoch changes, proven diversity adjudication, class-health live-version policy aggregation, queue-wide atomic emergency batches, operations observations and queue causes, atomic starvation/load comparison, privacy-safe ledger records, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, replay-stable receipts, live validity, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 28) | `oneshot` scope; tagged `contract-freeze-17` | What Muster does and does not guarantee, exact MCP scopes/status/skill/rate/revocation/side-channel ownership, deterministic long-extension and abandon-refusal projections, honest pull-based reputation eligibility, truthful degraded-mode behavior, class-qualified invalidation including epoch changes, proven diversity adjudication, class-health live-version policy aggregation, queue-wide atomic emergency batches, operations observations and queue causes, atomic starvation/load comparison, privacy-safe ledger records, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -168,9 +173,9 @@ and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 ## Contract freeze
 
 The wire contract remains frozen at version `1.1.0`. The current tagged
-internal boundary is revision 27 at `contract-freeze-16`. The binding scope is
+internal boundary is revision 28 at `contract-freeze-17`. The binding scope is
 defined
-by [spec §11.1–11.16](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+by [spec §11.1–11.17](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
 the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
 the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md),
@@ -211,6 +216,11 @@ The reviewed
 freezes the remaining status, skill, availability, rate, scope, revocation,
 output, and side-channel semantics without changing worker wire `1.1.0`; no MCP
 runtime code is part of that tag.
+The reviewed
+[freeze-17 MCP-job projection amendment](docs/superpowers/plans/2026-08-08-muster-contract-freeze-17-mcp-projections.md)
+adds deterministic long-extension TTL buckets and one exact abandonment
+refusal code without changing worker wire `1.1.0`; no MCP runtime code is part
+of that tag.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

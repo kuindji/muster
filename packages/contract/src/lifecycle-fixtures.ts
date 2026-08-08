@@ -708,6 +708,8 @@ export const REQUIRED_LIFECYCLE_FIXTURE_IDS: readonly string[] = deepFreeze([
   "mcp-token-revocation-request-boundary",
   "mcp-worker-revocation-request-boundary",
   "mcp-skill-release-complete-class-set",
+  "mcp-extension-bucket-overflow-projection",
+  "mcp-abandon-refusal-wire-code",
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

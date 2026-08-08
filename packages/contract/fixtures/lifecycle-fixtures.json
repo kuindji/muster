@@ -1253,6 +1253,26 @@
     "expectFinal": { "states": { "worker-output": "uniform-wire-error" } }
   },
   {
+    "id": "mcp-extension-bucket-overflow-projection",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "A successful extension beyond the fixed TTL table is projected into the continuing doubled bucket series after core mutation.",
+    "setup": { "lease:l1": { "expiresInSeconds": 7200, "extensionTtl": 300 } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "extend_lease", "workerId": "w1", "input": { "lease_id": "l1" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "new_expiry_bucket_seconds": 14400, "exactExpiry": "absent" } }],
+    "expectFinal": { "states": { "lease:l1": "extended", "worker-output": "coarse" } }
+  },
+  {
+    "id": "mcp-abandon-refusal-wire-code",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Every holder or lease-state abandonment refusal projects only lease_not_held.",
+    "setup": { "lease:l1": { "holder": "w2", "state": "open" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "abandon_job", "workerId": "w1", "input": { "lease_id": "l1", "reason": "before_payload" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "error": "lease_not_held", "reason": "absent" } }],
+    "expectFinal": { "states": { "lease:l1": "open", "worker-output": "uniform-wire-error" } }
+  },
+  {
     "id": "mcp-side-channel-status-buckets-coarse",
     "version": 1,
     "area": "mcp_boundary",

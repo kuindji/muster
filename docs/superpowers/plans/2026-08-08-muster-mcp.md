@@ -1,7 +1,7 @@
 # Muster MCP implementation plan
 
 **Goal:** Implement `@kuindji/muster-mcp` as a production-shaped, mountable
-OAuth-protected MCP resource server for the reviewed revision-27 coordinator,
+OAuth-protected MCP resource server for the reviewed revision-28 coordinator,
 while preserving worker wire version `1.1.0`, keeping raw OAuth identity outside
 core, and translating the six frozen tools into the existing public core
 operations without adding worker-controlled policy.
@@ -23,7 +23,10 @@ Milestone 2 and the PostgreSQL Store adapter are complete. Revision 26 is the
 active internal boundary and is tagged locally as `contract-freeze-15`; the
 worker wire remains `1.1.0`. Amendment 16 subsequently froze the MCP-owned
 semantics at revision 27 and `contract-freeze-16`; no `packages/mcp`
-implementation exists yet.
+implementation existed at that boundary. The first Task-5 trace later found
+unowned long-extension and abandon-refusal projections; amendment 17 freezes
+their revision-28 correction at `contract-freeze-17` before job-handler
+completion.
 
 **Protocol baseline:** Use the official MCP TypeScript v2 packages and expose a
 web-standard Node 20+ handler. Support the current stateless `2026-07-28`
@@ -320,6 +323,14 @@ dispatch and core mutations remain Task 5.
 
 ## Task 5: Job tool handlers
 
+Freeze interruption: the first runtime trace proved that core can successfully
+extend a lease beyond the fixed 7,200-second TTL table, while revision 27 had no
+post-mutation overflow projection. It also allowed multiple frozen wire errors
+for core's deliberately uniform abandon refusal. Revision 28 /
+`contract-freeze-17` now continues long TTL buckets by doubling and assigns
+`lease_not_held` as the sole abandon-refusal code. Task-5 runtime completion
+resumes only against that reviewed boundary.
+
 Implement `lease_job`, `submit_result`, `abandon_job`, and `extend_lease`:
 
 - validate each input against the exact frozen input schema before MCP-state or
@@ -483,8 +494,9 @@ remain separate commands if they are not part of a workspace script.
 
 ## Stop boundaries
 
-1. Task 1 is reviewed and tagged at `contract-freeze-16`; stop after each later
-   task at its own checkpoint.
+1. Task 1 is reviewed and tagged at `contract-freeze-16`; the Task-5 projection
+   correction is reviewed and tagged at `contract-freeze-17`; stop after each
+   later task at its own checkpoint.
 2. Stop any runtime task that needs a new worker-visible field, caller-chosen
    policy value, non-atomic state comparison, or raw identity in core.
 3. Keep stable tools independent of SEP-2640 and of any specific provider.

@@ -61,6 +61,25 @@ describe("coarse wire shapes (spec 5.7)", () => {
     ).toEqual(["error"]);
   });
 
+  it("pins lease TTLs and the exact abandonment refusal projection", () => {
+    const lease = TOOL_SCHEMAS.lease_job.outputSchema.oneOf[0];
+    expect(lease.properties.ttl_bucket_seconds).toEqual({
+      enum: [300, 900, 1_800, 3_600, 7_200],
+    });
+    const abandon = TOOL_SCHEMAS.abandon_job.outputSchema.oneOf[1];
+    expect(abandon).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["error"],
+      properties: { error: { const: "lease_not_held" } },
+    });
+    const extension = TOOL_SCHEMAS.extend_lease.outputSchema.oneOf[0];
+    expect(extension.properties.new_expiry_bucket_seconds).toEqual({
+      type: "integer",
+      minimum: 1,
+    });
+  });
+
   it("get_worker_status exposes skill hash, not a Resource URI (spec 5.3)", () => {
     const properties = (
       TOOL_SCHEMAS.get_worker_status.outputSchema as {

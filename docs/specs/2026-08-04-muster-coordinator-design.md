@@ -1,13 +1,13 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 27)
+**Date:** 2026-08-04 (revision 28)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
 The platform gate, Milestone 2, and PostgreSQL Store adapter are complete.
-Contract-freeze amendment 16 assigns the remaining MCP status, skill-release,
+Contract-freeze amendments 16 and 17 assign the MCP status, skill-release,
 availability, rate, scope, revocation, output, and side-channel facts while
-preserving worker wire `1.1.0`. The reviewed revision-27 boundary is tagged
-locally as `contract-freeze-16`; MCP runtime implementation remains separate.
+preserving worker wire `1.1.0`. The reviewed revision-28 boundary is tagged
+locally through `contract-freeze-17`; MCP runtime implementation remains separate.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -944,15 +944,28 @@ no core lease call. Availability therefore never crosses into core.
 submit, abandon, and extend from any other worker ID are rejected regardless
 of token validity.
 
+`ttl_bucket_seconds` is derived from the durable lease issue/expiry snapshot and
+is always one of the fixed `TTL_BUCKETS_SECONDS` values. Extension output is
+derived from durable `newExpiry` against the authenticated request-start clock.
+It uses the same fixed table first; a horizon above 7,200 seconds continues by
+doubling the last bucket until the result is an upper bound. This continuation
+prevents a successful core extension from becoming an unrepresentable or
+stranded worker result while keeping the exact deadline private.
+
+Core collapses every absent, closed, expired, or other-holder abandonment into
+one refusal. `abandon_job` projects all such refusals only as
+`{ error: "lease_not_held" }`; it never distinguishes holder or lease state.
+
 Successful values are returned as `structuredContent` and as one canonical JSON
 text mirror. Authentication and scope failures are HTTP/MCP authorization
 errors; malformed closed input is JSON-RPC invalid params. A rate, slot-attempt,
 availability-monotonicity, stale-mapping, or policy refusal is
 one generic tool execution error with no structured value. Domain behavior is
-tool-specific and frozen: lease refusal is successful `no_work`; submit and
-abandon use only frozen worker-wire error values; extend uses the successful
-uniform refusal; status is success-only; and invalid availability transitions
-use the same generic tool error. Generic errors contain no precise cause.
+tool-specific and frozen: lease refusal is successful `no_work`; submit uses
+the frozen worker-wire error set; abandon uses only `lease_not_held`; extend
+uses the successful uniform refusal; status is success-only; and invalid
+availability transitions use the same generic tool error. Generic errors
+contain no precise cause.
 
 The atomic MCP call-state command preflights the binding revision, complete rate
 policy and UTC window, worker/slot occurrence, per-tool count, lease-attempt
@@ -2805,6 +2818,9 @@ corrected, and tagged `contract-freeze-15`.
 Revision 27 implements the MCP boundary correction and is reviewed, corrected,
 and tagged `contract-freeze-16`.
 
+Revision 28 implements the MCP job-projection correction and is reviewed,
+corrected, and tagged `contract-freeze-17`.
+
 ### 11.2 Contract-freeze amendment 2
 
 Before Milestone 2, freeze and execute: Muster Schema 1 structural and value
@@ -3072,7 +3088,19 @@ mapping severance, scope step-up, last-unit rate races, monotonic availability
 races, and token/worker revocation. Raw OAuth identity remains outside core and
 the worker wire remains `1.1.0`. No MCP runtime package exists at this boundary.
 
-### 11.17 Open
+### 11.17 Contract-freeze amendment 17: MCP job projections
+
+Revision 28 is complete only when a successful extension beyond the fixed TTL
+table has a deterministic coarse projection and every abandonment refusal has
+one exact worker-wire code. `mcpTtlBucketSeconds()` uses the fixed table first,
+then doubles the final bucket until it upper-bounds the durable
+seconds-until-expiry value. Initial lease TTLs remain restricted to the fixed
+table. Absent, closed, expired, and other-holder abandonments all project only
+`lease_not_held`. Executable schemas and stable lifecycle fixtures own both
+facts. The amendment changes no core service or Store behavior, leaves worker
+wire `1.1.0`, and is reviewed before the local `contract-freeze-17` tag.
+
+### 11.18 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.
