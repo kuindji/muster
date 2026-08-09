@@ -555,6 +555,15 @@ typechecks, 66 files / 476 tests, fixtures, PostgreSQL 16 and 18 source and
 packed suites, packed MCP parity, package inspection, Markdown links/fences,
 privacy scans, and diff checks pass.
 
+The subsequent contract trace is recorded in the
+[proposed freeze-18 result-JSON amendment](2026-08-09-muster-contract-freeze-18-mcp-result-json.md).
+It rejects object-only and heuristic normalization, proposes leasing the exact
+frozen `output_schema`, and replaces the ambiguous raw `result` argument with
+explicit `result_json` parsed exactly once before MCP-state authorization. The
+proposal changes no runtime or active contract yet. Independent semantic review,
+correction, revision-29 implementation, and a local `contract-freeze-18` tag are
+required before another provider attempt.
+
 ## Complete validation command
 
 The final command is expected to include, at minimum:
