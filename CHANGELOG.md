@@ -1,18 +1,19 @@
 # Changelog
 
-## Proposed contract-freeze-18 decision — 2026-08-09
+## Reviewed contract-freeze-18 proposal — 2026-08-09
 
-Recorded the bounded contract decision prompted by two real-client
-`submit_result` failures. The proposal exposes the exact frozen
-`output_schema` in successful leases and replaces ambiguous unconstrained
-`result` values with one explicit `result_json` text parsed exactly once before
-MCP-state authorization. It preserves every Muster Schema 1 root and core's
-existing byte-limit, output-schema, verification, settlement, hash, and replay
-ownership while rejecting object-only constraints, heuristic string parsing,
-dual encodings, and validation weakening. No active schema or runtime changes
-in this checkpoint; independent review, correction, revision-29 implementation,
-and a local `contract-freeze-18` tag remain required before another provider
-attempt.
+Independently traced the bounded result-JSON decision prompted by two
+real-client `submit_result` failures. The corrected proposal exposes the exact
+validated frozen `output_schema` in successful leases and replaces ambiguous
+unconstrained `result` values with one explicit `result_json` text parsed before
+MCP-state authorization. Review added duplicate-member and ill-formed-Unicode
+refusal, clarified surrounding-whitespace versus trailing-data behavior,
+required the disclosed schema to pass the existing Muster Schema 1 validator,
+and preserved transport preflight plus core byte-limit ownership. It still
+rejects object-only constraints, heuristic string parsing, dual encodings, and
+validation weakening. No active schema or runtime changes are in this
+checkpoint; revision-29 implementation, its validation/review, and a local
+`contract-freeze-18` tag remain required before another provider attempt.
 
 ## MCP Task 9 real-client interoperability finding — 2026-08-09
 

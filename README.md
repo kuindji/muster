@@ -150,13 +150,15 @@ correctly rejected by the object output schema. The MCP package is therefore
 not yet declared complete; another provider attempt requires a frozen-contract
 decision for the currently unconstrained `submit_result.result` MCP schema.
 That decision is now captured in the
-[proposed freeze-18 result-JSON amendment](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md):
+[reviewed freeze-18 result-JSON proposal](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md):
 lease the exact frozen `output_schema` and submit one explicit `result_json`
 text that the MCP boundary parses exactly once before durable call
 authorization. Object-only results and heuristic string normalization are
 rejected because Muster Schema 1 supports every JSON root. The proposal changes
-no active contract or runtime yet and must be independently reviewed, corrected,
-implemented, and tagged before another provider attempt.
+no active contract or runtime yet. Its independent semantic review corrected
+duplicate-member, ill-formed-Unicode, whitespace/trailing-data, schema-validation,
+and transport-ordering edges. Revision 29 must still be implemented, validated,
+reviewed, and tagged before another provider attempt.
 The final local semantic review found no runtime or frozen-contract defect
 after correcting the operations guide's unknown-key rotation wording and
 requiring an active worker in gate evidence. The complete local gate passes:
@@ -285,9 +287,9 @@ adds deterministic long-extension TTL buckets and one exact abandonment
 refusal code without changing worker wire `1.1.0`; no MCP runtime code is part
 of that tag.
 The
-[proposed freeze-18 MCP-result JSON amendment](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md)
-settles the Task-9 interop finding for independent review; it is not an active
-revision, tag, or runtime authorization.
+[reviewed freeze-18 MCP-result JSON proposal](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md)
+settles the Task-9 interop decision for revision-29 implementation; it is not
+an active revision, tag, or runtime authorization.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 
