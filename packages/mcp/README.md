@@ -183,8 +183,10 @@ provider/account scheduled run are separate gates. Follow the
 for the remote acceptance gate. Before the unattended trigger, pre-authorize
 exactly `get_worker_status`, `lease_job`, and `submit_result` through the
 provider's durable scheduled-run permission control; prompt text does not grant
-tool permission. Server-side evidence stays outside worker outputs and is
-checked from a repository checkout with:
+tool permission. For the isolated gate job, call `lease_job` with `availability`
+set exactly to `{"budget_bucket":1}`; bucket zero truthfully returns `no_work`
+without a core lease call. Server-side evidence stays outside worker outputs
+and is checked from a repository checkout with:
 
 ```sh
 pnpm --filter @kuindji/muster-mcp gate:verify \

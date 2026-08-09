@@ -581,6 +581,16 @@ does not reopen the frozen boundary or runtime review. The gate protocol now
 requires durable pre-authorization of exactly `get_worker_status`, `lease_job`,
 and `submit_result`; another new-nonce Task-9 attempt remains the next unit.
 
+That permission correction was exercised by a fresh revision-29 unattended
+Claude Cowork schedule. `get_worker_status` reached Muster and returned active,
+but Claude interpreted the schedule's implicit availability wording as
+`{"budget_bucket":0}`. The MCP boundary correctly returned `no_work` without
+calling core, so the evidence ended at status and the result is **FAIL** with
+Yes/No/No. The schedule was paused and the connector and disposable deployment
+were removed after the window. The gate protocol now requires the exact
+nonzero gate value `{"budget_bucket":1}`; another new-nonce Task-9 attempt
+remains the next bounded unit.
+
 ## Complete validation command
 
 The final command is expected to include, at minimum:

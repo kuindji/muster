@@ -77,7 +77,7 @@ the window fails unattended attribution even if the operator does not answer it.
 Use these scheduled instructions:
 
 > Call `get_worker_status` on the Muster connector. If it succeeds, call
-> `lease_job` with the availability bucket appropriate for this run. Follow
+> `lease_job` with `availability` set exactly to `{"budget_bucket":1}`. Follow
 > only the sanitized instruction in that leased job, produce one value matching
 > its `output_schema`, serialize that value once as JSON text, then call
 > `submit_result` with that text in `result_json` and the exact lease ID and
@@ -127,6 +127,7 @@ Record every attempted surface, including failures:
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `887c5a27481558aac0206e74946987d4466124398467a9e7` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `a0781b69bd8f95255b2f821f922a40c162032de3c942d118` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `396d83fde23722734afd8ea1804088b02ff367b8d42aa4bf` | Yes | Yes | No / No / No | **FAIL** (`permission_required` before `get_worker_status`; zero server rows) |
+| 2026-08-09 | Claude Cowork cloud scheduled task | Max | `810daa34f9789bb623f29486b72f4ab624b4cc1c256e3950` | Yes | Yes | Yes / No / No | **FAIL** (`lease_job` used `budget_bucket: 0` and returned `no_work`) |
 
 Both attempts authenticated through the disposable PKCE OAuth issuer, mapped
 to the active pseudonymous worker, and leased the fresh nonce-bound job. In
@@ -150,6 +151,15 @@ prompt was denied, the recurring schedule was paused, the connector was removed,
 and the disposable deployment was torn down. This is a provider-configuration
 failure, not a Muster runtime or result-JSON finding. Another fresh attempt must
 pre-authorize only the three required tools before scheduling.
+
+The next revision-29 attempt durably pre-authorized exactly those three tools.
+It authenticated unattended and returned active status, but the scheduled
+instruction left the availability bucket implicit and Claude selected
+`budget_bucket: 0`. The MCP boundary correctly returned `no_work` without a
+core lease call, so no leased or accepted evidence row exists. The schedule was
+paused and the connector and deployment were removed after the window. This is
+a gate-instruction **FAIL**, not a runtime finding; another fresh attempt must
+use the exact nonzero gate value `{"budget_bucket":1}`.
 
 After a disposable attempt, revoke its access token, sever the gate mapping,
 retire or suspend the gate worker as deployment policy requires, expire/requeue

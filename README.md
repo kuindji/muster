@@ -171,7 +171,12 @@ on an interactive `get_worker_status` approval before any authenticated request
 reached Muster. The zero-row evidence is a provider-configuration **FAIL**, not
 a runtime or result-JSON finding. The gate protocol now requires durable
 pre-authorization of exactly `get_worker_status`, `lease_job`, and
-`submit_result`; Task 9 remains open for a new nonce-bound attempt.
+`submit_result`. A following fresh run proved that permission setup: unattended
+`get_worker_status` returned active, but Claude inferred `budget_bucket: 0` from
+the schedule's ambiguous "appropriate" availability wording. The MCP boundary
+correctly returned `no_work` without a core lease call, leaving status/lease/
+accepted at Yes/No/No. The gate instructions now require the exact nonzero
+value `{"budget_bucket":1}`. Task 9 remains open for a new nonce-bound attempt.
 
 ## MCP verification
 
