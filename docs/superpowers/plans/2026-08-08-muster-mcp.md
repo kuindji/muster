@@ -571,6 +571,16 @@ parity, package inspection, Markdown links/fences, privacy scans, and diff
 checks pass. The reviewed implementation is tagged locally as
 `contract-freeze-18`; another provider attempt remains a separate Task-9 unit.
 
+A subsequent fresh revision-29 Claude Cowork schedule started unattended and
+loaded the disposable connector, but its required tools retained the provider's
+default approval posture. The run stopped on interactive permission for
+`get_worker_status` before any authenticated request reached Muster, leaving a
+zero-row server evidence file. The schedule was paused and the connector and
+deployment were removed after the window. This provider-configuration **FAIL**
+does not reopen the frozen boundary or runtime review. The gate protocol now
+requires durable pre-authorization of exactly `get_worker_status`, `lease_job`,
+and `submit_result`; another new-nonce Task-9 attempt remains the next unit.
+
 ## Complete validation command
 
 The final command is expected to include, at minimum:

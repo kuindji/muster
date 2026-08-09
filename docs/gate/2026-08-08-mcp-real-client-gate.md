@@ -7,7 +7,7 @@ accepted result without human interaction.
 
 This is not the 2026-08-06 platform-assumption gate. That earlier throwaway
 server proved that one provider could call two unauthenticated canned tools.
-This gate exercises the revision-28 six-tool package, OAuth, subject mapping,
+This gate exercises the revision-29 six-tool package, OAuth, subject mapping,
 durable MCP state, public core operations, and the selected Store adapter.
 
 ## Pass criterion
@@ -15,7 +15,8 @@ durable MCP state, public core operations, and the selected Store adapter.
 A PASS requires all of the following for one fresh nonce:
 
 1. a saved provider schedule configuration identifies the provider surface,
-   account plan, trigger window, connector URL, and instructions;
+   account plan, trigger window, connector URL, instructions, and pre-authorized
+   scheduled-run tool set;
 2. the device/app remains unattended from the trigger through submission;
 3. server-side evidence records successful `get_worker_status`, a leased job
    whose sanitized payload contains `muster-mcp-gate-<nonce>`, then an accepted
@@ -64,6 +65,14 @@ Configure the target provider/account connector against the canonical MCP URL
 and OAuth authorization server. Save a screenshot or export of the schedule
 configuration in `.gate-runs/`, then record its SHA-256 in the first evidence
 row.
+
+Before the trigger, use the provider's durable scheduled-run permission control
+to pre-authorize exactly `get_worker_status`, `lease_job`, and `submit_result`.
+On Claude Cowork, set those three connector tools to **Always allow** and leave
+`abandon_job`, `extend_lease`, and `set_availability` at **Needs approval** or
+**Blocked**. Retain the connector permission view with the schedule evidence.
+Prompt text cannot grant tool permission: an interactive approval request during
+the window fails unattended attribution even if the operator does not answer it.
 
 Use these scheduled instructions:
 
@@ -117,6 +126,7 @@ Record every attempted surface, including failures:
 |------|------------------|------|-------|-----------|------------|-----------------------|---------|
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `887c5a27481558aac0206e74946987d4466124398467a9e7` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `a0781b69bd8f95255b2f821f922a40c162032de3c942d118` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
+| 2026-08-09 | Claude Cowork cloud scheduled task | Max | `396d83fde23722734afd8ea1804088b02ff367b8d42aa4bf` | Yes | Yes | No / No / No | **FAIL** (`permission_required` before `get_worker_status`; zero server rows) |
 
 Both attempts authenticated through the disposable PKCE OAuth issuer, mapped
 to the active pseudonymous worker, and leased the fresh nonce-bound job. In
@@ -130,6 +140,16 @@ one explicit `result_json` text parsed before MCP-state authorization. Another
 provider attempt must use the locally tagged `contract-freeze-18` boundary;
 core result validation remains unchanged and must not be weakened to
 manufacture a PASS.
+
+The revision-29 attempt started in the configured window and loaded the fresh
+connector, but its three required tools retained Claude Cowork's default
+**Needs approval** posture. The cloud run repeatedly requested interactive
+permission for `get_worker_status`; no authenticated request reached Muster,
+and the exported evidence remained a zero-row JSONL file. After the window, the
+prompt was denied, the recurring schedule was paused, the connector was removed,
+and the disposable deployment was torn down. This is a provider-configuration
+failure, not a Muster runtime or result-JSON finding. Another fresh attempt must
+pre-authorize only the three required tools before scheduling.
 
 After a disposable attempt, revoke its access token, sever the gate mapping,
 retire or suspend the gate worker as deployment policy requires, expire/requeue

@@ -180,8 +180,11 @@ MCP-state commands retain their own atomic replay semantics.
 Local SDK tests, cross-adapter conformance, packed-package parity, and a
 provider/account scheduled run are separate gates. Follow the
 [nonce-bound real-client protocol](https://github.com/kuindji/muster/blob/main/docs/gate/2026-08-08-mcp-real-client-gate.md)
-for the remote acceptance gate. Server-side evidence stays outside worker
-outputs and is checked from a repository checkout with:
+for the remote acceptance gate. Before the unattended trigger, pre-authorize
+exactly `get_worker_status`, `lease_job`, and `submit_result` through the
+provider's durable scheduled-run permission control; prompt text does not grant
+tool permission. Server-side evidence stays outside worker outputs and is
+checked from a repository checkout with:
 
 ```sh
 pnpm --filter @kuindji/muster-mcp gate:verify \

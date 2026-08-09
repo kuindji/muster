@@ -165,6 +165,13 @@ Store adapters and found no further defect. The complete local gate passes:
 68 files / 511 tests,
 PostgreSQL 16 and 18 source plus packed conformance, packed MCP parity, package
 inspection, fixture ownership, Markdown, privacy scans, and diff checks.
+A subsequent fresh revision-29 Claude Cowork schedule started unattended and
+loaded the disposable connector, but default connector permissions stopped it
+on an interactive `get_worker_status` approval before any authenticated request
+reached Muster. The zero-row evidence is a provider-configuration **FAIL**, not
+a runtime or result-JSON finding. The gate protocol now requires durable
+pre-authorization of exactly `get_worker_status`, `lease_job`, and
+`submit_result`; Task 9 remains open for a new nonce-bound attempt.
 
 ## MCP verification
 
