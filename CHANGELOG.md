@@ -1,5 +1,21 @@
 # Changelog
 
+## MCP Task 9 real-client interoperability finding — 2026-08-09
+
+Ran two fresh unattended Claude Cowork cloud schedules against disposable
+production-shaped HTTPS, PKCE OAuth, PostgreSQL Store, and durable MCP-state
+deployments. Both runs authenticated, mapped to the active pseudonymous worker,
+returned status, and leased the correct nonce-bound job. Claude encoded the
+nested submission object as a JSON string in both runs, including after an
+explicit object-only schedule and job instruction, so core correctly returned
+`invalid_result`; the retry returned the terminal `submission_conflict`. No
+accepted evidence row exists and Task 9 remains open. The finding is at the
+frozen MCP boundary: `submit_result.result` is currently published as
+unconstrained `{}`. A contract decision must own any added schema guidance,
+typed envelope, or normalization rule before another provider run. Also fixed
+the documented pnpm verifier invocation so its flags reach the script without
+an extra literal `--`. No runtime or wire change is included.
+
 ## MCP Task 9 operations and gate preparation — 2026-08-08
 
 Added the public MCP operations guide for canonical handler mounting, RFC 9728

@@ -143,11 +143,16 @@ shutdown. Its
 [nonce-bound real-client protocol](docs/gate/2026-08-08-mcp-real-client-gate.md)
 and closed evidence verifier keep schedule proof and raw server evidence outside
 worker-visible outputs. The checked-in verifier fixture is local test evidence,
-not remote provider/account acceptance. A fresh unattended scheduled-provider
-run remains open, so the MCP package is not yet declared complete. The final
-local semantic review found no runtime or frozen-contract defect after correcting
-the operations guide's unknown-key rotation wording and requiring an active
-worker in gate evidence. The complete local gate passes: 66 files / 476 tests,
+not remote provider/account acceptance. Two fresh unattended Claude Cowork
+runs authenticated, returned active status, and leased their nonce-bound jobs,
+but both encoded the nested submission result as a JSON string and were
+correctly rejected by the object output schema. The MCP package is therefore
+not yet declared complete; another provider attempt requires a frozen-contract
+decision for the currently unconstrained `submit_result.result` MCP schema.
+The final local semantic review found no runtime or frozen-contract defect
+after correcting the operations guide's unknown-key rotation wording and
+requiring an active worker in gate evidence. The complete local gate passes:
+66 files / 476 tests,
 PostgreSQL 16 and 18 source plus packed conformance, packed MCP parity, package
 inspection, fixture ownership, Markdown, privacy scans, and diff checks.
 

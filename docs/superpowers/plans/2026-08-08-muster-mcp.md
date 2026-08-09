@@ -536,9 +536,15 @@ boundaries. A closed JSONL verifier and test fixture define a fresh nonce-bound
 bind it to a separately retained schedule artifact without admitting raw OAuth
 identity or bearer material. The remote protocol explicitly rejects the local
 fixture, test doubles, the old stub, manual calls, and in-memory MCP state as
-provider/account acceptance. No fresh unattended provider schedule has run at
-this checkpoint, so Task 9 and the package-complete verdict remain open. The
-final local semantic review traced OAuth discovery/configuration and token
+provider/account acceptance. Two fresh unattended Claude Cowork schedules ran
+on 2026-08-09. Both authenticated, projected active status, and leased their
+fresh nonce-bound job, but Claude encoded the nested `result` object as a JSON
+string even after explicit object-only guidance. Core correctly returned
+`invalid_result` and made the rejection terminal, so neither attempt produced
+the required accepted row. Task 9 and the package-complete verdict remain open;
+the next bounded unit is a frozen-contract decision for the unconstrained
+`submit_result.result` MCP schema, not a relaxation of core result validation.
+The final local semantic review traced OAuth discovery/configuration and token
 claims through JWKS refresh, mandatory revocation, exact scope selection,
 severable mapping, worker status, closed inputs, atomic MCP state, all six
 handlers, core calls, Store effects, schemas, fixture ownership, error

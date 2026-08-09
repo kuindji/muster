@@ -177,7 +177,7 @@ for the remote acceptance gate. Server-side evidence stays outside worker
 outputs and is checked from a repository checkout with:
 
 ```sh
-pnpm --filter @kuindji/muster-mcp gate:verify -- \
+pnpm --filter @kuindji/muster-mcp gate:verify \
   --file .gate-runs/mcp-<nonce>.jsonl \
   --nonce <nonce> \
   --schedule-evidence .gate-runs/schedule-<nonce>.png

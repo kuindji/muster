@@ -97,7 +97,7 @@ worker never receives the evidence path, schedule hash, or evidence rows.
 Verify both the trace and the saved schedule artifact:
 
 ```sh
-pnpm --filter @kuindji/muster-mcp gate:verify -- \
+pnpm --filter @kuindji/muster-mcp gate:verify \
   --file .gate-runs/mcp-<nonce>.jsonl \
   --nonce <nonce> \
   --schedule-evidence .gate-runs/schedule-<nonce>.png
@@ -113,7 +113,21 @@ Record every attempted surface, including failures:
 
 | Date | Provider surface | Plan | Nonce | Scheduled | Unattended | Status/lease/accepted | Verdict |
 |------|------------------|------|-------|-----------|------------|-----------------------|---------|
-| Pending | — | — | — | — | — | — | **PENDING** |
+| 2026-08-09 | Claude Cowork cloud scheduled task | Max | `887c5a27481558aac0206e74946987d4466124398467a9e7` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
+| 2026-08-09 | Claude Cowork cloud scheduled task | Max | `a0781b69bd8f95255b2f821f922a40c162032de3c942d118` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
+
+Both attempts authenticated through the disposable PKCE OAuth issuer, mapped
+to the active pseudonymous worker, and leased the fresh nonce-bound job. In
+both runs Claude encoded the requested nested `result` object as a JSON string;
+the second run did so even when both the schedule and sanitized job instruction
+said that `result` must be an object and never a JSON-encoded string. The job
+class output schema therefore rejected the first submission, and the retry
+correctly conflicted with the terminal rejection. The MCP boundary currently
+publishes `submit_result.result` as unconstrained `{}`. Resolving whether that
+field needs additional frozen schema guidance, a typed result envelope, or an
+explicitly owned normalization rule is a contract decision before another
+provider attempt. Core result validation must not be weakened to manufacture a
+PASS.
 
 After a disposable attempt, revoke its access token, sever the gate mapping,
 retire or suspend the gate worker as deployment policy requires, expire/requeue
