@@ -1,19 +1,19 @@
 # Changelog
 
-## Reviewed contract-freeze-18 proposal — 2026-08-09
+## contract-freeze-18 — reviewed and tagged 2026-08-09
 
-Independently traced the bounded result-JSON decision prompted by two
-real-client `submit_result` failures. The corrected proposal exposes the exact
-validated frozen `output_schema` in successful leases and replaces ambiguous
-unconstrained `result` values with one explicit `result_json` text parsed before
-MCP-state authorization. Review added duplicate-member and ill-formed-Unicode
-refusal, clarified surrounding-whitespace versus trailing-data behavior,
-required the disclosed schema to pass the existing Muster Schema 1 validator,
-and preserved transport preflight plus core byte-limit ownership. It still
-rejects object-only constraints, heuristic string parsing, dual encodings, and
-validation weakening. No active schema or runtime changes are in this
-checkpoint; revision-29 implementation, its validation/review, and a local
-`contract-freeze-18` tag remain required before another provider attempt.
+Implemented revision 29 after the independently corrected result-JSON trace.
+Successful leases now carry a detached exact validated copy of the selected
+frozen `output_schema`. `submit_result` replaces ambiguous raw `result` values
+with one required `result_json` string parsed once by a duplicate-aware RFC 8259
+parser and checked in the JCS domain before MCP-state authorization. The parser
+accepts surrounding JSON whitespace while rejecting trailing data, decoded-name
+duplicates, number overflow, and ill-formed Unicode. Core retains its existing
+byte limit, output-schema validation, canonical result identity, settlement,
+and replay ownership. The canonical skill, golden hash, five named lifecycle
+fixtures, operations guidance, focused tests, authenticated cross-adapter
+conformance, and packed parity move with the boundary. Worker wire remains
+`1.1.0`; provider acceptance, publication, deployment, and push remain separate.
 
 ## MCP Task 9 real-client interoperability finding — 2026-08-09
 
@@ -24,9 +24,9 @@ returned status, and leased the correct nonce-bound job. Claude encoded the
 nested submission object as a JSON string in both runs, including after an
 explicit object-only schedule and job instruction, so core correctly returned
 `invalid_result`; the retry returned the terminal `submission_conflict`. No
-accepted evidence row exists and Task 9 remains open. The finding is at the
-frozen MCP boundary: `submit_result.result` is currently published as
-unconstrained `{}`. A contract decision must own any added schema guidance,
+accepted evidence row exists and Task 9 remains open. The finding was at the
+then-frozen MCP boundary: `submit_result.result` was published as unconstrained
+`{}`. A contract decision had to own any added schema guidance,
 typed envelope, or normalization rule before another provider run. Also fixed
 the documented pnpm verifier invocation so its flags reach the script without
 an extra literal `--`. No runtime or wire change is included.

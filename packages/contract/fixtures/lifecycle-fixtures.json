@@ -1143,6 +1143,56 @@
     "expectFinal": { "states": { "class-health:c1": "ready" } }
   },
   {
+    "id": "mcp-lease-output-schema-disclosed",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "A successful lease discloses a detached exact copy of the selected registered Muster Schema 1 output schema.",
+    "setup": { "class-version:c1:v1": { "outputSchema": { "$schema": "urn:kuindji:muster:schema:1", "type": "string" } }, "candidate:j1": { "classId": "c1", "contractVersion": "v1" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "lease_job", "workerId": "w1", "input": { "availability": { "budget_bucket": 2 } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "output_schema": { "$schema": "urn:kuindji:muster:schema:1", "type": "string" }, "schemaSource": "selected-class-version", "detached": true } }],
+    "expectFinal": { "states": { "class-version:c1:v1": "unchanged", "lease-output-schema": "disclosed" } }
+  },
+  {
+    "id": "mcp-submit-result-json-parse-refusal",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Invalid or trailing nested JSON text is refused before MCP-state authorization or a core call.",
+    "setup": { "lease:l1": { "state": "open" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": "{} trailing" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "invalid_tool_input" } }],
+    "expectFinal": { "states": { "mcp-call-state": "absent", "core-call": "absent", "lease:l1": "open" } }
+  },
+  {
+    "id": "mcp-submit-result-json-duplicate-name-refusal",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Duplicate decoded member names at any depth are refused before MCP-state authorization or a core call.",
+    "setup": { "lease:l1": { "state": "open" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": "{\"answer\":1,\"\\u0061nswer\":2}" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "invalid_tool_input" } }],
+    "expectFinal": { "states": { "mcp-call-state": "absent", "core-call": "absent", "lease:l1": "open" } }
+  },
+  {
+    "id": "mcp-submit-result-json-string-root",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "A string-root result includes JSON quote characters and reaches core as the decoded string rather than encoded JSON data.",
+    "setup": { "lease:l1": { "state": "open", "outputSchemaType": "string" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": "\"answer\"" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "accepted", "coreResult": "answer" } }],
+    "expectFinal": { "states": { "submission:l1": "accepted" } }
+  },
+  {
+    "id": "mcp-submit-result-json-canonical-replay",
+    "version": 1,
+    "area": "mcp_boundary",
+    "description": "Lexically different nested JSON texts for the same value share one canonical core identity and replay byte-identically.",
+    "setup": { "lease:l1": { "state": "open" } },
+    "conditions": [],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": "{\"b\":2,\"a\":1}" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "accepted" } }, { "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": " { \"a\" : 1, \"b\" : 2 } " }, "at": "2026-08-08T10:00:01.000Z" }, "expect": { "kind": "replayed", "bytes": "identical" } }],
+    "expectFinal": { "receipts": { "submission:l1": "byte_identical" } }
+  },
+  {
     "id": "mcp-side-channel-availability-monotonic",
     "version": 1,
     "area": "mcp_boundary",
@@ -1249,7 +1299,7 @@
     "description": "Submission failures expose only frozen worker-wire error codes and never validation detail.",
     "setup": { "lease:l1": { "state": "open" } },
     "conditions": [],
-    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result": {} }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "error": "invalid_result", "detail": "absent" } }],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": "{}" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "error": "invalid_result", "detail": "absent" } }],
     "expectFinal": { "states": { "worker-output": "uniform-wire-error" } }
   },
   {
@@ -1309,7 +1359,7 @@
     "description": "An exact accepted submission retry returns the same canonical structured value and text mirror without a second core row.",
     "setup": { "submission:l1": { "resultHash": "rh1" } },
     "conditions": [],
-    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "requestId": "r1", "input": { "lease_id": "l1", "input_hash": "ih1", "result": { "answer": "ok" } }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "replayed", "bytes": "identical" } }],
+    "steps": [{ "command": "invokeMcpTool", "args": { "tool": "submit_result", "workerId": "w1", "requestId": "r1", "input": { "lease_id": "l1", "input_hash": "ih1", "result_json": "{\"answer\":\"ok\"}" }, "at": "2026-08-08T10:00:00.000Z" }, "expect": { "kind": "replayed", "bytes": "identical" } }],
     "expectFinal": { "receipts": { "submission:l1": "byte_identical" } }
   },
   {

@@ -48,6 +48,7 @@ const LEASE_BATCH_SHAPE = deepFreeze({
     "contract_version",
     "ttl_bucket_seconds",
     "payload",
+    "output_schema",
   ],
   properties: {
     lease_id: { type: "string" },
@@ -56,6 +57,7 @@ const LEASE_BATCH_SHAPE = deepFreeze({
     contract_version: { type: "string" },
     ttl_bucket_seconds: { enum: [...TTL_BUCKETS_SECONDS] },
     payload: {},
+    output_schema: { type: "object" },
   },
 } as const);
 
@@ -75,11 +77,11 @@ export const TOOL_SCHEMAS = deepFreeze({
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["lease_id", "input_hash", "result"],
+      required: ["lease_id", "input_hash", "result_json"],
       properties: {
         lease_id: { type: "string" },
         input_hash: { type: "string" },
-        result: {},
+        result_json: { type: "string" },
       },
     },
     outputSchema: {

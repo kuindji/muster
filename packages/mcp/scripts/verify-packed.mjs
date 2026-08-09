@@ -130,7 +130,7 @@ async function successfulResults(module) {
       {
         lease_id: "lease-packed-1",
         input_hash: "input-packed-1",
-        result: { answer: "packed" },
+        result_json: JSON.stringify({ answer: "packed" }),
       },
       authenticated,
     ),

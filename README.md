@@ -147,22 +147,22 @@ not remote provider/account acceptance. Two fresh unattended Claude Cowork
 runs authenticated, returned active status, and leased their nonce-bound jobs,
 but both encoded the nested submission result as a JSON string and were
 correctly rejected by the object output schema. The MCP package is therefore
-not yet declared complete; another provider attempt requires a frozen-contract
-decision for the currently unconstrained `submit_result.result` MCP schema.
-That decision is now captured in the
-[reviewed freeze-18 result-JSON proposal](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md):
-lease the exact frozen `output_schema` and submit one explicit `result_json`
-text that the MCP boundary parses exactly once before durable call
-authorization. Object-only results and heuristic string normalization are
-rejected because Muster Schema 1 supports every JSON root. The proposal changes
-no active contract or runtime yet. Its independent semantic review corrected
-duplicate-member, ill-formed-Unicode, whitespace/trailing-data, schema-validation,
-and transport-ordering edges. Revision 29 must still be implemented, validated,
-reviewed, and tagged before another provider attempt.
-The final local semantic review found no runtime or frozen-contract defect
-after correcting the operations guide's unknown-key rotation wording and
-requiring an active worker in gate evidence. The complete local gate passes:
-66 files / 476 tests,
+not yet declared complete; the remote provider gate must be rerun. Revision 29
+now implements the reviewed
+[freeze-18 result-JSON amendment](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md):
+successful leases disclose the exact validated frozen `output_schema`, and
+`submit_result` requires one explicit `result_json` text. The MCP boundary
+parses it exactly once with duplicate-name detection and JCS-domain validation
+before durable call authorization, then passes only the parsed value to core.
+Object-only constraints and heuristic string normalization remain rejected
+because Muster Schema 1 supports every JSON root. The independently reviewed
+implementation is tagged locally as `contract-freeze-18`; it changes no core
+worker wire or result-validation ownership. No new provider attempt is part of
+this checkpoint. The revision-29 semantic review traced the selected class
+schema through the detached core projection, duplicate-safe parse ordering,
+canonical result identity, replay, padding, fixtures, skill release, and both
+Store adapters and found no further defect. The complete local gate passes:
+68 files / 511 tests,
 PostgreSQL 16 and 18 source plus packed conformance, packed MCP parity, package
 inspection, fixture ownership, Markdown, privacy scans, and diff checks.
 
@@ -216,7 +216,7 @@ and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 
 | Spec | Status | What it settles |
 |---|---|---|
-| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 28) | `oneshot` scope; tagged `contract-freeze-17` | What Muster does and does not guarantee, exact MCP scopes/status/skill/rate/revocation/side-channel ownership, deterministic long-extension and abandon-refusal projections, honest pull-based reputation eligibility, truthful degraded-mode behavior, class-qualified invalidation including epoch changes, proven diversity adjudication, class-health live-version policy aggregation, queue-wide atomic emergency batches, operations observations and queue causes, atomic starvation/load comparison, privacy-safe ledger records, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, replay-stable receipts, live validity, privacy, platform gate, licence |
+| [2026-08-04 - coordinator design](docs/specs/2026-08-04-muster-coordinator-design.md) (rev 29) | `oneshot` scope; tagged `contract-freeze-18` | What Muster does and does not guarantee, exact MCP scopes/status/skill/rate/revocation/side-channel ownership, leased output-schema disclosure, duplicate-safe result-JSON parsing, deterministic long-extension and abandon-refusal projections, honest pull-based reputation eligibility, truthful degraded-mode behavior, class-qualified invalidation including epoch changes, proven diversity adjudication, class-health live-version policy aggregation, queue-wide atomic emergency batches, operations observations and queue causes, atomic starvation/load comparison, privacy-safe ledger records, live authorization contexts, atomic composite reserves, distinct verdict processing time, early exact verdict replay, the trusted-consumer boundary, Muster Schema 1, authoritative reserve policy and atomic accounting/health publication, atomic submission settlement and absorbing-split routing, core-owned routing and bootstrap state with atomic Store comparison, exact ordinary/canary lease payload binding, atomic no-work contribution accounting, deployment-owned worker probation and routing policy, payload-bound agreement fixtures, explicit retrospective-audit projections, per-lease worker-state requeue audit identity, explicit identity ownership, versioned operational state, bounded lease and reserve policy, mechanically classified fixtures, unanimous replication agreement, collection-cycle-isolated result requeues, exact sanitized-payload/schema hashing, pseudonymous core identity, replay-stable receipts, live validity, privacy, platform gate, licence |
 | [2026-08-04 - staged and effecting work](docs/specs/2026-08-04-muster-staged-and-effecting-design.md) | **Deferred; authorizes nothing** | Why multi-stage and side-effecting volunteer work were removed from v1, what was tried, the three unsolved staged-work problems, and the effecting-work trust/execution contract that gate their return |
 | [2026-08-05 - interpretation decisions](docs/specs/2026-08-05-spec-interpretation-decisions.md) | Historical operator-signed footnote; superseded by rev 12 | The six revision-11 readings absorbed into revision 12, including the pre-freeze correction that now places the exact canonical sanitized payload and `payload_schema` in `input_hash` |
 
@@ -238,9 +238,9 @@ and remove only randomly named `muster_test_*` or `muster_pack_*` schemas.
 ## Contract freeze
 
 The wire contract remains frozen at version `1.1.0`. The current tagged
-internal boundary is revision 28 at `contract-freeze-17`. The binding scope is
+internal boundary is revision 29 at `contract-freeze-18`. The binding scope is
 defined
-by [spec §11.1–11.17](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
+by [spec §11.1–11.18](docs/specs/2026-08-04-muster-coordinator-design.md#111-milestone-one-is-a-contract-freeze-and-nothing-else),
 the checked-in [M0+M1 plan](docs/superpowers/plans/2026-08-05-muster-m0-m1-contract-freeze.md),
 the [freeze-2 amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-2.md),
 the [freeze-3 M2-entry amendment plan](docs/superpowers/plans/2026-08-06-muster-contract-freeze-3-m2-entry.md),
@@ -286,10 +286,10 @@ The reviewed
 adds deterministic long-extension TTL buckets and one exact abandonment
 refusal code without changing worker wire `1.1.0`; no MCP runtime code is part
 of that tag.
-The
-[reviewed freeze-18 MCP-result JSON proposal](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md)
-settles the Task-9 interop decision for revision-29 implementation; it is not
-an active revision, tag, or runtime authorization.
+The reviewed
+[freeze-18 MCP-result JSON amendment](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md)
+leases the exact output schema and replaces ambiguous raw results with one
+duplicate-safe `result_json` text; the implemented boundary is tagged locally.
 Golden hashes, schema conformance, lifecycle, store-concurrency, and
 prompt-injection fixtures live under `packages/contract/fixtures/`.
 

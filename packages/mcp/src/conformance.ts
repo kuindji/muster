@@ -26,6 +26,11 @@ export const MUSTER_MCP_SIDE_CHANNEL_FIXTURE_IDS = Object.freeze([
 ] as const);
 
 export const MUSTER_MCP_CONFORMANCE_FIXTURE_IDS = Object.freeze([
+  "mcp-lease-output-schema-disclosed",
+  "mcp-submit-result-json-parse-refusal",
+  "mcp-submit-result-json-duplicate-name-refusal",
+  "mcp-submit-result-json-string-root",
+  "mcp-submit-result-json-canonical-replay",
   ...MUSTER_MCP_SIDE_CHANNEL_FIXTURE_IDS,
   "mcp-direct-call-same-boundary",
   "mcp-exact-retry-byte-identical",
@@ -265,12 +270,14 @@ async function availabilityInvariantCase(
         "contract_version",
         "ttl_bucket_seconds",
         "payload",
+        "output_schema",
       ]);
       const invariant = canonicalize({
         input_hash: value.input_hash,
         job_class_id: value.job_class_id,
         contract_version: value.contract_version,
         payload: value.payload,
+        output_schema: value.output_schema,
       });
       selected ??= invariant;
       assert(
@@ -310,7 +317,7 @@ async function sixToolRestartCase(
     const submissionArguments = {
       lease_id: lease.lease_id,
       input_hash: lease.input_hash,
-      result: { answer: "accepted conformance result" },
+      result_json: JSON.stringify({ answer: "accepted conformance result" }),
     };
     const accepted = await harness.callTool({
       name: "submit_result",
@@ -321,7 +328,10 @@ async function sixToolRestartCase(
     await harness.restart();
     const replayed = await harness.callTool({
       name: "submit_result",
-      arguments: submissionArguments,
+      arguments: {
+        ...submissionArguments,
+        result_json: ' { "answer" : "accepted conformance result" } ',
+      },
     });
     const replayedBytes = successfulBytes(replayed, "submit_result replay");
     assert(acceptedBytes === replayedBytes, "accepted replay changed across restart");
@@ -392,7 +402,7 @@ async function promptInjectionCase(
         arguments: {
           lease_id: lease.lease_id,
           input_hash: lease.input_hash,
-          result: { answer: fixture.payloadText },
+          result_json: JSON.stringify({ answer: fixture.payloadText }),
         },
       });
       assert(

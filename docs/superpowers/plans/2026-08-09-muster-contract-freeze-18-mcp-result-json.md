@@ -1,17 +1,18 @@
-# Muster proposed contract-freeze amendment 18: MCP result JSON
+# Muster contract-freeze amendment 18: MCP result JSON
 
 **Goal:** Resolve the real-client `submit_result` interoperability finding with
 one unambiguous representation for every Muster Schema 1 result root, without
 weakening job-class validation or guessing whether a string is data or encoded
 JSON.
 
-**Status:** Independently reviewed and corrected proposal for revision 29;
-implementation and a local `contract-freeze-18` tag remain separate.
+**Status:** Revision 29 implemented, independently reviewed, corrected, and
+tagged locally as `contract-freeze-18`.
 
 **Scope:** Exact MCP tool schemas, the public lease projection, canonical skill
 text, request ordering, stable fixtures, coordinator prose, and focused tests.
-This amendment does not implement the MCP parser/handler change, rerun a remote
-provider gate, publish, deploy, or push. Core worker wire remains `1.1.0`.
+This amendment implements the MCP parser/handler and contract changes. It does
+not rerun a remote provider gate, publish, deploy, or push. Core worker wire
+remains `1.1.0`.
 
 ## Finding
 
@@ -21,7 +22,7 @@ required nested result object as a JSON string. Core correctly rejected that
 value against the class's frozen object output schema and made the invalid
 submission terminal.
 
-The MCP catalog currently publishes `submit_result.result` as `{}`. That shape
+The revision-28 MCP catalog published `submit_result.result` as `{}`. That shape
 admits every JSON value but does not distinguish a legitimate string-root
 result from JSON text encoding an object, array, scalar, or null. The lease
 projection also omits the class's frozen `outputSchema`, so the stable MCP
@@ -175,8 +176,14 @@ The independent review traced this proposal through Muster Schema 1,
 `input_hash`, class registration, `LeaseService`, MCP validation and request
 ordering, `SubmissionService`, canonical result hashing, exact replay, skill
 release selection, padding, fixtures, and both Store-adapter conformance paths.
-It corrected the four gaps above without activating a contract or runtime
-change. The next bounded unit may implement this corrected proposal as revision
-29 and, only after its own validation and review, create the local
-`contract-freeze-18` tag. The provider gate remains a later, disposable Task-9
-unit.
+It corrected the four gaps above before revision-29 activation. Implementation
+then updated the exact tool schemas, core lease projection, duplicate-safe
+parser ordering, canonical skill and golden hash, five named lifecycle
+fixtures, cross-adapter conformance, packed parity, coordinator specification,
+operations guide, and gate instructions. Focused and complete validation pass,
+including frozen install, invariants, builds, sequential typechecks, 68 files /
+511 tests, fixture hashes, PostgreSQL 16 and 18 source and packed conformance,
+packed MCP parity, package inspection, Markdown links/fences, privacy scans,
+and diff checks. The reviewed implementation is tagged locally as
+`contract-freeze-18`.
+The provider gate remains a later, disposable Task-9 unit.

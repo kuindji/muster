@@ -1,13 +1,13 @@
 # Muster - a coordinator for verified volunteer agent work
 
-**Date:** 2026-08-04 (revision 28)
+**Date:** 2026-08-04 (revision 29)
 
 **Status:** Design and executable contract, converged for `oneshot` scope.
 The platform gate, Milestone 2, and PostgreSQL Store adapter are complete.
-Contract-freeze amendments 16 and 17 assign the MCP status, skill-release,
-availability, rate, scope, revocation, output, and side-channel facts while
-preserving worker wire `1.1.0`. The reviewed revision-28 boundary is tagged
-locally through `contract-freeze-17`; MCP runtime implementation remains separate.
+Contract-freeze amendments 16-18 assign the MCP status, skill-release,
+availability, rate, scope, revocation, output, side-channel, leased-schema, and
+result-JSON facts while preserving worker wire `1.1.0`. The reviewed
+revision-29 boundary is tagged locally through `contract-freeze-18`.
 
 **Package:** `@kuindji/muster-*` on npm, repo `muster`, **Apache-2.0**, public
 from the first commit.
@@ -898,8 +898,10 @@ the same unauthenticated path. They do not invoke MCP state or core.
 For every protected request, the dispatch gate is ordered: cryptographic token
 validation; mandatory token-revocation read; endpoint and tool scope checks;
 subject mapping; coarse core worker-status read; complete closed input
-validation; then the atomic MCP call-state command. A revocation or severance
-committed before its corresponding gate read is observed and refuses the call.
+validation; for `submit_result`, one duplicate-member-detecting nested JSON
+parse plus JCS-domain validation; then the atomic MCP call-state command. A
+revocation or severance committed before its corresponding gate read is
+observed and refuses the call.
 A change concurrent with a gate read may linearize before or after that read;
 once the atomic call-state command authorizes dispatch, a later revocation does
 not retroactively cancel a core operation already started. It still governs the
@@ -915,10 +917,10 @@ best-effort cache.
 Job surface, scope `muster:jobs` (plus `muster:access`):
 
 ```text
-lease_job(availability)                     -> lease and one sanitized job, or no_work
-submit_result(lease_id, input_hash, result) -> receipt or validation errors
-abandon_job(lease_id, reason)               -> attempt receipt
-extend_lease(lease_id)                      -> new expiry, or refusal
+lease_job(availability)                          -> lease, sanitized job, and output schema, or no_work
+submit_result(lease_id, input_hash, result_json) -> receipt or validation errors
+abandon_job(lease_id, reason)                    -> attempt receipt
+extend_lease(lease_id)                           -> new expiry, or refusal
 ```
 
 Worker surface, scope `muster:worker` (plus `muster:access`):
@@ -938,6 +940,26 @@ atomically with rate and slot-attempt state. Within one assigned-slot occurrence
 an equal or lower bucket is accepted and a higher bucket is refused; a new
 deployment-owned occurrence begins a new monotonic record. Bucket zero authorizes
 no core lease call. Availability therefore never crosses into core.
+
+Every successful lease includes `output_schema`, a detached exact copy of the
+validated Muster Schema 1 `JobClass.outputSchema` selected for that lease. Core
+projects it from the compatible runtime class entry; MCP validates it again and
+renames it without reconstructing or weakening it. The schema remains inside
+the complete padded lease response and changes neither selection nor
+`input_hash`.
+
+`submit_result.result_json` is one string containing exactly one RFC 8259 JSON
+text. After closed input validation and before MCP-state authorization, MCP
+parses it once with decoded-name duplicate detection at every object depth,
+permits only surrounding JSON whitespace, rejects trailing non-whitespace, and
+requires successful JCS canonicalization. That rejects invalid syntax, number
+overflow, escape-equivalent duplicate names, and ill-formed Unicode before any
+MCP-state or core mutation. Only the parsed value reaches core. A string-root
+result therefore includes JSON quote characters in `result_json`; an object or
+array is not encoded as a JSON string value. Core retains the leased
+`maxResultBytes`, output-schema validation, result hash, settlement, and exact
+replay ownership, so lexically different JSON texts for the same canonical
+value have one durable result identity.
 
 **Every `lease_id` is bound to the pseudonymous `WorkerId` that holds it.**
 `muster-mcp` maps the current authenticated subject before calling core;
@@ -2772,11 +2794,14 @@ retries; permit epoch assignment across requeue, split-evidence reroute, pending
 emergency authorization invalidation, and draining (6.6); `availability`
 monotonicity, status bucket tables, exact OAuth scopes, mapping, rate/slot
 atomicity, request-start revocation ordering, tool outcome projection,
-skill-release selection, response padding, and every mitigation in the
-side-channel table (5.7).
+skill-release selection, leased output-schema disclosure, duplicate-safe nested
+result-JSON parsing before MCP-state authorization, response padding, and every
+mitigation in the side-channel table (5.7).
 
 **Fixtures.** Golden input, result, both adjudication-verdict, and decision
-hashes; MCP tool and error schemas; exact retries after every terminal lease
+hashes; MCP tool and error schemas; output-schema disclosure, result-JSON parse
+refusal, duplicate-name refusal, string-root disambiguation, and canonical
+replay; exact retries after every terminal lease
 condition; authorization-request and verdict retry/conflict cases; result- and
 action-adjudication transitions including every invalidation state; agreement
 equivalence and disagreement fixtures; oracle coverage and negative fixtures;
@@ -2820,6 +2845,9 @@ and tagged `contract-freeze-16`.
 
 Revision 28 implements the MCP job-projection correction and is reviewed,
 corrected, and tagged `contract-freeze-17`.
+
+Revision 29 implements the MCP result-JSON correction and is reviewed,
+corrected, and tagged `contract-freeze-18`.
 
 ### 11.2 Contract-freeze amendment 2
 
@@ -3100,7 +3128,19 @@ table. Absent, closed, expired, and other-holder abandonments all project only
 facts. The amendment changes no core service or Store behavior, leaves worker
 wire `1.1.0`, and is reviewed before the local `contract-freeze-17` tag.
 
-### 11.18 Open
+### 11.18 Contract-freeze amendment 18: MCP result JSON
+
+Revision 29 is complete only when a successful lease discloses a detached exact
+validated copy of the selected registered output schema and `submit_result`
+accepts only one required `result_json` string. MCP parses that nested text once
+with decoded-name duplicate detection and JCS-domain validation before durable
+MCP-state authorization, then passes only the parsed value to core. The
+canonical skill explains the string-root distinction. Exact schemas, golden
+skill bytes, the five named lifecycle fixtures, focused parser/ordering tests,
+and authenticated cross-adapter conformance own the boundary. Core worker wire
+remains `1.1.0`.
+
+### 11.19 Open
 
 1. **Does standing decay?** AI Horde's non-expiring balances ossified priority
    into permanent early-contributor advantage.

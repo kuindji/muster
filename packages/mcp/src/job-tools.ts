@@ -6,6 +6,8 @@ import {
   deepFreeze,
   mcpRateWindow,
   mcpTtlBucketSeconds,
+  validateMusterSchema,
+  type CanonicalJsonValue,
   type McpRateLimitPolicy,
   type McpStateStore,
   type MusterMcpToolName,
@@ -22,6 +24,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import type { MusterMcpAuthenticatedRequest } from "./auth.js";
+import { parseCanonicalJsonText } from "./json-text.js";
 import { genericToolError, pendingToolResult } from "./results.js";
 
 const JOB_TOOL_NAMES = new Set<MusterMcpToolName>([
@@ -58,7 +61,7 @@ interface LeaseJobInput {
 interface SubmitResultInput {
   readonly lease_id: string;
   readonly input_hash: string;
-  readonly result: unknown;
+  readonly result_json: string;
 }
 
 interface AbandonJobInput {
@@ -152,6 +155,19 @@ export class MusterMcpJobToolDispatcher {
       );
     }
     const captured = structuredClone(validated.data);
+    let parsedResult: CanonicalJsonValue | undefined;
+    if (jobTool === "submit_result") {
+      try {
+        parsedResult = parseCanonicalJsonText(
+          (captured as SubmitResultInput).result_json,
+        );
+      } catch {
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
+          "Invalid tool input.",
+        );
+      }
+    }
 
     const availabilityBudgetBucket = jobTool === "lease_job"
       ? (captured as LeaseJobInput).availability.budget_bucket
@@ -176,7 +192,12 @@ export class MusterMcpJobToolDispatcher {
 
     let value: Record<string, unknown>;
     try {
-      value = await this.invoke(jobTool, captured, authenticated);
+      value = await this.invoke(
+        jobTool,
+        captured,
+        authenticated,
+        parsedResult,
+      );
     } catch {
       return genericToolError();
     }
@@ -193,6 +214,7 @@ export class MusterMcpJobToolDispatcher {
     tool: JobToolName,
     input: unknown,
     authenticated: MusterMcpAuthenticatedRequest,
+    parsedResult: CanonicalJsonValue | undefined,
   ): Promise<Record<string, unknown>> {
     switch (tool) {
       case "lease_job": {
@@ -205,6 +227,10 @@ export class MusterMcpJobToolDispatcher {
         if (result.outcome === "no_work") return { outcome: "no_work" };
         const bucket = ttlBucket(result.lease.expiresAt, result.lease.issuedAt);
         if (bucket === null) throw new Error("invalid durable lease TTL");
+        const outputSchema = structuredClone(result.outputSchema);
+        if (!validateMusterSchema(outputSchema).ok) {
+          throw new Error("invalid leased output schema");
+        }
         return {
           lease_id: result.lease.leaseId,
           input_hash: result.lease.inputHash,
@@ -212,15 +238,17 @@ export class MusterMcpJobToolDispatcher {
           contract_version: result.lease.contractVersion,
           ttl_bucket_seconds: bucket,
           payload: structuredClone(result.payload),
+          output_schema: outputSchema,
         };
       }
       case "submit_result": {
         const captured = input as SubmitResultInput;
+        if (parsedResult === undefined) throw new Error("result JSON not parsed");
         const result = await this.dependencies.submissionService.submitResult(
           authenticated.workerId,
           captured.lease_id,
           captured.input_hash,
-          captured.result,
+          parsedResult,
         );
         return result.ok ? submissionValue(result.receipt) : { error: result.error };
       }

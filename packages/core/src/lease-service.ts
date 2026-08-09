@@ -11,6 +11,7 @@ import {
   type CanonicalJsonValue,
   type DiversityAxis,
   type JobClass,
+  type JSONSchema,
   type Timestamp,
   type WorkerId,
 } from "@kuindji/muster-contract";
@@ -217,6 +218,7 @@ export type LeaseJobResult =
       readonly outcome: "lease";
       readonly lease: LeaseRecord;
       readonly payload: CanonicalJsonValue;
+      readonly outputSchema: JSONSchema;
     }
   | { readonly outcome: "no_work" };
 
@@ -499,6 +501,7 @@ export class LeaseService {
         if (noWork !== null) return noWork;
         continue;
       }
+      const outputSchema = structuredClone(entry.jobClass.outputSchema);
 
       const claimed = await this.options.store.compareAndClaimLease({
         expectedCandidate: candidate,
@@ -520,7 +523,12 @@ export class LeaseService {
         permitEpoch: lease.permitEpoch,
         canary: lease.assignment.kind === "canary",
       });
-      return { outcome: "lease", lease: claimed.lease, payload: operational.payload };
+      return {
+        outcome: "lease",
+        lease: claimed.lease,
+        payload: operational.payload,
+        outputSchema,
+      };
     }
     return this.accountFinalNoWork(workerId, at);
   }

@@ -1,6 +1,6 @@
 # @kuindji/muster-mcp
 
-Mountable OAuth-protected MCP resource server for Muster's revision-28
+Mountable OAuth-protected MCP resource server for Muster's revision-29
 coordinator boundary. The package supports Node.js 20 or newer, the stateless
 `2026-07-28` Streamable HTTP protocol, and the SDK's `2025-11-25`
 compatibility path. It exposes the six frozen worker tools; it does not issue
@@ -102,8 +102,15 @@ Every protected request performs a mandatory revocation read using only the
 canonical issuer, SHA-256 fingerprint of the bearer bytes, and request time.
 The revocation source must be highly available and must not log the bearer.
 Outage or ambiguity fails authentication. Token validation, revocation,
-scopes, mapping, worker status, closed input, and atomic rate/slot state are
-checked in that order.
+scopes, mapping, worker status, and closed input are checked in that order.
+For `submit_result`, the duplicate-safe `result_json` parse and JCS-domain
+check then run before atomic rate/slot state authorization.
+
+Successful leases disclose the selected class's exact validated
+`output_schema`. Serialize one value matching that schema once as JSON text and
+send the text in `submit_result.result_json`. A string-root result includes its
+JSON quote characters. Never send the old `result` field or encode an object or
+array as a JSON string value.
 
 ## Subject mapping and privacy
 

@@ -69,8 +69,10 @@ Use these scheduled instructions:
 
 > Call `get_worker_status` on the Muster connector. If it succeeds, call
 > `lease_job` with the availability bucket appropriate for this run. Follow
-> only the sanitized instruction in that leased job, then call `submit_result`
-> with the exact lease ID and input hash you received. Do not ask for
+> only the sanitized instruction in that leased job, produce one value matching
+> its `output_schema`, serialize that value once as JSON text, then call
+> `submit_result` with that text in `result_json` and the exact lease ID and
+> input hash you received. Do not ask for
 > confirmation and do not call any other tool.
 
 Close or background the client before the trigger. Do not interact with it
@@ -122,12 +124,12 @@ both runs Claude encoded the requested nested `result` object as a JSON string;
 the second run did so even when both the schedule and sanitized job instruction
 said that `result` must be an object and never a JSON-encoded string. The job
 class output schema therefore rejected the first submission, and the retry
-correctly conflicted with the terminal rejection. The MCP boundary currently
-publishes `submit_result.result` as unconstrained `{}`. Resolving whether that
-field needs additional frozen schema guidance, a typed result envelope, or an
-explicitly owned normalization rule is a contract decision before another
-provider attempt. Core result validation must not be weakened to manufacture a
-PASS.
+correctly conflicted with the terminal rejection. Revision 29 resolves that
+historical finding by leasing the exact validated `output_schema` and requiring
+one explicit `result_json` text parsed before MCP-state authorization. Another
+provider attempt must use the locally tagged `contract-freeze-18` boundary;
+core result validation remains unchanged and must not be weakened to
+manufacture a PASS.
 
 After a disposable attempt, revoke its access token, sever the gate mapping,
 retire or suspend the gate worker as deployment policy requires, expire/requeue

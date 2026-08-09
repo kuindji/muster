@@ -1,7 +1,7 @@
 # Muster MCP implementation plan
 
 **Goal:** Implement `@kuindji/muster-mcp` as a production-shaped, mountable
-OAuth-protected MCP resource server for the reviewed revision-28 coordinator,
+OAuth-protected MCP resource server for the reviewed revision-29 coordinator,
 while preserving worker wire version `1.1.0`, keeping raw OAuth identity outside
 core, and translating the six frozen tools into the existing public core
 operations without adding worker-controlled policy.
@@ -26,7 +26,9 @@ semantics at revision 27 and `contract-freeze-16`; no `packages/mcp`
 implementation existed at that boundary. The first Task-5 trace later found
 unowned long-extension and abandon-refusal projections; amendment 17 freezes
 their revision-28 correction at `contract-freeze-17` before job-handler
-completion.
+completion. Amendment 18 subsequently freezes the revision-29 leased-schema and
+explicit result-JSON correction at `contract-freeze-18` before another provider
+attempt.
 
 **Protocol baseline:** Use the official MCP TypeScript v2 packages and expose a
 web-standard Node 20+ handler. Support the current stateless `2026-07-28`
@@ -542,8 +544,8 @@ fresh nonce-bound job, but Claude encoded the nested `result` object as a JSON
 string even after explicit object-only guidance. Core correctly returned
 `invalid_result` and made the rejection terminal, so neither attempt produced
 the required accepted row. Task 9 and the package-complete verdict remain open;
-the next bounded unit is a frozen-contract decision for the unconstrained
-`submit_result.result` MCP schema, not a relaxation of core result validation.
+the resulting frozen-contract decision is implemented in revision 29 without
+relaxing core result validation.
 The final local semantic review traced OAuth discovery/configuration and token
 claims through JWKS refresh, mandatory revocation, exact scope selection,
 severable mapping, worker status, closed inputs, atomic MCP state, all six
@@ -555,15 +557,19 @@ typechecks, 66 files / 476 tests, fixtures, PostgreSQL 16 and 18 source and
 packed suites, packed MCP parity, package inspection, Markdown links/fences,
 privacy scans, and diff checks pass.
 
-The subsequent contract trace is recorded in the
-[reviewed freeze-18 result-JSON proposal](2026-08-09-muster-contract-freeze-18-mcp-result-json.md).
-It rejects object-only and heuristic normalization, proposes leasing the exact
+The subsequent contract trace is recorded in the reviewed and implemented
+[freeze-18 result-JSON amendment](2026-08-09-muster-contract-freeze-18-mcp-result-json.md).
+Revision 29 rejects object-only and heuristic normalization, leases the exact
 frozen `output_schema`, and replaces the ambiguous raw `result` argument with
-explicit `result_json` parsed exactly once before MCP-state authorization. The
-independent semantic review corrected duplicate-name, Unicode, whitespace,
-schema-validation, and transport-ordering gaps. The proposal changes no runtime
-or active contract yet. Revision-29 implementation, validation/review, and a
-local `contract-freeze-18` tag are required before another provider attempt.
+explicit `result_json` parsed once with duplicate-name detection and JCS-domain
+validation before MCP-state authorization. The canonical skill, five named
+lifecycle fixtures, authenticated cross-adapter conformance, packed parity,
+specification, operations guide, and gate instructions move with the boundary.
+Frozen install, invariants, builds, sequential typechecks, 68 files / 511 tests,
+fixture hashes, PostgreSQL 16 and 18 source and packed conformance, packed MCP
+parity, package inspection, Markdown links/fences, privacy scans, and diff
+checks pass. The reviewed implementation is tagged locally as
+`contract-freeze-18`; another provider attempt remains a separate Task-9 unit.
 
 ## Complete validation command
 

@@ -436,6 +436,8 @@ describe("M2 Task 4 routing and claim", () => {
     expect(result.outcome).toBe("lease");
     if (result.outcome !== "lease") return;
     expect(result.payload).toEqual({ instruction: "known canary" });
+    expect(result.outputSchema).toEqual(definition.outputSchema);
+    expect(result.outputSchema).not.toBe(definition.outputSchema);
     expect(result.lease.payloadRef).toBe(result.lease.leaseId);
     expect(result.lease.inputHash).not.toBe((await store.getJob("job-1"))?.inputHash);
     expect(result.lease.assignment).toEqual({

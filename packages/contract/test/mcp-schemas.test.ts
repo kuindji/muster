@@ -63,6 +63,8 @@ describe("coarse wire shapes (spec 5.7)", () => {
 
   it("pins lease TTLs and the exact abandonment refusal projection", () => {
     const lease = TOOL_SCHEMAS.lease_job.outputSchema.oneOf[0];
+    expect(lease.required).toContain("output_schema");
+    expect(lease.properties.output_schema).toEqual({ type: "object" });
     expect(lease.properties.ttl_bucket_seconds).toEqual({
       enum: [300, 900, 1_800, 3_600, 7_200],
     });
@@ -77,6 +79,19 @@ describe("coarse wire shapes (spec 5.7)", () => {
     expect(extension.properties.new_expiry_bucket_seconds).toEqual({
       type: "integer",
       minimum: 1,
+    });
+  });
+
+  it("requires one explicit result_json string and rejects the old result key", () => {
+    expect(TOOL_SCHEMAS.submit_result.inputSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["lease_id", "input_hash", "result_json"],
+      properties: {
+        lease_id: { type: "string" },
+        input_hash: { type: "string" },
+        result_json: { type: "string" },
+      },
     });
   });
 
