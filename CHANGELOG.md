@@ -1,5 +1,21 @@
 # Changelog
 
+## MCP Task 9 provider/account gate — 2026-08-09
+
+Completed the real-client acceptance gate with a fresh unattended Claude
+Cowork cloud schedule against the revision-29 production-shaped HTTPS, PKCE
+OAuth, PostgreSQL Store, and durable MCP-state deployment. The saved schedule
+used the exact `{"budget_bucket":1}` availability and durably pre-authorized
+only `get_worker_status`, `lease_job`, and `submit_result`. Server evidence
+recorded active status, a nonce-bound lease, and an accepted submission. The
+closed four-row JSONL passed the checked-in verifier against the saved schedule
+artifact with exact identity, hash, marker, ordering, and privacy binding.
+Claude's run history independently reported acceptance. The recurring schedule
+was paused, the connector disconnected, and the disposable CloudFormation
+stack and ECR repository verified absent. Task 9 and the MCP package milestone
+are complete; publication, durable production deployment, consumer integration,
+and push remain separate.
+
 ## contract-freeze-18 — reviewed and tagged 2026-08-09
 
 Implemented revision 29 after the independently corrected result-JSON trace.
@@ -24,9 +40,9 @@ returned status, and leased the correct nonce-bound job. Claude encoded the
 nested submission object as a JSON string in both runs, including after an
 explicit object-only schedule and job instruction, so core correctly returned
 `invalid_result`; the retry returned the terminal `submission_conflict`. No
-accepted evidence row exists and Task 9 remains open. The finding was at the
-then-frozen MCP boundary: `submit_result.result` was published as unconstrained
-`{}`. A contract decision had to own any added schema guidance,
+accepted evidence row existed and Task 9 remained open at that checkpoint. The
+finding was at the then-frozen MCP boundary: `submit_result.result` was
+published as unconstrained `{}`. A contract decision had to own any added schema guidance,
 typed envelope, or normalization rule before another provider run. Also fixed
 the documented pnpm verifier invocation so its flags reach the script without
 an extra literal `--`. No runtime or wire change is included.

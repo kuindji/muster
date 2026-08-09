@@ -501,9 +501,9 @@ successful tool results byte-for-byte with the source ESM build. Existing
 focused authentication, state, handler, and tool suites remain the executable
 owners for scope/revocation ordering, uniform refusal classes, response
 padding, last-unit races, bucket edges, and sensitive-error scrubbing. Task 9
-is the next bounded unit.
+was the next bounded unit.
 
-## Task 9: Operations guide, real-client gate, and final review
+## Task 9: Operations guide, real-client gate, and final review (complete 2026-08-09)
 
 - document handler mounting, canonical public URL configuration, authorization
   server requirements, RFC 9728 discovery, JWT/JWKS and revocation operations,
@@ -543,9 +543,9 @@ on 2026-08-09. Both authenticated, projected active status, and leased their
 fresh nonce-bound job, but Claude encoded the nested `result` object as a JSON
 string even after explicit object-only guidance. Core correctly returned
 `invalid_result` and made the rejection terminal, so neither attempt produced
-the required accepted row. Task 9 and the package-complete verdict remain open;
-the resulting frozen-contract decision is implemented in revision 29 without
-relaxing core result validation.
+the required accepted row. Task 9 and the package-complete verdict remained
+open at that checkpoint; the resulting frozen-contract decision is implemented
+in revision 29 without relaxing core result validation.
 The final local semantic review traced OAuth discovery/configuration and token
 claims through JWKS refresh, mandatory revocation, exact scope selection,
 severable mapping, worker status, closed inputs, atomic MCP state, all six
@@ -569,27 +569,41 @@ Frozen install, invariants, builds, sequential typechecks, 68 files / 511 tests,
 fixture hashes, PostgreSQL 16 and 18 source and packed conformance, packed MCP
 parity, package inspection, Markdown links/fences, privacy scans, and diff
 checks pass. The reviewed implementation is tagged locally as
-`contract-freeze-18`; another provider attempt remains a separate Task-9 unit.
+`contract-freeze-18`; another provider attempt remained a separate Task-9 unit.
 
 A subsequent fresh revision-29 Claude Cowork schedule started unattended and
 loaded the disposable connector, but its required tools retained the provider's
 default approval posture. The run stopped on interactive permission for
 `get_worker_status` before any authenticated request reached Muster, leaving a
-zero-row server evidence file. The schedule was paused and the connector and
-deployment were removed after the window. This provider-configuration **FAIL**
-does not reopen the frozen boundary or runtime review. The gate protocol now
-requires durable pre-authorization of exactly `get_worker_status`, `lease_job`,
-and `submit_result`; another new-nonce Task-9 attempt remains the next unit.
+zero-row server evidence file. The schedule was paused, the connector was
+disconnected, and the deployment was removed after the window. This
+provider-configuration **FAIL** does not reopen the frozen boundary or runtime
+review. The gate protocol then required durable pre-authorization of exactly
+`get_worker_status`, `lease_job`, and `submit_result`; another new-nonce Task-9
+attempt remained the next unit.
 
 That permission correction was exercised by a fresh revision-29 unattended
 Claude Cowork schedule. `get_worker_status` reached Muster and returned active,
 but Claude interpreted the schedule's implicit availability wording as
 `{"budget_bucket":0}`. The MCP boundary correctly returned `no_work` without
 calling core, so the evidence ended at status and the result is **FAIL** with
-Yes/No/No. The schedule was paused and the connector and disposable deployment
-were removed after the window. The gate protocol now requires the exact
+Yes/No/No. The schedule was paused, the connector was disconnected, and the
+disposable deployment was removed after the window. The gate protocol then
+required the exact
 nonzero gate value `{"budget_bucket":1}`; another new-nonce Task-9 attempt
-remains the next bounded unit.
+remained the next bounded unit.
+
+The final fresh revision-29 Claude Cowork schedule used that exact value and
+the reviewed durable permission split. It ran unattended through the declared
+window, returned active status, leased the nonce-bound job, and submitted an
+accepted result. The exported closed four-row JSONL passed the repository
+verifier against the saved schedule artifact with exact worker, job, lease,
+input-hash, marker, ordering, and privacy binding. Claude's independent run
+history also reported acceptance. After the window the schedule was paused,
+the connector was disconnected, and the disposable CloudFormation stack and
+ECR repository were verified absent. Task 9 and the MCP package milestone are
+complete; publication, durable production deployment, consumer integration,
+and push remain separate follow-ups.
 
 ## Complete validation command
 

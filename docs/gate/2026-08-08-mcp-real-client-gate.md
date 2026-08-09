@@ -128,6 +128,7 @@ Record every attempted surface, including failures:
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `a0781b69bd8f95255b2f821f922a40c162032de3c942d118` | Yes | Yes | Yes / Yes / No | **FAIL** (`invalid_result`; retry `submission_conflict`) |
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `396d83fde23722734afd8ea1804088b02ff367b8d42aa4bf` | Yes | Yes | No / No / No | **FAIL** (`permission_required` before `get_worker_status`; zero server rows) |
 | 2026-08-09 | Claude Cowork cloud scheduled task | Max | `810daa34f9789bb623f29486b72f4ab624b4cc1c256e3950` | Yes | Yes | Yes / No / No | **FAIL** (`lease_job` used `budget_bucket: 0` and returned `no_work`) |
+| 2026-08-09 | Claude Cowork cloud scheduled task | Max | `6eeb9f1a26e6c115248b929bdb43814b4e7dc022fe53cf12` | Yes | Yes | Yes / Yes / Yes | **PASS** |
 
 Both attempts authenticated through the disposable PKCE OAuth issuer, mapped
 to the active pseudonymous worker, and leased the fresh nonce-bound job. In
@@ -147,19 +148,32 @@ connector, but its three required tools retained Claude Cowork's default
 **Needs approval** posture. The cloud run repeatedly requested interactive
 permission for `get_worker_status`; no authenticated request reached Muster,
 and the exported evidence remained a zero-row JSONL file. After the window, the
-prompt was denied, the recurring schedule was paused, the connector was removed,
-and the disposable deployment was torn down. This is a provider-configuration
-failure, not a Muster runtime or result-JSON finding. Another fresh attempt must
-pre-authorize only the three required tools before scheduling.
+prompt was denied, the recurring schedule was paused, the connector was
+disconnected, and the disposable deployment was torn down. This is a
+provider-configuration failure, not a Muster runtime or result-JSON finding.
+Another fresh attempt had to pre-authorize only the three required tools before
+scheduling.
 
 The next revision-29 attempt durably pre-authorized exactly those three tools.
 It authenticated unattended and returned active status, but the scheduled
 instruction left the availability bucket implicit and Claude selected
 `budget_bucket: 0`. The MCP boundary correctly returned `no_work` without a
 core lease call, so no leased or accepted evidence row exists. The schedule was
-paused and the connector and deployment were removed after the window. This is
-a gate-instruction **FAIL**, not a runtime finding; another fresh attempt must
-use the exact nonzero gate value `{"budget_bucket":1}`.
+paused, the connector was disconnected, and the deployment was removed after
+the window. This is a gate-instruction **FAIL**, not a runtime finding; another
+fresh attempt had to use the exact nonzero gate value `{"budget_bucket":1}`.
+
+The final revision-29 attempt durably pre-authorized exactly the three required
+tools and used the exact nonzero availability value. The cloud schedule ran
+unattended through the declared window, returned active status, leased the
+fresh nonce-bound job, and submitted the required marker as `result_json`; core
+accepted it. The exported four-row JSONL passed the checked-in verifier against
+the saved schedule artifact, including common worker/job/lease/input-hash
+binding, marker binding, ordering, closed fields, and sensitive-data exclusion.
+Claude's run history independently reported successful acceptance. After the
+window, the schedule was paused, the connector was disconnected, and the
+disposable CloudFormation stack and ECR repository were verified absent. This
+run satisfies the provider/account acceptance claim.
 
 After a disposable attempt, revoke its access token, sever the gate mapping,
 retire or suspend the gate worker as deployment policy requires, expire/requeue

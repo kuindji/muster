@@ -195,6 +195,9 @@ pnpm --filter @kuindji/muster-mcp gate:verify \
   --schedule-evidence .gate-runs/schedule-<nonce>.png
 ```
 
+The reviewed 2026-08-09 Claude Cowork run satisfied this protocol with an
+unattended active-status, leased-job, and accepted-submission trace.
+
 ## Verification
 
 ```sh

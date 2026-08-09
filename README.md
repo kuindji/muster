@@ -146,9 +146,8 @@ worker-visible outputs. The checked-in verifier fixture is local test evidence,
 not remote provider/account acceptance. Two fresh unattended Claude Cowork
 runs authenticated, returned active status, and leased their nonce-bound jobs,
 but both encoded the nested submission result as a JSON string and were
-correctly rejected by the object output schema. The MCP package is therefore
-not yet declared complete; the remote provider gate must be rerun. Revision 29
-now implements the reviewed
+correctly rejected by the object output schema. That finding kept the package
+open and led to revision 29, which now implements the reviewed
 [freeze-18 result-JSON amendment](docs/superpowers/plans/2026-08-09-muster-contract-freeze-18-mcp-result-json.md):
 successful leases disclose the exact validated frozen `output_schema`, and
 `submit_result` requires one explicit `result_json` text. The MCP boundary
@@ -176,7 +175,15 @@ pre-authorization of exactly `get_worker_status`, `lease_job`, and
 the schedule's ambiguous "appropriate" availability wording. The MCP boundary
 correctly returned `no_work` without a core lease call, leaving status/lease/
 accepted at Yes/No/No. The gate instructions now require the exact nonzero
-value `{"budget_bucket":1}`. Task 9 remains open for a new nonce-bound attempt.
+value `{"budget_bucket":1}`. A final fresh revision-29 Claude Cowork schedule
+then ran unattended with those exact instructions and permissions. It returned
+active status, leased the nonce-bound job with bucket one, and submitted an
+accepted result. The closed four-row trace passed the repository verifier with
+matching worker, job, lease, input hash, nonce marker, ordering, schedule
+artifact, and privacy fields. The schedule was paused, the connector was
+disconnected, and the disposable stack and image repository were deleted.
+Task 9 and the MCP package milestone are complete; publication, durable
+production deployment, consumer integration, and push remain separate.
 
 ## MCP verification
 
